@@ -209,7 +209,7 @@
                 <div class="hitl">
                   <button v-for="m in hitlOptions" :key="m.id"
                           :class="['hitl-card', { active: k.hitl === m.id, 'hitl-auto': m.id === 'auto' && k.hitl === 'auto' }]"
-                          @click="k.hitl = m.id">
+                          @click="updatePolicy(k, m.id)">
                     <div class="hitl-icon">{{ m.icon }}</div>
                     <div style="flex:1;min-width:0">
                       <div style="font-weight:600;font-size:12px">{{ t(lang, m.tk) }}</div>
@@ -271,8 +271,8 @@
                   <div style="font-weight:600;font-size:13px">{{ t(lang, m.tk) }}</div>
                   <div style="font-size:11px;color:var(--fg-mute);margin-top:2px">{{ t(lang, m.dk) }}</div>
                 </div>
-                <label class="sw" :class="{ disabled: m.kind === 'admin' }">
-                  <input type="checkbox" v-model="m.enabled" :disabled="m.kind === 'admin'">
+                <label class="sw" :class="{ disabled: !m.editable }">
+                  <input type="checkbox" v-model="m.enabled" :disabled="!m.editable" @change="toggleMcpEndpoint(m)">
                   <span class="sw-track"></span>
                 </label>
               </div>
@@ -297,7 +297,7 @@
                 </div>
               </div>
               <span class="chip" :class="a.status">{{ a.status === 'live' ? '● ' + t(lang, 'connected') : '○ ' + t(lang, 'disabled') }}</span>
-              <button class="btn-ghost danger">{{ t(lang, 'revoke') }}</button>
+              <button class="btn-ghost danger" @click="revokeAgent(a)">{{ t(lang, 'revoke') }}</button>
             </div>
           </div>
 
@@ -438,11 +438,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { t } from '../i18n';
 import type { Lang, NotificationPrefs, Theme } from '../types';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
-import { deterministicKeyTest } from '../stores/mockPreview';
+import { createAiAccessApi } from '../services/aiAccessApi';
+import { getRuntimeDataMode } from '../services/runtimeDataMode';
+import type {
+  AiAccessKeyDto,
+  AiAgentDto,
+  AiAuditCallDto,
+  AiHitlMode,
+  McpEndpointDto,
+} from '../services/apiTypes';
 import SettingRow from '../components/SettingRow.vue';
 
 type SettingsTweakPayload =
@@ -455,6 +463,7 @@ const emit = defineEmits<{
   setTweak: [payload: SettingsTweakPayload];
 }>();
 
+const aiAccessApi = createAiAccessApi(getRuntimeDataMode());
 const mockNotifications = useMockNotificationsStore();
 const notifPrefs = reactive<NotificationPrefs>({ ...mockNotifications.notificationPrefs });
 
@@ -560,48 +569,43 @@ interface ApiKey {
   maxSingle?: number; maxDaily?: number; allowed?: string; expires?: string;
   lastUsedLabel?: string;
 }
-const keys = reactive<ApiKey[]>([
-  // Brokers (trade)
-  {
-    id: '1', provider: 'binance',
-    key: 'DEMO-BINANCE-LIVE-KEY-0001', secret: 'demo-secret-placeholder',
-    env: 'live', permissions: 'trade', label: '主帳戶',
-    show: false, testing: false, lastTest: 'ok',
-    hitl: 'confirm', maxSingle: 5000, maxDaily: 25000, allowed: 'BTC,ETH,SOL,BNB', expires: '2026-12-31',
-    lastUsedLabel: '12 min ago',
-  },
-  {
-    id: '2', provider: 'coinbase',
-    key: 'DEMO-COINBASE-SANDBOX-KEY-0002', secret: 'demo-secret-placeholder',
-    env: 'sandbox', permissions: 'trade', label: 'Test',
-    show: false, testing: false, lastTest: 'ok',
-    hitl: 'auto', maxSingle: 1000, maxDaily: 10000, allowed: '', expires: '',
-    lastUsedLabel: '2 hr ago',
-  },
-  {
-    id: '4', provider: 'alpaca',
-    key: 'DEMO-ALPACA-PAPER-KEY-0004', secret: '',
-    env: 'sandbox', permissions: 'trade', label: 'Paper',
-    show: false, testing: false, lastTest: null,
-    hitl: 'manual', maxSingle: 2000, maxDaily: 8000, allowed: '', expires: '',
-  },
-  // Read-only sources
-  {
-    id: '3', provider: 'finnhub',
-    key: 'DEMO-FINNHUB-READ-KEY-0003', secret: '',
-    env: 'live', permissions: 'read', label: '',
-    show: false, testing: false, lastTest: null,
-  },
-  {
-    id: '5', provider: 'polygon',
-    key: 'DEMO-POLYGON-READ-KEY-0005', secret: '',
-    env: 'live', permissions: 'read', label: 'Markets',
-    show: false, testing: false, lastTest: 'ok',
-  },
-]);
+const keys = reactive<ApiKey[]>([]);
 const readKeys = computed(() => keys.filter(k => k.permissions === 'read'));
 const brokerKeys = computed(() => keys.filter(k => k.permissions === 'trade'));
-const keyTestTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+function formatLastUsed(value: string | null) {
+  if (!value) return '';
+  return value.slice(0, 16).replace('T', ' ');
+}
+
+function dateOnly(value: string | null | undefined) {
+  return value ? value.slice(0, 10) : '';
+}
+
+function keyFromDto(dto: AiAccessKeyDto): ApiKey {
+  return {
+    id: dto.id,
+    provider: dto.provider,
+    key: dto.maskedKey,
+    secret: '',
+    env: dto.environment,
+    permissions: dto.permission,
+    label: dto.label,
+    show: false,
+    testing: false,
+    lastTest: dto.lastTest,
+    hitl: dto.hitl,
+    maxSingle: dto.riskLimits?.maxSingleUsd,
+    maxDaily: dto.riskLimits?.maxDailyUsd,
+    allowed: dto.riskLimits?.allowedSymbols.join(',') ?? '',
+    expires: dateOnly(dto.riskLimits?.expiresAt),
+    lastUsedLabel: formatLastUsed(dto.lastUsedAt),
+  };
+}
+
+function replaceKeys(nextKeys: AiAccessKeyDto[]) {
+  keys.splice(0, keys.length, ...nextKeys.map(keyFromDto));
+}
 
 const hitlOptions: { id: Hitl; tk: string; dk: string; icon: string }[] = [
   { id: 'manual', tk: 'hitlManual', dk: 'hitlManualDesc', icon: '✋' },
@@ -625,37 +629,60 @@ function copyText(text: string, id: string) {
   copiedId.value = id;
   setTimeout(() => { if (copiedId.value === id) copiedId.value = null; }, 1400);
 }
-function clearKeyTestTimeout(id: string) {
-  const pending = keyTestTimeouts.get(id);
-  if (!pending) return;
-  clearTimeout(pending);
-  keyTestTimeouts.delete(id);
-}
-function testKey(k: ApiKey) {
+async function testKey(k: ApiKey) {
   if (k.testing) return;
-  clearKeyTestTimeout(k.id);
   k.testing = true;
   k.lastTest = null;
-  const timeout = setTimeout(() => {
-    keyTestTimeouts.delete(k.id);
-    const liveKey = keys.find(x => x.id === k.id);
-    if (!liveKey) return;
-    liveKey.lastTest = deterministicKeyTest(liveKey.id + liveKey.provider);
-    liveKey.testing = false;
+  try {
+    const result = await aiAccessApi.testKey(k.id);
+    const liveKey = keys.find(item => item.id === k.id);
+    if (liveKey) {
+      liveKey.lastTest = result.status;
+      liveKey.lastUsedLabel = formatLastUsed(result.testedAt);
+      liveKey.testing = false;
+    }
+    await refreshAuditCalls();
     emit('toast', props.lang === 'zh' ? '已完成模擬連線測試' : 'Simulated connection test complete');
-  }, 900);
-  keyTestTimeouts.set(k.id, timeout);
+  } catch {
+    const liveKey = keys.find(item => item.id === k.id);
+    if (liveKey) {
+      liveKey.lastTest = 'fail';
+      liveKey.testing = false;
+    }
+    emit('toast', props.lang === 'zh' ? '模擬連線測試失敗' : 'Simulated connection test failed');
+  }
 }
-function revokeKey(k: ApiKey) {
-  clearKeyTestTimeout(k.id);
-  const i = keys.findIndex(x => x.id === k.id);
-  if (i >= 0) keys.splice(i, 1);
+async function revokeKey(k: ApiKey) {
+  try {
+    await aiAccessApi.revokeKey(k.id);
+    const i = keys.findIndex(x => x.id === k.id);
+    if (i >= 0) keys.splice(i, 1);
+  } catch {
+    emit('toast', props.lang === 'zh' ? '撤銷失敗' : 'Revoke failed');
+  }
 }
 
-onBeforeUnmount(() => {
-  keyTestTimeouts.forEach(timeout => clearTimeout(timeout));
-  keyTestTimeouts.clear();
-});
+async function updatePolicy(k: ApiKey, hitl: AiHitlMode) {
+  if (k.permissions !== 'trade') return;
+  const previous = k.hitl;
+  k.hitl = hitl;
+  try {
+    const updated = await aiAccessApi.updatePolicy(k.id, {
+      hitl,
+      riskLimits: {
+        maxSingleUsd: k.maxSingle ?? 0,
+        maxDailyUsd: k.maxDaily ?? 0,
+        allowedSymbols: k.allowed ? k.allowed.split(',').map(symbol => symbol.trim()).filter(Boolean) : [],
+        expiresAt: k.expires ? `${k.expires}T00:00:00Z` : null,
+      },
+    });
+    const index = keys.findIndex(item => item.id === k.id);
+    if (index >= 0) keys[index] = keyFromDto(updated);
+  } catch {
+    k.hitl = previous;
+    emit('toast', props.lang === 'zh' ? '交易政策更新失敗' : 'Trading policy update failed');
+  }
+}
 
 // ─── Add modal ────────────────────────────────────────────
 const addOpen = ref(false);
@@ -677,69 +704,126 @@ function openAdd(mode: 'read' | 'trade') {
   draft.label = '';
   addOpen.value = true;
 }
-function saveKey() {
+async function saveKey() {
   if (!draft.key) return;
-  const base: ApiKey = {
-    id: String(Date.now()),
-    provider: draft.provider,
-    key: draft.key,
-    secret: draft.secret,
-    env: draft.env,
-    permissions: addMode.value,
-    label: draft.label,
-    show: false, testing: false, lastTest: null,
-  };
-  if (addMode.value === 'trade') {
-    base.hitl = 'manual';
-    base.maxSingle = 1000;
-    base.maxDaily = 5000;
-    base.allowed = '';
-    base.expires = '';
+  try {
+    const created = await aiAccessApi.createKey({
+      provider: draft.provider,
+      apiKey: draft.key,
+      apiSecret: draft.secret || 'demo-secret-placeholder',
+      environment: draft.env,
+      permission: addMode.value,
+      label: draft.label,
+      hitl: addMode.value === 'trade' ? 'manual' : undefined,
+      riskLimits: addMode.value === 'trade'
+        ? { maxSingleUsd: 1000, maxDailyUsd: 5000, allowedSymbols: [], expiresAt: null }
+        : undefined,
+    });
+    keys.unshift(keyFromDto(created));
+    addOpen.value = false;
+  } catch {
+    emit('toast', props.lang === 'zh' ? '金鑰儲存失敗' : 'Key save failed');
   }
-  keys.unshift(base);
-  addOpen.value = false;
 }
 
 // ─── AI access (preview) ──────────────────────────────────
 interface McpServer {
   id: string; tk: string; dk: string; kind: 'read' | 'write' | 'admin';
-  url: string; tools: string[]; enabled: boolean;
+  url: string; tools: string[]; enabled: boolean; editable: boolean;
 }
-const mcpServers = reactive<McpServer[]>([
-  {
-    id: 'r', tk: 'readonlyServer', dk: 'readonlyDesc', kind: 'read',
-    url: 'https://mcp.resource.app/v1/readonly',
-    tools: ['markets.get_quote', 'markets.list', 'positions.list', 'news.recent', 'bonds.yield_curve', 'fx.spot'],
-    enabled: true,
-  },
-  {
-    id: 'w', tk: 'tradingServer', dk: 'tradingDesc', kind: 'write',
-    url: 'https://mcp.resource.app/v1/trading',
-    tools: ['orders.place', 'orders.cancel', 'orders.modify', 'orders.list'],
-    enabled: false,
-  },
-  {
-    id: 'a', tk: 'adminServer', dk: 'adminDesc', kind: 'admin',
-    url: 'https://mcp.resource.app/v1/admin',
-    tools: ['settings.update', 'keys.create', 'keys.revoke'],
-    enabled: false,
-  },
-]);
 
-const agents = [
-  { id: 'cd', name: 'Claude Desktop', icon: '◆', scopes: ['readonly'], last: '8 min ago', status: 'live' },
-  { id: 'cu', name: 'Cursor', icon: '⌘', scopes: ['readonly'], last: '2 hr ago', status: 'live' },
-  { id: 'me', name: 'jl-research-agent', icon: '◯', scopes: ['readonly', 'trading (sandbox)'], last: '5 hr ago', status: 'live' },
-];
+interface AgentView {
+  id: string; name: string; icon: string; scopes: string[]; last: string; status: 'live' | 'disabled';
+}
 
-const calls = [
-  { t: '14:08:23', agent: 'Claude Desktop', tool: 'markets.get_quote', args: 'symbol=AAPL', ok: true, ms: 84 },
-  { t: '14:07:51', agent: 'Claude Desktop', tool: 'positions.list', args: '—', ok: true, ms: 122 },
-  { t: '14:02:14', agent: 'jl-research-agent', tool: 'news.recent', args: 'symbol=NVDA limit=10', ok: true, ms: 318 },
-  { t: '13:48:09', agent: 'Cursor', tool: 'markets.list', args: 'asset=crypto', ok: true, ms: 96 },
-  { t: '13:31:42', agent: 'jl-research-agent', tool: 'orders.place', args: 'BUY 0.1 BTC @ market', ok: false, ms: 12 },
-  { t: '12:55:01', agent: 'Claude Desktop', tool: 'bonds.yield_curve', args: 'country=US', ok: true, ms: 204 },
-];
+interface AuditCallView {
+  id: string; t: string; agent: string; tool: string; args: string; ok: boolean; ms: number;
+}
+
+const mcpServers = reactive<McpServer[]>([]);
+const agents = reactive<AgentView[]>([]);
+const calls = reactive<AuditCallView[]>([]);
+
+onMounted(() => {
+  void loadAiAccessData();
+});
+
+function endpointText(endpoint: McpEndpointDto) {
+  if (endpoint.kind === 'read') return { tk: 'readonlyServer', dk: 'readonlyDesc' };
+  if (endpoint.kind === 'write') return { tk: 'tradingServer', dk: 'tradingDesc' };
+  return { tk: 'adminServer', dk: 'adminDesc' };
+}
+
+function endpointFromDto(endpoint: McpEndpointDto): McpServer {
+  return { ...endpointText(endpoint), ...endpoint };
+}
+
+function agentIcon(agent: AiAgentDto) {
+  if (agent.name.includes('Claude')) return '◆';
+  if (agent.name.includes('Cursor')) return '⌘';
+  return '◯';
+}
+
+function agentFromDto(agent: AiAgentDto): AgentView {
+  return {
+    id: agent.id,
+    name: agent.name,
+    icon: agentIcon(agent),
+    scopes: agent.scopes,
+    last: formatLastUsed(agent.lastUsedAt) || (props.lang === 'zh' ? '尚未使用' : 'never'),
+    status: agent.status,
+  };
+}
+
+function callFromDto(call: AiAuditCallDto): AuditCallView {
+  return {
+    id: call.id,
+    t: call.time.slice(11, 19),
+    agent: call.agent,
+    tool: call.tool,
+    args: call.argsSummary,
+    ok: call.ok,
+    ms: call.durationMs,
+  };
+}
+
+async function loadAiAccessData() {
+  const [nextKeys, nextEndpoints, nextAgents] = await Promise.all([
+    aiAccessApi.listKeys(),
+    aiAccessApi.listMcpEndpoints(),
+    aiAccessApi.listAgents(),
+  ]);
+  replaceKeys(nextKeys);
+  mcpServers.splice(0, mcpServers.length, ...nextEndpoints.map(endpointFromDto));
+  agents.splice(0, agents.length, ...nextAgents.map(agentFromDto));
+  await refreshAuditCalls();
+}
+
+async function refreshAuditCalls() {
+  const nextCalls = await aiAccessApi.listAuditCalls({ limit: 20 });
+  calls.splice(0, calls.length, ...nextCalls.data.map(callFromDto));
+}
+
+async function toggleMcpEndpoint(endpoint: McpServer) {
+  try {
+    const updated = await aiAccessApi.updateMcpEndpoint(endpoint.id, { enabled: endpoint.enabled });
+    const index = mcpServers.findIndex(item => item.id === updated.id);
+    if (index >= 0) mcpServers[index] = endpointFromDto(updated);
+  } catch {
+    endpoint.enabled = !endpoint.enabled;
+    emit('toast', props.lang === 'zh' ? 'MCP 端點更新失敗' : 'MCP endpoint update failed');
+  }
+}
+
+async function revokeAgent(agent: AgentView) {
+  try {
+    await aiAccessApi.revokeAgent(agent.id);
+    const index = agents.findIndex(item => item.id === agent.id);
+    if (index >= 0) agents.splice(index, 1);
+  } catch {
+    emit('toast', props.lang === 'zh' ? 'Agent 撤銷失敗' : 'Agent revoke failed');
+  }
+}
 </script>
 
 <style scoped>

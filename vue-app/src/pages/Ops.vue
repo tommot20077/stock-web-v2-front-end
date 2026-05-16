@@ -14,24 +14,24 @@
 
     <div class="card" style="grid-column: span 7; padding: 20px">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'syncOps') }}</div>
-      <div v-if="mockPreview.currentOpsRun" class="run-status">
-        {{ lang === 'zh' ? '模擬執行中：' : 'Simulated run in progress: ' }}{{ mockPreview.currentOpsRun.label }}
+      <div v-if="currentJob" class="run-status">
+        {{ lang === 'zh' ? '模擬執行中：' : 'Simulated run in progress: ' }}{{ currentJob.label }}
       </div>
       <div class="acts">
-        <button v-for="[k, d] in acts" :key="k" class="act" :disabled="isBusy" @click="openConfirm(k, d)">
-          <div style="font-size:13px;font-weight:500">{{ t(lang, k) }}</div>
-          <div style="font-size:11px;color:var(--fg-dim);margin-top:3px">{{ d }}</div>
+        <button v-for="action in actions" :key="action.key" class="act" :disabled="isBusy || !action.enabled" @click="openConfirm(action)">
+          <div style="font-size:13px;font-weight:500">{{ t(lang, action.key) }}</div>
+          <div style="font-size:11px;color:var(--fg-dim);margin-top:3px">{{ action.description }}</div>
         </button>
       </div>
     </div>
 
     <div class="card" style="grid-column: span 5; padding: 20px">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'oplog') }}</div>
-      <div v-for="(o, i) in mockPreview.opsLog" :key="i" class="log" :style="{ borderTop: i ? '1px solid var(--border)' : '0' }">
-        <span class="ldot" :style="{ background: o.ok ? 'var(--up)' : 'var(--dn)' }" />
+      <div v-for="(o, i) in logs" :key="o.id" class="log" :style="{ borderTop: i ? '1px solid var(--border)' : '0' }">
+        <span class="ldot" :style="{ background: o.status === 'success' ? 'var(--up)' : 'var(--dn)' }" />
         <div style="flex:1">
-          <div style="font-weight:500">{{ o.op }}</div>
-          <div style="color:var(--fg-dim);font-size:11px;margin-top:2px">{{ o.d }} · {{ o.who }} · {{ o.dur }}</div>
+          <div style="font-weight:500">{{ o.operation }}</div>
+          <div style="color:var(--fg-dim);font-size:11px;margin-top:2px">{{ formatLogTime(o.time) }} · {{ o.actor }} · {{ formatDuration(o.durationMs) }}</div>
         </div>
       </div>
     </div>
@@ -53,34 +53,54 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { t } from '../i18n';
-import { useMockPreviewStore } from '../stores/mockPreview';
+import { createOpsApi } from '../services/opsApi';
+import { getRuntimeDataMode } from '../services/runtimeDataMode';
+import type { OpsActionDto, OpsJobDto, OpsLogDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
 const emit = defineEmits<{ toast: [m: string] }>();
-const mockPreview = useMockPreviewStore();
+const opsApi = createOpsApi(getRuntimeDataMode());
 
 const sysStats: [string, string, number][] = [
   ['CPU', '32%', 0.32], ['Memory', '6.2 / 16 GB', 0.39], ['JVM Heap', '1.8 / 4 GB', 0.45],
   ['DB connections', '12 / 50', 0.24], ['WebSocket', '847 active', 0.5],
 ];
-const acts: [string, string][] = [
-  ['refetchNews', 'Force-pull news from all sources'],
-  ['refetchMkt', 'Re-pull all market quotes'],
-  ['recalcPos', 'Recompute holdings & cost basis'],
-  ['recalcRoi', 'Recompute ROI / Sharpe / drawdown'],
-  ['refetchBonds', 'Pull yield curves'],
-  ['reimportKline', 'Re-ingest historical OHLCV'],
-];
+const actions = ref<OpsActionDto[]>([]);
+const logs = ref<OpsLogDto[]>([]);
+const currentJob = ref<OpsJobDto | null>(null);
 const confirm = ref<{ k: string; d: string } | null>(null);
 const isSubmitting = ref(false);
-const isBusy = computed(() => isSubmitting.value || Boolean(mockPreview.currentOpsRun));
+const isBusy = computed(() => isSubmitting.value || Boolean(currentJob.value));
 
-function openConfirm(k: string, d: string) {
+onMounted(() => {
+  void refreshOpsData();
+});
+
+function formatLogTime(value: string) {
+  return value.slice(0, 16).replace('T', ' ');
+}
+
+function formatDuration(ms: number) {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+async function refreshOpsData() {
+  const [nextActions, nextCurrentJob, nextLogs] = await Promise.all([
+    opsApi.getActions(),
+    opsApi.getCurrentJob(),
+    opsApi.listLogs({ limit: 30 }),
+  ]);
+  actions.value = nextActions;
+  currentJob.value = nextCurrentJob;
+  logs.value = nextLogs.data;
+}
+
+function openConfirm(action: OpsActionDto) {
   if (isBusy.value) return;
-  confirm.value = { k, d };
+  confirm.value = { k: action.key, d: action.description };
 }
 
 function closeConfirm() {
@@ -95,9 +115,19 @@ async function run() {
   confirm.value = null;
   const label = t(props.lang, item.k);
   try {
-    const status = await mockPreview.runOpsAction(item.k, label);
-    emit('toast', `${status === 'success' ? '✓' : '✗'} ${label}`);
-  } catch {
+    const pendingJob = opsApi.triggerJob({
+      actionKey: item.k,
+      params: {},
+      idempotencyKey: `ui-${Date.now()}-${item.k}`,
+    });
+    currentJob.value = await opsApi.getCurrentJob();
+    const job = await pendingJob;
+    currentJob.value = null;
+    await refreshOpsData();
+    emit('toast', `${job.status === 'success' ? '✓' : '✗'} ${label}`);
+  } catch (error) {
+    currentJob.value = null;
+    await refreshOpsData();
     emit('toast', `✗ ${label}`);
   } finally {
     isSubmitting.value = false;

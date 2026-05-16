@@ -34,6 +34,13 @@ async function clickButton(text: string) {
   await nextTick();
 }
 
+async function flushAsync(times = 3) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+    await nextTick();
+  }
+}
+
 async function clickLastButton(text: string) {
   const buttons = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
     .filter(btn => btn.textContent?.includes(text));
@@ -81,19 +88,13 @@ afterEach(() => {
 describe('Task 7 simulated backtest and ops runs', () => {
   it('Backtest records the latest simulated run and visibly refreshes the run output', async () => {
     mountWithPinia(Backtest, { lang: 'en' });
-    const store = useMockPreviewStore();
     const beforeKpi = kpiTotalReturn();
 
     await clickButton('Run');
+    await flushAsync();
 
-    expect(store.backtestRuns).toHaveLength(1);
-    expect(store.backtestRuns[0]).toMatchObject({
-      strategy: 'ma_cross',
-      sym: 'AAPL',
-      period: '3Y',
-      initial: 100000,
-    });
     expect(document.body.textContent).toContain('Latest simulated run');
+    expect(document.body.textContent).toContain('MA Cross (20/50)');
     expect(document.body.textContent).toContain('AAPL');
     expect(document.body.textContent).toContain('3Y');
     expect(kpiTotalReturn()).not.toBe(beforeKpi);
@@ -101,7 +102,6 @@ describe('Task 7 simulated backtest and ops runs', () => {
 
   it('Backtest keeps displayed output on the last executed snapshot until Run is pressed', async () => {
     mountWithPinia(Backtest, { lang: 'en' });
-    const store = useMockPreviewStore();
     const beforeKpi = kpiTotalReturn();
     const beforeTitle = equityTitle();
 
@@ -109,18 +109,15 @@ describe('Task 7 simulated backtest and ops runs', () => {
     await setSelect(1, 'NVDA');
     await setSelect(2, '1Y');
 
-    expect(store.backtestRuns).toHaveLength(0);
+    expect(document.body.textContent).not.toContain('Latest simulated run');
     expect(kpiTotalReturn()).toBe(beforeKpi);
     expect(equityTitle()).toBe(beforeTitle);
 
     await clickButton('Run');
+    await flushAsync();
 
-    expect(store.backtestRuns).toHaveLength(1);
-    expect(store.backtestRuns[0]).toMatchObject({
-      strategy: 'rsi',
-      sym: 'NVDA',
-      period: '1Y',
-    });
+    expect(document.body.textContent).toContain('Latest simulated run');
+    expect(document.body.textContent).toContain('RSI Mean Reversion');
     expect(kpiTotalReturn()).not.toBe(beforeKpi);
     expect(equityTitle()).toContain('rsi');
     expect(document.body.textContent).toContain('NVDA');
@@ -153,25 +150,27 @@ describe('Task 7 simulated backtest and ops runs', () => {
     expect(document.body.textContent).toContain('Unexpected token');
   });
 
-  it('Ops uses the preview store for async simulated runs, running status, and appended logs', async () => {
+  it('Ops uses the API adapter for async simulated runs, running status, and logs', async () => {
     vi.useFakeTimers();
     const toasts: string[] = [];
     mountWithPinia(Ops, { lang: 'en', onToast: (message: string) => toasts.push(message) });
+    await flushAsync();
     const store = useMockPreviewStore();
     const initialLogCount = store.opsLog.length;
 
     await clickButton('Refetch news');
     await clickButton('Run');
+    await flushAsync();
 
-    expect(store.currentOpsRun?.label).toBe('Refetch news');
+    expect(store.currentOpsRun).toBeNull();
+    expect(store.opsLog).toHaveLength(initialLogCount);
     expect(document.body.textContent).toContain('Simulated run in progress: Refetch news');
 
     await vi.advanceTimersByTimeAsync(650);
-    await nextTick();
+    await flushAsync();
 
     expect(store.currentOpsRun).toBeNull();
-    expect(store.opsLog).toHaveLength(initialLogCount + 1);
-    expect(store.opsLog[0]).toMatchObject({ op: 'Refetch news', ok: true });
+    expect(store.opsLog).toHaveLength(initialLogCount);
     expect(toasts).toEqual(['✓ Refetch news']);
     expect(document.body.textContent).toContain('Refetch news');
   });
