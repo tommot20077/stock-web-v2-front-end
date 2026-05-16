@@ -49,8 +49,8 @@
     </div>
     <div v-if="latestRun" class="run-note">
       <span class="dim">{{ lang === 'zh' ? '最新模擬回測' : 'Latest simulated run' }}</span>
-      <strong>{{ latestRun.label }}</strong>
-      <span>{{ latestRun.sym }}</span>
+      <strong>{{ latestRunLabel }}</strong>
+      <span>{{ latestRun.symbol }}</span>
       <span>{{ latestRun.period }}</span>
     </div>
     <div v-if="runError" class="strategy-error">{{ runError }}</div>
@@ -175,13 +175,15 @@
 import { ref, computed } from 'vue';
 import { t } from '../i18n';
 import StrategyEditor from '../components/StrategyEditor.vue';
-import { useMockPreviewStore } from '../stores/mockPreview';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import type { BacktestPeriod, BacktestRunDto, BacktestStrategyId } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
-const mockPreview = useMockPreviewStore();
+const backtestApi = getRuntimeApiClients().backtest;
 
 const customSeed = ref(0);
+const customStrategyCode = ref<string | null>(null);
 const showEditor = ref(false);
 const runNonce = ref(0);
 const strategyError = ref('');
@@ -191,7 +193,7 @@ const strategy = ref('ma_cross');
 const sym = ref('AAPL');
 const period = ref('3Y');
 const initial = ref(100000);
-const latestRun = computed(() => mockPreview.backtestRuns[0]);
+const latestRun = ref<BacktestRunDto | null>(null);
 
 interface ActiveRunConfig {
   strategy: string;
@@ -224,6 +226,8 @@ function strategyLabel(strategyId: string) {
   return strategyLabels[strategyId]?.[props.lang] ?? strategyId;
 }
 
+const latestRunLabel = computed(() => latestRun.value ? strategyLabel(latestRun.value.strategyId) : '');
+
 function makeRunConfig(strategyId: string, symbol: string, runPeriod: string, capital: number, nonce: number, custom: number): ActiveRunConfig {
   return {
     strategy: strategyId,
@@ -241,15 +245,16 @@ const activeRunConfig = ref<ActiveRunConfig>(
   makeRunConfig(strategy.value, sym.value, period.value, initial.value, runNonce.value, customSeed.value)
 );
 
-function onRun(code: string) {
+async function onRun(code: string) {
   // Sandbox: compile user's strategy fn and tag the run
   try {
     const fn = new Function('"use strict"; ' + code + '; return strategy;')();
     if (typeof fn !== 'function') throw new Error('strategy() not defined');
     strategyError.value = '';
     strategy.value = 'custom';
+    customStrategyCode.value = code;
     customSeed.value = code.length + (code.charCodeAt(0) || 0);
-    run();
+    await run();
   } catch (e: any) {
     strategyError.value = e?.message || 'Invalid strategy';
   }
@@ -272,7 +277,7 @@ const result = computed(() => {
   };
 });
 
-function run() {
+async function run() {
   if (!Number.isFinite(initial.value) || initial.value <= 0) {
     runError.value = props.lang === 'zh' ? '初始資金必須大於 0' : 'Initial capital must be greater than 0';
     return;
@@ -280,18 +285,24 @@ function run() {
 
   const nextRunNonce = runNonce.value + 1;
   const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, initial.value, nextRunNonce, customSeed.value);
-  runNonce.value = nextRunNonce;
   runError.value = '';
   strategyError.value = '';
-  mockPreview.recordBacktestRun({
-    strategy: nextConfig.strategy,
-    sym: nextConfig.sym,
-    period: nextConfig.period,
-    initial: nextConfig.initial,
-    seed: nextConfig.seed,
-    label: nextConfig.label,
-  });
-  activeRunConfig.value = nextConfig;
+  try {
+    latestRun.value = await backtestApi.createRun({
+      strategyId: nextConfig.strategy as BacktestStrategyId,
+      strategyCode: nextConfig.strategy === 'custom' ? customStrategyCode.value : null,
+      symbol: nextConfig.sym,
+      period: nextConfig.period as BacktestPeriod,
+      initialCapital: nextConfig.initial,
+      currency: 'USD',
+      benchmark: 'buy_hold',
+      dataMode: 'cached',
+    });
+    runNonce.value = nextRunNonce;
+    activeRunConfig.value = nextConfig;
+  } catch (error: any) {
+    runError.value = error?.message || (props.lang === 'zh' ? '回測執行失敗' : 'Backtest run failed');
+  }
 }
 
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

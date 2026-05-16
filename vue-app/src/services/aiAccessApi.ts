@@ -174,7 +174,7 @@ function buildAuditCall(input: Omit<AiAuditCallDto, 'id' | 'time'>, seq: number)
 }
 
 export function createMockAiAccessApi(): AiAccessApi {
-  let keySeq = 2;
+  let keySeq = 5;
   let callSeq = 5;
   const keys: AiAccessKeyDto[] = [
     {
@@ -190,6 +190,30 @@ export function createMockAiAccessApi(): AiAccessApi {
       riskLimits: { maxSingleUsd: 5000, maxDailyUsd: 25000, allowedSymbols: ['BTC', 'ETH', 'SOL', 'BNB'], expiresAt: '2026-12-31T00:00:00Z' },
     },
     {
+      id: 'key_3',
+      provider: 'coinbase',
+      environment: 'sandbox',
+      permission: 'trade',
+      label: 'Test',
+      maskedKey: maskKey('DEMO-COINBASE-SANDBOX-KEY-0002'),
+      lastTest: 'ok',
+      lastUsedAt: '2026-05-15T23:00:00Z',
+      hitl: 'auto',
+      riskLimits: { maxSingleUsd: 1000, maxDailyUsd: 10000, allowedSymbols: [], expiresAt: null },
+    },
+    {
+      id: 'key_4',
+      provider: 'alpaca',
+      environment: 'sandbox',
+      permission: 'trade',
+      label: 'Paper',
+      maskedKey: maskKey('DEMO-ALPACA-PAPER-KEY-0004'),
+      lastTest: null,
+      lastUsedAt: null,
+      hitl: 'manual',
+      riskLimits: { maxSingleUsd: 2000, maxDailyUsd: 8000, allowedSymbols: [], expiresAt: null },
+    },
+    {
       id: 'key_2',
       provider: 'finnhub',
       environment: 'live',
@@ -197,6 +221,16 @@ export function createMockAiAccessApi(): AiAccessApi {
       label: 'News feed',
       maskedKey: maskKey('DEMO-FINNHUB-READ-KEY-0003'),
       lastTest: null,
+      lastUsedAt: null,
+    },
+    {
+      id: 'key_5',
+      provider: 'polygon',
+      environment: 'live',
+      permission: 'read',
+      label: 'Markets',
+      maskedKey: maskKey('DEMO-POLYGON-READ-KEY-0005'),
+      lastTest: 'ok',
       lastUsedAt: null,
     },
   ];
