@@ -131,9 +131,9 @@
                     <span class="chip readonly">{{ t(lang, 'readOnly') }}</span>
                   </div>
                   <div class="key-mono">
-                    <span>{{ k.show ? k.key : maskKey(k.key) }}</span>
-                    <button class="micro" @click="k.show = !k.show">{{ k.show ? t(lang, 'hide') : t(lang, 'show') }}</button>
-                    <button class="micro" @click="copyKey(k)">{{ copiedId === k.id ? '✓' : t(lang, 'copy') }}</button>
+                    <span>{{ k.key }}</span>
+                    <button v-if="k.canReveal" class="micro" @click="k.show = !k.show">{{ k.show ? t(lang, 'hide') : t(lang, 'show') }}</button>
+                    <button v-if="k.canCopy" class="micro" @click="copyKey(k)">{{ copiedId === k.id ? '✓' : t(lang, 'copy') }}</button>
                   </div>
                   <div style="font-size:11px;color:var(--fg-mute);margin-top:4px">
                     {{ t(lang, 'rateLimit') }}: {{ providerOf(k.provider).rate }} {{ t(lang, 'requests') }} / {{ t(lang, 'perMinute') }}
@@ -183,9 +183,9 @@
                       <span class="chip trade">{{ t(lang, 'tradingEnabled') }}</span>
                     </div>
                     <div class="key-mono">
-                      <span>{{ k.show ? k.key : maskKey(k.key) }}</span>
-                      <button class="micro" @click="k.show = !k.show">{{ k.show ? t(lang, 'hide') : t(lang, 'show') }}</button>
-                      <button class="micro" @click="copyKey(k)">{{ copiedId === k.id ? '✓' : t(lang, 'copy') }}</button>
+                      <span>{{ k.key }}</span>
+                      <button v-if="k.canReveal" class="micro" @click="k.show = !k.show">{{ k.show ? t(lang, 'hide') : t(lang, 'show') }}</button>
+                      <button v-if="k.canCopy" class="micro" @click="copyKey(k)">{{ copiedId === k.id ? '✓' : t(lang, 'copy') }}</button>
                     </div>
                     <div style="font-size:11px;color:var(--fg-mute);margin-top:4px">
                       {{ t(lang, 'lastUsed') }}: {{ k.lastUsedLabel || t(lang, 'neverUsed') }}
@@ -442,8 +442,14 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { t } from '../i18n';
 import type { Lang, NotificationPrefs, Theme } from '../types';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
-import { createAiAccessApi } from '../services/aiAccessApi';
-import { getRuntimeDataMode } from '../services/runtimeDataMode';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import {
+  formatLastUsed,
+  keyFromDto,
+  mergeKeyDtoIntoView,
+  type ApiKeyView,
+  type Hitl,
+} from '../settingsAiAccessView';
 import type {
   AiAccessKeyDto,
   AiAgentDto,
@@ -463,7 +469,7 @@ const emit = defineEmits<{
   setTweak: [payload: SettingsTweakPayload];
 }>();
 
-const aiAccessApi = createAiAccessApi(getRuntimeDataMode());
+const aiAccessApi = getRuntimeApiClients().aiAccess;
 const mockNotifications = useMockNotificationsStore();
 const notifPrefs = reactive<NotificationPrefs>({ ...mockNotifications.notificationPrefs });
 
@@ -557,51 +563,9 @@ function providerOf(id: string): Provider {
 }
 
 // ─── Saved keys ───────────────────────────────────────────
-type Hitl = 'manual' | 'confirm' | 'auto';
-interface ApiKey {
-  id: string; provider: string; key: string; secret: string;
-  env: 'sandbox' | 'live';
-  permissions: 'read' | 'trade';
-  label: string;
-  show: boolean; testing: boolean; lastTest: 'ok' | 'fail' | null;
-  // Trading-only:
-  hitl?: Hitl;
-  maxSingle?: number; maxDaily?: number; allowed?: string; expires?: string;
-  lastUsedLabel?: string;
-}
-const keys = reactive<ApiKey[]>([]);
+const keys = reactive<ApiKeyView[]>([]);
 const readKeys = computed(() => keys.filter(k => k.permissions === 'read'));
 const brokerKeys = computed(() => keys.filter(k => k.permissions === 'trade'));
-
-function formatLastUsed(value: string | null) {
-  if (!value) return '';
-  return value.slice(0, 16).replace('T', ' ');
-}
-
-function dateOnly(value: string | null | undefined) {
-  return value ? value.slice(0, 10) : '';
-}
-
-function keyFromDto(dto: AiAccessKeyDto): ApiKey {
-  return {
-    id: dto.id,
-    provider: dto.provider,
-    key: dto.maskedKey,
-    secret: '',
-    env: dto.environment,
-    permissions: dto.permission,
-    label: dto.label,
-    show: false,
-    testing: false,
-    lastTest: dto.lastTest,
-    hitl: dto.hitl,
-    maxSingle: dto.riskLimits?.maxSingleUsd,
-    maxDaily: dto.riskLimits?.maxDailyUsd,
-    allowed: dto.riskLimits?.allowedSymbols.join(',') ?? '',
-    expires: dateOnly(dto.riskLimits?.expiresAt),
-    lastUsedLabel: formatLastUsed(dto.lastUsedAt),
-  };
-}
 
 function replaceKeys(nextKeys: AiAccessKeyDto[]) {
   keys.splice(0, keys.length, ...nextKeys.map(keyFromDto));
@@ -613,13 +577,9 @@ const hitlOptions: { id: Hitl; tk: string; dk: string; icon: string }[] = [
   { id: 'auto', tk: 'hitlAuto', dk: 'hitlAutoDesc', icon: '⚡' },
 ];
 
-function maskKey(k: string): string {
-  if (k.length < 12) return '•'.repeat(k.length);
-  return k.slice(0, 6) + '••••••••••••' + k.slice(-4);
-}
-
 const copiedId = ref<string | null>(null);
-function copyKey(k: ApiKey) {
+function copyKey(k: ApiKeyView) {
+  if (!k.canCopy) return;
   navigator.clipboard?.writeText(k.key);
   copiedId.value = k.id;
   setTimeout(() => { if (copiedId.value === k.id) copiedId.value = null; }, 1400);
@@ -629,7 +589,7 @@ function copyText(text: string, id: string) {
   copiedId.value = id;
   setTimeout(() => { if (copiedId.value === id) copiedId.value = null; }, 1400);
 }
-async function testKey(k: ApiKey) {
+async function testKey(k: ApiKeyView) {
   if (k.testing) return;
   k.testing = true;
   k.lastTest = null;
@@ -652,7 +612,7 @@ async function testKey(k: ApiKey) {
     emit('toast', props.lang === 'zh' ? '模擬連線測試失敗' : 'Simulated connection test failed');
   }
 }
-async function revokeKey(k: ApiKey) {
+async function revokeKey(k: ApiKeyView) {
   try {
     await aiAccessApi.revokeKey(k.id);
     const i = keys.findIndex(x => x.id === k.id);
@@ -662,7 +622,7 @@ async function revokeKey(k: ApiKey) {
   }
 }
 
-async function updatePolicy(k: ApiKey, hitl: AiHitlMode) {
+async function updatePolicy(k: ApiKeyView, hitl: AiHitlMode) {
   if (k.permissions !== 'trade') return;
   const previous = k.hitl;
   k.hitl = hitl;
@@ -677,7 +637,7 @@ async function updatePolicy(k: ApiKey, hitl: AiHitlMode) {
       },
     });
     const index = keys.findIndex(item => item.id === k.id);
-    if (index >= 0) keys[index] = keyFromDto(updated);
+    if (index >= 0) mergeKeyDtoIntoView(keys[index], updated);
   } catch {
     k.hitl = previous;
     emit('toast', props.lang === 'zh' ? '交易政策更新失敗' : 'Trading policy update failed');
@@ -788,20 +748,32 @@ function callFromDto(call: AiAuditCallDto): AuditCallView {
 }
 
 async function loadAiAccessData() {
-  const [nextKeys, nextEndpoints, nextAgents] = await Promise.all([
-    aiAccessApi.listKeys(),
-    aiAccessApi.listMcpEndpoints(),
-    aiAccessApi.listAgents(),
-  ]);
-  replaceKeys(nextKeys);
-  mcpServers.splice(0, mcpServers.length, ...nextEndpoints.map(endpointFromDto));
-  agents.splice(0, agents.length, ...nextAgents.map(agentFromDto));
-  await refreshAuditCalls();
+  try {
+    const [nextKeys, nextEndpoints, nextAgents] = await Promise.all([
+      aiAccessApi.listKeys(),
+      aiAccessApi.listMcpEndpoints(),
+      aiAccessApi.listAgents(),
+    ]);
+    replaceKeys(nextKeys);
+    mcpServers.splice(0, mcpServers.length, ...nextEndpoints.map(endpointFromDto));
+    agents.splice(0, agents.length, ...nextAgents.map(agentFromDto));
+    await refreshAuditCalls();
+  } catch (error: any) {
+    replaceKeys([]);
+    mcpServers.splice(0, mcpServers.length);
+    agents.splice(0, agents.length);
+    calls.splice(0, calls.length);
+    emit('toast', error?.message || (props.lang === 'zh' ? 'AI Access 載入失敗' : 'AI Access load failed'));
+  }
 }
 
 async function refreshAuditCalls() {
-  const nextCalls = await aiAccessApi.listAuditCalls({ limit: 20 });
-  calls.splice(0, calls.length, ...nextCalls.data.map(callFromDto));
+  try {
+    const nextCalls = await aiAccessApi.listAuditCalls({ limit: 20 });
+    calls.splice(0, calls.length, ...nextCalls.data.map(callFromDto));
+  } catch {
+    calls.splice(0, calls.length);
+  }
 }
 
 async function toggleMcpEndpoint(endpoint: McpServer) {

@@ -1,73 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, nextTick } from 'vue';
-import type { Component } from 'vue';
-import { createPinia, setActivePinia } from 'pinia';
+import { nextTick } from 'vue';
 import App from './App.vue';
 import Settings from './pages/Settings.vue';
 import { useMockNotificationsStore } from './stores/mockNotifications';
 import { useTweaks } from './useTweaks';
-
-const mounted: Array<() => void> = [];
-
-function mountWithPinia(component: Component, props: Record<string, unknown>) {
-  const el = document.createElement('div');
-  document.body.appendChild(el);
-  const pinia = createPinia();
-  setActivePinia(pinia);
-  const app = createApp(component, props);
-  app.use(pinia);
-  app.mount(el);
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    app.unmount();
-    el.remove();
-  };
-  mounted.push(cleanup);
-  return cleanup;
-}
+import {
+  buttonByText,
+  cleanupMounted,
+  clickButton,
+  clickButtonWithin,
+  flushAsync,
+  mountWithPinia,
+  rowByText,
+} from './testUtils';
 
 function mountSettings(props: Record<string, unknown> = {}) {
   return mountWithPinia(Settings, { lang: 'en', ...props });
 }
 
-function buttonByText(text: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
-    .find(btn => btn.textContent?.includes(text));
-  expect(button, `button containing "${text}"`).toBeTruthy();
-  return button!;
-}
-
-async function clickButton(text: string) {
-  buttonByText(text).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
-
-async function flushAsync(times = 3) {
-  for (let i = 0; i < times; i += 1) {
-    await Promise.resolve();
-    await nextTick();
-  }
-}
-
 function keyPanelByProvider(provider: string): HTMLElement {
-  const panel = [...document.body.querySelectorAll<HTMLElement>('.broker, .key-row')]
-    .find(row => row.textContent?.includes(provider));
-  expect(panel, `key panel for "${provider}"`).toBeTruthy();
-  return panel!;
-}
-
-function buttonWithin(container: HTMLElement, text: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll<HTMLButtonElement>('button')]
-    .find(btn => btn.textContent?.includes(text));
-  expect(button, `button containing "${text}" inside panel`).toBeTruthy();
-  return button!;
-}
-
-async function clickButtonWithin(container: HTMLElement, text: string) {
-  buttonWithin(container, text).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
+  return rowByText('.broker, .key-row', provider);
 }
 
 function inputByName(name: string): HTMLInputElement {
@@ -77,10 +29,7 @@ function inputByName(name: string): HTMLInputElement {
 }
 
 afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  while (mounted.length) mounted.pop()?.();
-  document.body.innerHTML = '';
+  cleanupMounted();
   useTweaks().reset();
   localStorage.clear();
 });

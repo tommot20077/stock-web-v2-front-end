@@ -1,53 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, nextTick } from 'vue';
-import type { Component } from 'vue';
-import { createPinia, setActivePinia } from 'pinia';
+import { nextTick } from 'vue';
 import Backtest from './pages/Backtest.vue';
 import Ops from './pages/Ops.vue';
 import { useMockPreviewStore } from './stores/mockPreview';
-
-const mounted: Array<() => void> = [];
-
-function mountWithPinia(component: Component, props: Record<string, unknown>) {
-  const el = document.createElement('div');
-  document.body.appendChild(el);
-  const pinia = createPinia();
-  setActivePinia(pinia);
-  const app = createApp(component, props);
-  app.use(pinia);
-  app.mount(el);
-  mounted.push(() => {
-    app.unmount();
-    el.remove();
-  });
-}
-
-function buttonByText(text: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
-    .find(btn => btn.textContent?.includes(text));
-  expect(button, `button containing "${text}"`).toBeTruthy();
-  return button!;
-}
-
-async function clickButton(text: string) {
-  buttonByText(text).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
-
-async function flushAsync(times = 3) {
-  for (let i = 0; i < times; i += 1) {
-    await Promise.resolve();
-    await nextTick();
-  }
-}
-
-async function clickLastButton(text: string) {
-  const buttons = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
-    .filter(btn => btn.textContent?.includes(text));
-  expect(buttons.length, `buttons containing "${text}"`).toBeGreaterThan(0);
-  buttons[buttons.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
+import { cleanupMounted, clickButton, clickLastButton, flushAsync, mountWithPinia } from './testUtils';
 
 function kpiTotalReturn(): string {
   const value = document.body.querySelector<HTMLElement>('.kpi-card .kv');
@@ -79,10 +35,7 @@ async function setInitial(value: string) {
 }
 
 afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  while (mounted.length) mounted.pop()?.();
-  document.body.innerHTML = '';
+  cleanupMounted();
 });
 
 describe('Task 7 simulated backtest and ops runs', () => {

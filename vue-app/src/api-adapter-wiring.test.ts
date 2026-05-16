@@ -1,67 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, nextTick } from 'vue';
-import type { Component } from 'vue';
-import { createPinia, setActivePinia } from 'pinia';
 import Backtest from './pages/Backtest.vue';
 import Ops from './pages/Ops.vue';
 import Settings from './pages/Settings.vue';
 import { useMockPreviewStore } from './stores/mockPreview';
-
-const mounted: Array<() => void> = [];
-
-function mountWithPinia(component: Component, props: Record<string, unknown>) {
-  const el = document.createElement('div');
-  document.body.appendChild(el);
-  const pinia = createPinia();
-  setActivePinia(pinia);
-  const app = createApp(component, props);
-  app.use(pinia);
-  app.mount(el);
-  mounted.push(() => {
-    app.unmount();
-    el.remove();
-  });
-}
-
-async function flushAsync(times = 3) {
-  for (let i = 0; i < times; i += 1) {
-    await Promise.resolve();
-    await nextTick();
-  }
-}
-
-function buttonByText(text: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
-    .find(btn => btn.textContent?.includes(text));
-  expect(button, `button containing "${text}"`).toBeTruthy();
-  return button!;
-}
-
-async function clickButton(text: string) {
-  buttonByText(text).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
-
-function rowByText(selector: string, text: string): HTMLElement {
-  const row = [...document.body.querySelectorAll<HTMLElement>(selector)]
-    .find(el => el.textContent?.includes(text));
-  expect(row, `${selector} containing "${text}"`).toBeTruthy();
-  return row!;
-}
-
-async function clickButtonWithin(container: HTMLElement, text: string) {
-  const button = [...container.querySelectorAll<HTMLButtonElement>('button')]
-    .find(btn => btn.textContent?.includes(text));
-  expect(button, `button containing "${text}" inside row`).toBeTruthy();
-  button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
+import {
+  cleanupMounted,
+  clickButton,
+  clickButtonWithin,
+  flushAsync,
+  mountWithPinia,
+  rowByText,
+  unmountAll,
+} from './testUtils';
 
 afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  while (mounted.length) mounted.pop()?.();
-  document.body.innerHTML = '';
+  cleanupMounted();
 });
 
 describe('page API adapter wiring', () => {
@@ -104,6 +57,39 @@ describe('page API adapter wiring', () => {
     expect(document.body.textContent).toContain('Refetch news');
   });
 
+  it('Ops preserves mock adapter logs across page remounts', async () => {
+    vi.useFakeTimers();
+    mountWithPinia(Ops, { lang: 'en' });
+    await flushAsync();
+
+    await clickButton('Refetch news');
+    await clickButton('Run');
+    await vi.advanceTimersByTimeAsync(650);
+    await flushAsync();
+    unmountAll();
+    document.body.innerHTML = '';
+
+    mountWithPinia(Ops, { lang: 'en' });
+    await flushAsync();
+
+    expect(document.body.textContent).toContain('Refetch news');
+  });
+
+  it('Ops handles adapter load failures without unhandled page state', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'OPS_UNAVAILABLE', message: 'Ops unavailable' },
+      requestId: 'req_ops_down',
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+    const toasts: string[] = [];
+
+    mountWithPinia(Ops, { lang: 'en', onToast: (message: string) => toasts.push(message) });
+    await flushAsync();
+
+    expect(toasts).toContain('Ops unavailable');
+    expect(document.body.textContent).not.toContain('Refetch news');
+  });
+
   it('Settings tests read-only keys through the AI Access adapter without delayed local timers', async () => {
     const toasts: string[] = [];
     mountWithPinia(Settings, { lang: 'en', onToast: (message: string) => toasts.push(message) });
@@ -116,6 +102,33 @@ describe('page API adapter wiring', () => {
 
     expect(finnhub.textContent).not.toContain('Testing');
     expect(toasts).toEqual(['Simulated connection test complete']);
+  });
+
+  it('Settings does not reveal or copy masked adapter-loaded keys', async () => {
+    mountWithPinia(Settings, { lang: 'en' });
+    await flushAsync();
+
+    await clickButton('Data sources');
+    const finnhub = rowByText('.key-row', 'Finnhub');
+
+    expect([...finnhub.querySelectorAll('button')].map(button => button.textContent)).not.toContain('Show');
+    expect([...finnhub.querySelectorAll('button')].map(button => button.textContent)).not.toContain('Copy');
+    expect(finnhub.textContent).toContain('DEMO-F...0003');
+  });
+
+  it('Settings handles AI access load failures with a safe empty state', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'AI_ACCESS_UNAVAILABLE', message: 'AI access unavailable' },
+      requestId: 'req_ai_down',
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+    const toasts: string[] = [];
+
+    mountWithPinia(Settings, { lang: 'en', onToast: (message: string) => toasts.push(message) });
+    await flushAsync();
+
+    expect(toasts).toContain('AI access unavailable');
+    expect(document.body.textContent).toContain('No brokers configured');
   });
 
   it('Settings revokes connected agents through the AI Access adapter', async () => {

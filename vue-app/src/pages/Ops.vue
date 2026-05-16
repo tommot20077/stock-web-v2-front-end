@@ -55,14 +55,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { t } from '../i18n';
-import { createOpsApi } from '../services/opsApi';
-import { getRuntimeDataMode } from '../services/runtimeDataMode';
+import { getRuntimeApiClients } from '../services/pageApiClients';
 import type { OpsActionDto, OpsJobDto, OpsLogDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
 const emit = defineEmits<{ toast: [m: string] }>();
-const opsApi = createOpsApi(getRuntimeDataMode());
+const opsApi = getRuntimeApiClients().ops;
 
 const sysStats: [string, string, number][] = [
   ['CPU', '32%', 0.32], ['Memory', '6.2 / 16 GB', 0.39], ['JVM Heap', '1.8 / 4 GB', 0.45],
@@ -88,14 +87,21 @@ function formatDuration(ms: number) {
 }
 
 async function refreshOpsData() {
-  const [nextActions, nextCurrentJob, nextLogs] = await Promise.all([
-    opsApi.getActions(),
-    opsApi.getCurrentJob(),
-    opsApi.listLogs({ limit: 30 }),
-  ]);
-  actions.value = nextActions;
-  currentJob.value = nextCurrentJob;
-  logs.value = nextLogs.data;
+  try {
+    const [nextActions, nextCurrentJob, nextLogs] = await Promise.all([
+      opsApi.getActions(),
+      opsApi.getCurrentJob(),
+      opsApi.listLogs({ limit: 30 }),
+    ]);
+    actions.value = nextActions;
+    currentJob.value = nextCurrentJob;
+    logs.value = nextLogs.data;
+  } catch (error: any) {
+    actions.value = [];
+    currentJob.value = null;
+    logs.value = [];
+    emit('toast', error?.message || (props.lang === 'zh' ? 'Ops 載入失敗' : 'Ops load failed'));
+  }
 }
 
 function openConfirm(action: OpsActionDto) {

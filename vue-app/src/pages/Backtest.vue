@@ -175,13 +175,12 @@
 import { ref, computed } from 'vue';
 import { t } from '../i18n';
 import StrategyEditor from '../components/StrategyEditor.vue';
-import { createBacktestApi } from '../services/backtestApi';
-import { getRuntimeDataMode } from '../services/runtimeDataMode';
+import { getRuntimeApiClients } from '../services/pageApiClients';
 import type { BacktestPeriod, BacktestRunDto, BacktestStrategyId } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
-const backtestApi = createBacktestApi(getRuntimeDataMode());
+const backtestApi = getRuntimeApiClients().backtest;
 
 const customSeed = ref(0);
 const customStrategyCode = ref<string | null>(null);
