@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resource v2 — Three Directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Fraunces:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; padding:0; height:100%; background:#f0eee9; font-family: Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  *, *::before, *::after { box-sizing: border-box; }
+  .cmdk-item:hover { background: var(--surface2, rgba(0,0,0,0.04)); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="terminal.jsx"></script>
+<script type="text/babel" src="minimal.jsx"></script>
+<script type="text/babel" src="soft.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "lang": "zh",
+  "density": "regular",
+  "accent": "#26cfbb",
+  "upGreen": true,
+  "admin": true
+}/*EDITMODE-END*/;
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  const tweaks = t;
+
+  return (
+    <>
+      <DesignCanvas>
+        <DCSection id="resource-v2" title="Resource v2 — three directions"
+          subtitle="Phase 1 navigation • Cmd/Ctrl+K • EN/ZH • theme + accent via Tweaks">
+          <DCArtboard id="terminal" label="A · Terminal — dense, mono" width={1280} height={820}>
+            <TerminalArtboard tweaks={tweaks} />
+          </DCArtboard>
+          <DCArtboard id="minimal" label="B · Modern fintech — minimal" width={1280} height={820}>
+            <MinimalArtboard tweaks={tweaks} />
+          </DCArtboard>
+          <DCArtboard id="soft" label="C · Soft neo-tech — friendly" width={1280} height={820}>
+            <SoftArtboard tweaks={tweaks} />
+          </DCArtboard>
+        </DCSection>
+        <DCPostIt top={120} left={40} rotate={-3}>
+          Click any artboard's grip ⋮⋮ to drag-reorder. Click the label or ⤢ icon to focus a single artboard fullscreen, then ←/→ to flip.
+        </DCPostIt>
+        <DCPostIt top={400} left={40} rotate={2}>
+          Try Cmd/Ctrl+K inside any artboard for the global command palette. Click the bell to peek the inbox dropdown.
+        </DCPostIt>
+      </DesignCanvas>
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection label="Direction shared" />
+        <TweakRadio label="Theme" value={t.theme} options={['light','dark']} onChange={(v) => setTweak('theme', v)} />
+        <TweakRadio label="Language" value={t.lang} options={['en','zh']} onChange={(v) => setTweak('lang', v)} />
+        <TweakRadio label="Density" value={t.density} options={['compact','regular','comfy']} onChange={(v) => setTweak('density', v)} />
+        <TweakColor label="Accent" value={t.accent} onChange={(v) => setTweak('accent', v)} />
+        <TweakToggle label="Green = up" value={t.upGreen} onChange={(v) => setTweak('upGreen', v)} />
+        <TweakToggle label="Admin role (show Ops)" value={t.admin} onChange={(v) => setTweak('admin', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
