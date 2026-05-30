@@ -1,6 +1,5 @@
-import { ApiClientError, apiRequest, buildQueryString } from './apiClient';
+import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import type {
-  ApiFailure,
   BacktestResultDto,
   BacktestRunDto,
   BacktestRunRequest,
@@ -104,82 +103,6 @@ function validateStrategyCode(request: StrategyValidationRequest): StrategyValid
       field: 'strategyCode',
     });
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object';
-}
-
-function isApiFailure(value: unknown): value is ApiFailure {
-  const error = isRecord(value) ? value.error : null;
-  return isRecord(value)
-    && isRecord(error)
-    && typeof error.code === 'string'
-    && typeof error.message === 'string'
-    && typeof value.requestId === 'string';
-}
-
-function isPaginatedResponse<T>(value: unknown): value is PaginatedResponse<T> {
-  const page = isRecord(value) ? value.page : null;
-  return isRecord(value)
-    && Array.isArray(value.data)
-    && isRecord(page)
-    && (typeof page.nextCursor === 'string' || page.nextCursor === null)
-    && typeof page.hasMore === 'boolean'
-    && typeof value.requestId === 'string';
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  const contentType = response.headers.get('Content-Type') ?? '';
-  if (!contentType.includes('application/json')) return null;
-  try {
-    return await response.json();
-  } catch {
-    throw new ApiClientError({
-      status: response.status,
-      code: 'INVALID_JSON_RESPONSE',
-      message: 'Response body was not valid JSON',
-      requestId: null,
-    });
-  }
-}
-
-async function apiPaginatedRequest<T>(path: string): Promise<PaginatedResponse<T>> {
-  const headers = new Headers();
-  headers.set('Accept', 'application/json');
-
-  const response = await fetch(path, { headers });
-  const payload = await readJson(response);
-
-  if (!response.ok) {
-    if (isApiFailure(payload)) {
-      throw new ApiClientError({
-        status: response.status,
-        code: payload.error.code,
-        message: payload.error.message,
-        requestId: payload.requestId,
-        field: payload.error.field,
-        details: payload.error.details,
-      });
-    }
-    throw new ApiClientError({
-      status: response.status,
-      code: 'HTTP_ERROR',
-      message: `Request failed with status ${response.status}`,
-      requestId: null,
-    });
-  }
-
-  if (!isPaginatedResponse<T>(payload)) {
-    throw new ApiClientError({
-      status: response.status,
-      code: 'INVALID_API_RESPONSE',
-      message: 'Response did not include a paginated envelope',
-      requestId: null,
-    });
-  }
-
-  return payload;
 }
 
 function findRun(runs: StoredBacktestRun[], runId: string): StoredBacktestRun {

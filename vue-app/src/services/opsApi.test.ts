@@ -184,7 +184,7 @@ describe('opsApi', () => {
       status: 200,
       code: 'INVALID_API_RESPONSE',
       message: 'Response did not include a paginated envelope',
-      requestId: null,
+      requestId: 'req_4',
     });
   });
 

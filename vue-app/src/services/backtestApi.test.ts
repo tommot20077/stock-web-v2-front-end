@@ -174,7 +174,7 @@ describe('backtestApi', () => {
     });
   });
 
-  it('http adapter falls back for malformed paginated error envelopes', async () => {
+  it('http adapter converts paginated error envelopes to typed errors without request ids', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'BACKTEST_RUN_TIMEOUT', message: 'Timed out' },
       requestId: 123,
@@ -185,8 +185,8 @@ describe('backtestApi', () => {
     await expect(api.listRuns({ limit: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 504,
-      code: 'HTTP_ERROR',
-      message: 'Request failed with status 504',
+      code: 'BACKTEST_RUN_TIMEOUT',
+      message: 'Timed out',
       requestId: null,
     });
   });
