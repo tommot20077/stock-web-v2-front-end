@@ -14,6 +14,7 @@ const createTradeKeyRequest: CreateAiAccessKeyRequest = {
 };
 
 afterEach(() => {
+  document.cookie = 'XSRF-TOKEN=; Max-Age=0; path=/';
   vi.unstubAllGlobals();
 });
 
@@ -114,6 +115,13 @@ describe('aiAccessApi', () => {
   it('http adapter calls expected endpoints', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith('/api/v1/csrf')) {
+        document.cookie = 'XSRF-TOKEN=csrf-ai-access; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          requestId: 'req_csrf',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.endsWith('/api/v1/ai-access/providers')) {
         return new Response(JSON.stringify({ data: [], requestId: 'req_1' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
@@ -138,6 +146,13 @@ describe('aiAccessApi', () => {
   it('http adapter sends POST and PATCH payloads through json', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith('/api/v1/csrf')) {
+        document.cookie = 'XSRF-TOKEN=csrf-ai-access-write; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          requestId: 'req_csrf',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.endsWith('/api/v1/ai-access/keys')) {
         return new Response(JSON.stringify({
           data: {
@@ -184,8 +199,10 @@ describe('aiAccessApi', () => {
     const policyInit = lastFetchInit();
 
     expect(createInit.method).toBe('POST');
+    expect(new Headers(createInit.headers).get('x-xsrf-token')).toBe('csrf-ai-access-write');
     expect(jsonBody(createInit)).toEqual(createTradeKeyRequest);
     expect(policyInit.method).toBe('PATCH');
+    expect(new Headers(policyInit.headers).get('x-xsrf-token')).toBe('csrf-ai-access-write');
     expect(jsonBody(policyInit)).toEqual(policy);
   });
 
