@@ -96,6 +96,7 @@ describe('apiClient', () => {
   });
 
   it('serializes json payloads and sets a default content type', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_json; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { created: true },
       requestId: 'req_json',
@@ -111,6 +112,7 @@ describe('apiClient', () => {
   });
 
   it('preserves caller accept and content-type headers', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_headers; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { updated: true },
       requestId: 'req_headers',
