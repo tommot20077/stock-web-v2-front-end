@@ -11,7 +11,7 @@
       @open-cmdk="cmdk = true"
       @logout="logout"
     />
-    <section v-if="apiMode" class="session-shell">
+    <section v-if="apiMode || runtimeModeError" class="session-shell">
       <SessionBanner
         :lang="tweaks.lang"
         :status="sessionState.status"
@@ -32,7 +32,7 @@
         @logout="logout"
       />
     </section>
-    <main class="main">
+    <main v-if="!runtimeModeError" class="main">
       <Overview v-if="page === 'overview'" :lang="tweaks.lang" @order="openTicket" @navigate="page = $event" />
       <Markets v-else-if="page === 'markets'" :lang="tweaks.lang" @order="openTicket" @chart="openChart" />
       <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" @order="openTicket" @back="page = 'markets'" />
@@ -77,10 +77,11 @@ import SessionBanner from './components/SessionBanner.vue';
 import OrderTicket from './components/OrderTicket.vue';
 import Toast from './components/Toast.vue';
 import TweaksPanel from './components/TweaksPanel.vue';
-import { createAuthSession } from './services/authSession';
+import { createAuthSession, type AuthSession, type SessionMessage, type SessionState } from './services/authSession';
 import { getRuntimeApiClients } from './services/pageApiClients';
-import { getRuntimeDataMode } from './services/runtimeDataMode';
+import { RuntimeDataModeError, getRuntimeDataMode } from './services/runtimeDataMode';
 import type { LoginRequest, RegisterRequest } from './services/authApi';
+import type { RuntimeDataMode } from './services/apiTypes';
 import Overview from './pages/Overview.vue';
 import Markets from './pages/Markets.vue';
 import Chart from './pages/Chart.vue';
@@ -102,10 +103,41 @@ const toast = ref('');
 const ticketOpen = ref(false);
 const ticketPreset = ref<{ sym: string; side?: 'BUY' | 'SELL' } | null>(null);
 const chartSymbol = ref<string>('AAPL');
-const runtimeMode = getRuntimeDataMode();
+const runtimeModeError = ref<SessionMessage | null>(null);
+
+function resolveRuntimeMode(): RuntimeDataMode {
+  try {
+    return getRuntimeDataMode();
+  } catch (error) {
+    if (error instanceof RuntimeDataModeError) {
+      runtimeModeError.value = {
+        code: error.code,
+        message: error.message,
+        status: null,
+        requestId: null,
+      };
+      return 'mock';
+    }
+    throw error;
+  }
+}
+
+function invalidRuntimeState(message: SessionMessage): SessionState {
+  return {
+    status: 'error',
+    user: null,
+    accessTokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+    message,
+  };
+}
+
+const runtimeMode = resolveRuntimeMode();
 const apiMode = runtimeMode === 'api';
-const authSession = createAuthSession({ mode: runtimeMode });
-const sessionState = computed(() => authSession.state.value);
+const authSession: AuthSession | null = runtimeModeError.value ? null : createAuthSession({ mode: runtimeMode });
+const sessionState = computed(() => runtimeModeError.value
+  ? invalidRuntimeState(runtimeModeError.value)
+  : authSession!.state.value);
 const sessionBusy = ref(false);
 const authPanelRef = ref<InstanceType<typeof AuthPanel> | null>(null);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -166,10 +198,11 @@ function onTweaksPanelSet(payload: { key: string; value: unknown }) {
 }
 
 const showAuthPanel = computed(() => apiMode
+  && !runtimeModeError.value
   && (sessionState.value.status === 'anonymous' || sessionState.value.status === 'error'));
 
 async function restoreSession() {
-  if (!apiMode) return;
+  if (!apiMode || !authSession) return;
   sessionBusy.value = true;
   try {
     await getRuntimeApiClients().auth.csrf();
@@ -180,6 +213,7 @@ async function restoreSession() {
 }
 
 async function login(request: LoginRequest) {
+  if (!authSession) return;
   sessionBusy.value = true;
   try {
     await authSession.login(request);
@@ -189,6 +223,7 @@ async function login(request: LoginRequest) {
 }
 
 async function register(request: RegisterRequest) {
+  if (!authSession) return;
   sessionBusy.value = true;
   try {
     await authSession.register(request);
@@ -198,6 +233,7 @@ async function register(request: RegisterRequest) {
 }
 
 async function logout() {
+  if (!authSession) return;
   sessionBusy.value = true;
   try {
     await authSession.logout();
