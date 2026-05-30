@@ -34,10 +34,30 @@ export interface CsrfTokenNames {
   headerName: 'X-XSRF-TOKEN';
 }
 
+export interface ApiClientSessionError {
+  status: number;
+  code: string;
+  message: string;
+  requestId: string | null;
+}
+
+export interface ApiClientSessionHandlers {
+  onRefreshing?: () => void;
+  onRefreshFailed?: (error: ApiClientSessionError) => void;
+}
+
 const DEFAULT_API_BASE_PATH = '/api/v1';
 const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
 const CSRF_HEADER_NAME = 'X-XSRF-TOKEN';
+const REFRESH_PATH = endpoint(DEFAULT_API_BASE_PATH, 'auth/refresh');
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+let refreshPromise: Promise<void> | null = null;
+let sessionHandlers: ApiClientSessionHandlers = {};
+
+export function configureApiClientSessionHandlers(handlers: ApiClientSessionHandlers): void {
+  sessionHandlers = handlers;
+}
 
 export function buildQueryString(params: Record<string, string | number | boolean | null | undefined>): string {
   const pairs = Object.entries(params)
@@ -102,6 +122,10 @@ function readCookie(name: string): string | null {
 
 function isUnsafeMethod(method: string | undefined): boolean {
   return UNSAFE_METHODS.has((method ?? 'GET').toUpperCase());
+}
+
+function isRefreshPath(path: string): boolean {
+  return path === REFRESH_PATH || path.endsWith(REFRESH_PATH);
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -205,10 +229,82 @@ function errorFromResponse(response: Response, payload: unknown): ApiClientError
   });
 }
 
-export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+function safeSessionError(error: unknown): ApiClientSessionError {
+  if (error instanceof ApiClientError) {
+    return {
+      status: error.status,
+      code: error.code,
+      message: error.message,
+      requestId: error.requestId,
+    };
+  }
+  return {
+    status: 0,
+    code: 'UNKNOWN_SESSION_ERROR',
+    message: error instanceof Error ? error.message : 'Unknown session error',
+    requestId: null,
+  };
+}
+
+async function refreshSession(): Promise<void> {
+  if (!refreshPromise) {
+    sessionHandlers.onRefreshing?.();
+    refreshPromise = (async () => {
+      const init = await prepareRequestInit({ method: 'POST' });
+      const response = await fetch(REFRESH_PATH, init);
+      const payload = await readJson(response);
+
+      if (!response.ok) {
+        throw errorFromResponse(response, payload);
+      }
+
+      if (!isApiSuccess<unknown>(payload)) {
+        throw new ApiClientError({
+          status: response.status,
+          code: 'INVALID_API_RESPONSE',
+          message: 'Response did not include a data envelope',
+          requestId: requestIdFrom(payload),
+        });
+      }
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+
+  return refreshPromise;
+}
+
+async function fetchWithSessionRecovery(
+  path: string,
+  options: ApiRequestOptions,
+  retried = false,
+): Promise<{ response: Response; payload: unknown }> {
   const init = await prepareRequestInit(options);
   const response = await fetch(path, init);
   const payload = await readJson(response);
+
+  if (response.status !== 401 || retried || isRefreshPath(path)) {
+    return { response, payload };
+  }
+
+  try {
+    await refreshSession();
+  } catch (error) {
+    sessionHandlers.onRefreshFailed?.(safeSessionError(error));
+    throw error;
+  }
+
+  const replayInit = await prepareRequestInit(options);
+  const replayResponse = await fetch(path, replayInit);
+  const replayPayload = await readJson(replayResponse);
+  if (replayResponse.status === 401) {
+    sessionHandlers.onRefreshFailed?.(safeSessionError(errorFromResponse(replayResponse, replayPayload)));
+  }
+  return { response: replayResponse, payload: replayPayload };
+}
+
+export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const { response, payload } = await fetchWithSessionRecovery(path, options);
 
   if (!response.ok) {
     throw errorFromResponse(response, payload);
@@ -230,9 +326,7 @@ export async function apiPaginatedRequest<T>(
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<PaginatedResponse<T>> {
-  const init = await prepareRequestInit(options);
-  const response = await fetch(path, init);
-  const payload = await readJson(response);
+  const { response, payload } = await fetchWithSessionRecovery(path, options);
 
   if (!response.ok) {
     throw errorFromResponse(response, payload);

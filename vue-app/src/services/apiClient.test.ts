@@ -454,6 +454,22 @@ describe('apiClient', () => {
     expect(calls).toEqual(['/api/v1/me', '/api/v1/auth/refresh', '/api/v1/me']);
   });
 
+  it('does not recursively refresh the refresh endpoint itself', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_refresh_endpoint; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'AUTH_REFRESH_TOKEN_INVALID', message: 'Refresh token invalid' },
+      meta: { traceId: 'trace_refresh_endpoint' },
+    }), { status: 401, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(apiRequest('/api/v1/auth/refresh', { method: 'POST' })).rejects.toMatchObject({
+      code: 'AUTH_REFRESH_TOKEN_INVALID',
+      status: 401,
+      requestId: 'trace_refresh_endpoint',
+    });
+
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('runs the CSRF guard again before replaying unsafe requests', async () => {
     document.cookie = 'XSRF-TOKEN=csrf_initial; path=/';
     const requestHeaders: Array<string | null> = [];
