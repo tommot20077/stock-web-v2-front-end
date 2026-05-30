@@ -13,8 +13,23 @@ import {
   unmountAll,
 } from './testUtils';
 
+const mockFactoryCalls = vi.hoisted(() => ({
+  auth: vi.fn(),
+  aiAccess: vi.fn(),
+  backtest: vi.fn(),
+  ops: vi.fn(),
+}));
+
 afterEach(() => {
   cleanupMounted();
+  mockFactoryCalls.auth.mockReset();
+  mockFactoryCalls.aiAccess.mockReset();
+  mockFactoryCalls.backtest.mockReset();
+  mockFactoryCalls.ops.mockReset();
+  vi.doUnmock('./services/authApi');
+  vi.doUnmock('./services/aiAccessApi');
+  vi.doUnmock('./services/backtestApi');
+  vi.doUnmock('./services/opsApi');
 });
 
 describe('page API adapter wiring', () => {
@@ -143,5 +158,70 @@ describe('page API adapter wiring', () => {
 
     expect([...document.body.querySelectorAll<HTMLElement>('.agent')]
       .some(row => row.textContent?.includes('Claude Desktop'))).toBe(false);
+  });
+
+  it('API mode creates HTTP clients and never calls mock adapter factories', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+
+    vi.doMock('./services/authApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/authApi')>();
+      return {
+        ...actual,
+        createMockAuthApi: mockFactoryCalls.auth,
+      };
+    });
+    vi.doMock('./services/aiAccessApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/aiAccessApi')>();
+      return {
+        ...actual,
+        createMockAiAccessApi: mockFactoryCalls.aiAccess,
+      };
+    });
+    vi.doMock('./services/backtestApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/backtestApi')>();
+      return {
+        ...actual,
+        createMockBacktestApi: mockFactoryCalls.backtest,
+      };
+    });
+    vi.doMock('./services/opsApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/opsApi')>();
+      return {
+        ...actual,
+        createMockOpsApi: mockFactoryCalls.ops,
+      };
+    });
+
+    const { getRuntimeApiClients } = await import('./services/pageApiClients');
+    const clients = getRuntimeApiClients();
+
+    expect(clients.mode).toBe('api');
+    expect(clients.auth.mode).toBe('api');
+    expect(clients.aiAccess.mode).toBe('api');
+    expect(clients.backtest.mode).toBe('api');
+    expect(clients.ops.mode).toBe('api');
+    expect(mockFactoryCalls.auth).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.aiAccess).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.backtest).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.ops).not.toHaveBeenCalled();
+  });
+
+  it('API mode adapter failures preserve backend status code and trace id', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'OPS_UNAVAILABLE', message: 'Ops unavailable' },
+      meta: { traceId: 'trace-ops-down' },
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+
+    const { getRuntimeApiClients } = await import('./services/pageApiClients');
+
+    await expect(getRuntimeApiClients().ops.getActions()).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'OPS_UNAVAILABLE',
+      status: 503,
+      requestId: 'trace-ops-down',
+    });
   });
 });

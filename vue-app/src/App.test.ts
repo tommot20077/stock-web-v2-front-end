@@ -105,6 +105,21 @@ describe('App session shell', () => {
     expect(document.body.textContent).toContain('尚未登入');
   });
 
+  it('API-mode rejected fetch renders backend unavailable retry surface without mock portfolio content', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('backend offline');
+    }));
+
+    mountWithPinia(App);
+    await settleSession();
+
+    expect(document.body.textContent).toContain('暫時無法連線到後端，請稍後重試。');
+    expect(document.body.querySelector('[data-testid="session-retry"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('總資產');
+    expect(document.body.textContent).not.toContain('最近交易');
+  });
+
   it('successful logout returns to anonymous state and keeps persistent session surface', async () => {
     vi.stubEnv('VITE_DATA_MODE', 'api');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
