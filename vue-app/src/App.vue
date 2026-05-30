@@ -32,7 +32,7 @@
         @logout="logout"
       />
     </section>
-    <main v-if="!runtimeModeError" class="main">
+    <main v-if="showMainContent" class="main">
       <Overview v-if="page === 'overview'" :lang="tweaks.lang" @order="openTicket" @navigate="page = $event" />
       <Markets v-else-if="page === 'markets'" :lang="tweaks.lang" @order="openTicket" @chart="openChart" />
       <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" @order="openTicket" @back="page = 'markets'" />
@@ -80,6 +80,7 @@ import TweaksPanel from './components/TweaksPanel.vue';
 import { createAuthSession, type AuthSession, type SessionMessage, type SessionState } from './services/authSession';
 import { getRuntimeApiClients } from './services/pageApiClients';
 import { RuntimeDataModeError, getRuntimeDataMode } from './services/runtimeDataMode';
+import { ApiClientError } from './services/apiClient';
 import type { LoginRequest, RegisterRequest } from './services/authApi';
 import type { RuntimeDataMode } from './services/apiTypes';
 import Overview from './pages/Overview.vue';
@@ -104,6 +105,7 @@ const ticketOpen = ref(false);
 const ticketPreset = ref<{ sym: string; side?: 'BUY' | 'SELL' } | null>(null);
 const chartSymbol = ref<string>('AAPL');
 const runtimeModeError = ref<SessionMessage | null>(null);
+const apiStartupError = ref<SessionMessage | null>(null);
 
 function resolveRuntimeMode(): RuntimeDataMode {
   try {
@@ -122,7 +124,7 @@ function resolveRuntimeMode(): RuntimeDataMode {
   }
 }
 
-function invalidRuntimeState(message: SessionMessage): SessionState {
+function errorState(message: SessionMessage): SessionState {
   return {
     status: 'error',
     user: null,
@@ -136,7 +138,9 @@ const runtimeMode = resolveRuntimeMode();
 const apiMode = runtimeMode === 'api';
 const authSession: AuthSession | null = runtimeModeError.value ? null : createAuthSession({ mode: runtimeMode });
 const sessionState = computed(() => runtimeModeError.value
-  ? invalidRuntimeState(runtimeModeError.value)
+  ? errorState(runtimeModeError.value)
+  : apiStartupError.value
+    ? errorState(apiStartupError.value)
   : authSession!.state.value);
 const sessionBusy = ref(false);
 const authPanelRef = ref<InstanceType<typeof AuthPanel> | null>(null);
@@ -200,13 +204,36 @@ function onTweaksPanelSet(payload: { key: string; value: unknown }) {
 const showAuthPanel = computed(() => apiMode
   && !runtimeModeError.value
   && (sessionState.value.status === 'anonymous' || sessionState.value.status === 'error'));
+const showMainContent = computed(() => !runtimeModeError.value
+  && !(apiMode && sessionState.value.status === 'error'));
+
+function messageFromStartupError(error: unknown): SessionMessage {
+  if (error instanceof ApiClientError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      requestId: error.requestId,
+    };
+  }
+
+  return {
+    code: 'NETWORK_ERROR',
+    message: error instanceof Error ? error.message : 'Backend unavailable',
+    status: 0,
+    requestId: null,
+  };
+}
 
 async function restoreSession() {
   if (!apiMode || !authSession) return;
   sessionBusy.value = true;
+  apiStartupError.value = null;
   try {
     await getRuntimeApiClients().auth.csrf();
     await authSession.restore();
+  } catch (error) {
+    apiStartupError.value = messageFromStartupError(error);
   } finally {
     sessionBusy.value = false;
   }
