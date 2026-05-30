@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
+import {
+  ApiClientError,
+  apiPaginatedRequest,
+  apiRequest,
+  bootstrapCsrf,
+  buildQueryString,
+  ensureCsrfToken,
+} from './apiClient';
 
 afterEach(() => {
+  document.cookie = 'XSRF-TOKEN=; Max-Age=0; path=/';
   vi.unstubAllGlobals();
 });
 
@@ -217,6 +225,108 @@ describe('apiClient', () => {
       code: 'INVALID_JSON_RESPONSE',
       message: 'Response body was not valid JSON',
       requestId: null,
+    });
+  });
+
+  it('bootstraps CSRF with browser credentials and returns the backend token names', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+      meta: { traceId: 'trace_csrf' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(bootstrapCsrf()).resolves.toEqual({
+      cookieName: 'XSRF-TOKEN',
+      headerName: 'X-XSRF-TOKEN',
+    });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith('/api/v1/csrf', expect.objectContaining({
+      method: 'GET',
+      credentials: 'include',
+    }));
+  });
+
+  it('bootstraps missing CSRF cookies before unsafe requests and sends X-XSRF-TOKEN', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/csrf') {
+        document.cookie = 'XSRF-TOKEN=csrf_bootstrapped; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          meta: { traceId: 'trace_csrf' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        data: { ok: true },
+        meta: { traceId: 'trace_unsafe' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      document.cookie = 'XSRF-TOKEN=; Max-Age=0; path=/';
+      await expect(apiRequest('/api/v1/orders', { method })).resolves.toEqual({ ok: true });
+      expect(headerValue('X-XSRF-TOKEN')).toBe('csrf_bootstrapped');
+    }
+  });
+
+  it('uses existing CSRF cookies without bootstrapping and preserves caller headers', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_existing; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: { updated: true },
+      meta: { traceId: 'trace_headers' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await apiRequest('/api/v1/orders/order_1', {
+      method: 'PATCH',
+      headers: {
+        'X-Client-Request': 'client-1',
+      },
+      json: { quantity: 3 },
+    });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(headerValue('X-XSRF-TOKEN')).toBe('csrf_existing');
+    expect(headerValue('X-Client-Request')).toBe('client-1');
+  });
+
+  it('does not add CSRF headers to safe requests', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_safe; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: { ok: true },
+      meta: { traceId: 'trace_safe' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await apiRequest('/api/v1/me');
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(headerValue('X-XSRF-TOKEN')).toBeNull();
+  });
+
+  it('ensures CSRF tokens by reading the XSRF-TOKEN cookie after bootstrap', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      document.cookie = 'XSRF-TOKEN=csrf_ensured; path=/';
+      return new Response(JSON.stringify({
+        data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+        meta: { traceId: 'trace_csrf' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(ensureCsrfToken()).resolves.toBe('csrf_ensured');
+  });
+
+  it('keeps CSRF 403 distinguishable as typed backend errors', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_invalid; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'AUTH_CSRF_TOKEN_INVALID', message: 'CSRF token invalid' },
+      meta: { traceId: 'trace_csrf_failed' },
+    }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(apiRequest('/api/v1/auth/logout', { method: 'POST' })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 403,
+      code: 'AUTH_CSRF_TOKEN_INVALID',
+      message: 'CSRF token invalid',
+      requestId: 'trace_csrf_failed',
     });
   });
 });
