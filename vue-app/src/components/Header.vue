@@ -18,6 +18,20 @@
       <span class="search-label">{{ t(lang, 'search') }}</span>
       <kbd>⌘K</kbd>
     </button>
+    <div v-if="sessionStatus" :class="['session-chip', sessionTone]">
+      <span class="session-dot" />
+      <span class="session-copy">{{ sessionLabel }}</span>
+      <span v-if="safeSessionIdentity" class="session-identity">{{ safeSessionIdentity }}</span>
+      <button
+        v-if="sessionStatus === 'authenticated'"
+        class="session-logout"
+        data-testid="header-logout"
+        :disabled="sessionBusy"
+        @click="$emit('logout')"
+      >
+        {{ t(lang, 'authSignOut') }}
+      </button>
+    </div>
     <div class="bell-wrap">
       <button class="icon-btn" @click="bellOpen = !bellOpen">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -50,9 +64,18 @@ import { computed, ref } from 'vue';
 import { t } from '../i18n';
 import { NOTIFS } from '../data';
 import type { Lang, Page } from '../types';
+import type { AuthUser } from '../services/authApi';
+import type { SessionState } from '../services/authSession';
 
-const props = defineProps<{ page: Page; lang: Lang; admin: boolean }>();
-defineEmits<{ navigate: [p: Page]; 'open-cmdk': [] }>();
+const props = defineProps<{
+  page: Page;
+  lang: Lang;
+  admin: boolean;
+  sessionStatus?: SessionState['status'];
+  sessionUser?: AuthUser | null;
+  sessionBusy?: boolean;
+}>();
+defineEmits<{ navigate: [p: Page]; 'open-cmdk': []; logout: [] }>();
 
 const bellOpen = ref(false);
 const unreadCount = computed(() => NOTIFS.filter(n => n.unread).length);
@@ -72,6 +95,34 @@ const navItems = computed(() => {
   ];
   if (props.admin) base.push({ k: 'ops', l: t(props.lang, 'ops') });
   return base;
+});
+
+const safeSessionIdentity = computed(() => {
+  if (props.sessionStatus !== 'authenticated') return '';
+  return props.sessionUser?.email || props.sessionUser?.username || '';
+});
+
+const sessionLabel = computed(() => {
+  switch (props.sessionStatus) {
+    case 'authenticated':
+      return t(props.lang, 'authSignedIn');
+    case 'checking':
+      return t(props.lang, 'authChecking');
+    case 'refreshing':
+      return t(props.lang, 'authRefreshing');
+    case 'error':
+      return t(props.lang, 'authBackendUnavailable');
+    case 'anonymous':
+      return t(props.lang, 'authSignedOut');
+    default:
+      return '';
+  }
+});
+
+const sessionTone = computed(() => {
+  if (props.sessionStatus === 'authenticated') return 'ready';
+  if (props.sessionStatus === 'error') return 'danger';
+  return 'neutral';
 });
 </script>
 
@@ -106,6 +157,32 @@ const navItems = computed(() => {
 }
 .search-label { flex: 1; text-align: left; }
 .search-btn kbd { font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+.session-chip {
+  height: 36px; max-width: 300px; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface2);
+  color: var(--fg-dim); font-size: 12px; line-height: 1;
+  flex-shrink: 1;
+}
+.session-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fg-mute); flex-shrink: 0;
+}
+.session-chip.ready .session-dot { background: var(--accent); }
+.session-chip.danger .session-dot { background: var(--dn); }
+.session-copy, .session-identity {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-copy { flex-shrink: 0; font-weight: 600; color: var(--fg); }
+.session-identity { min-width: 0; }
+.session-logout {
+  height: 28px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--dn); font: inherit; font-size: 12px; font-weight: 600;
+  white-space: nowrap;
+}
+.session-logout:disabled { opacity: .62; cursor: not-allowed; }
 .bell-wrap { position: relative; }
 .icon-btn {
   width: 36px; height: 36px;
@@ -134,5 +211,9 @@ const navItems = computed(() => {
   width: 32px; height: 32px; border-radius: 50%;
   background: var(--surface2); display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 600;
+}
+@media (max-width: 900px) {
+  .session-chip { max-width: 180px; }
+  .session-identity { display: none; }
 }
 </style>

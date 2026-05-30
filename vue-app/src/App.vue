@@ -1,6 +1,37 @@
 <template>
   <div class="root">
-    <AppHeader :page="page" :lang="tweaks.lang" :admin="tweaks.admin" @navigate="page = $event" @open-cmdk="cmdk = true" />
+    <AppHeader
+      :page="page"
+      :lang="tweaks.lang"
+      :admin="tweaks.admin"
+      :session-status="apiMode ? sessionState.status : undefined"
+      :session-user="apiMode ? sessionState.user : null"
+      :session-busy="sessionBusy"
+      @navigate="page = $event"
+      @open-cmdk="cmdk = true"
+      @logout="logout"
+    />
+    <section v-if="apiMode" class="session-shell">
+      <SessionBanner
+        :lang="tweaks.lang"
+        :status="sessionState.status"
+        :message="sessionState.message"
+        @retry="restoreSession"
+        @sign-in-again="focusAuthPanel"
+      />
+      <AuthPanel
+        v-if="showAuthPanel"
+        ref="authPanelRef"
+        :lang="tweaks.lang"
+        :status="sessionState.status"
+        :user="sessionState.user"
+        :message="sessionState.message"
+        :busy="sessionBusy"
+        @login="login"
+        @register="register"
+        @logout="logout"
+      />
+    </section>
     <main class="main">
       <Overview v-if="page === 'overview'" :lang="tweaks.lang" @order="openTicket" @navigate="page = $event" />
       <Markets v-else-if="page === 'markets'" :lang="tweaks.lang" @order="openTicket" @chart="openChart" />
@@ -32,17 +63,24 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useTweaks, type Tweaks } from './useTweaks';
 import { useShortcuts } from './useShortcuts';
 import type { Page } from './types';
+import { t } from './i18n';
 import AppHeader from './components/Header.vue';
+import AuthPanel from './components/AuthPanel.vue';
 import CmdK from './components/CmdK.vue';
 import KeyboardHelp from './components/KeyboardHelp.vue';
 import PrefixIndicator from './components/PrefixIndicator.vue';
+import SessionBanner from './components/SessionBanner.vue';
 import OrderTicket from './components/OrderTicket.vue';
 import Toast from './components/Toast.vue';
 import TweaksPanel from './components/TweaksPanel.vue';
+import { createAuthSession } from './services/authSession';
+import { getRuntimeApiClients } from './services/pageApiClients';
+import { getRuntimeDataMode } from './services/runtimeDataMode';
+import type { LoginRequest, RegisterRequest } from './services/authApi';
 import Overview from './pages/Overview.vue';
 import Markets from './pages/Markets.vue';
 import Chart from './pages/Chart.vue';
@@ -64,6 +102,12 @@ const toast = ref('');
 const ticketOpen = ref(false);
 const ticketPreset = ref<{ sym: string; side?: 'BUY' | 'SELL' } | null>(null);
 const chartSymbol = ref<string>('AAPL');
+const runtimeMode = getRuntimeDataMode();
+const apiMode = runtimeMode === 'api';
+const authSession = createAuthSession({ mode: runtimeMode });
+const sessionState = computed(() => authSession.state.value);
+const sessionBusy = ref(false);
+const authPanelRef = ref<InstanceType<typeof AuthPanel> | null>(null);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 type TweakPayload<K extends keyof Tweaks = keyof Tweaks> =
@@ -121,6 +165,56 @@ function onTweaksPanelSet(payload: { key: string; value: unknown }) {
   }
 }
 
+const showAuthPanel = computed(() => apiMode
+  && (sessionState.value.status === 'anonymous' || sessionState.value.status === 'error'));
+
+async function restoreSession() {
+  if (!apiMode) return;
+  sessionBusy.value = true;
+  try {
+    await getRuntimeApiClients().auth.csrf();
+    await authSession.restore();
+  } finally {
+    sessionBusy.value = false;
+  }
+}
+
+async function login(request: LoginRequest) {
+  sessionBusy.value = true;
+  try {
+    await authSession.login(request);
+  } finally {
+    sessionBusy.value = false;
+  }
+}
+
+async function register(request: RegisterRequest) {
+  sessionBusy.value = true;
+  try {
+    await authSession.register(request);
+  } finally {
+    sessionBusy.value = false;
+  }
+}
+
+async function logout() {
+  sessionBusy.value = true;
+  try {
+    await authSession.logout();
+    showToast(t(tweaks.lang, 'authSignOut'));
+  } finally {
+    sessionBusy.value = false;
+  }
+}
+
+function focusAuthPanel() {
+  authPanelRef.value?.$el?.querySelector('h2')?.focus();
+}
+
+onMounted(() => {
+  if (apiMode) void restoreSession();
+});
+
 onBeforeUnmount(() => {
   if (!toastTimer) return;
   clearTimeout(toastTimer);
@@ -144,4 +238,12 @@ const { prefix } = useShortcuts({
 <style scoped>
 .root { height: 100%; display: flex; flex-direction: column; }
 .main { flex: 1; overflow: auto; }
+.session-shell {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 16px 22px; border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.session-shell :deep(.session-banner) {
+  width: min(100%, 980px);
+}
 </style>

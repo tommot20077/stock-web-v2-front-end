@@ -22,6 +22,11 @@ function apiFailure(code: string, message: string, status: number, traceId: stri
   return json({ error: { code, message }, meta: { traceId } }, status);
 }
 
+async function settleSession() {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await flushAsync(12);
+}
+
 describe('App session shell', () => {
   it('API mode boot bootstraps CSRF, restores /me, and renders authenticated header plus page content', async () => {
     vi.stubEnv('VITE_DATA_MODE', 'api');
@@ -46,7 +51,7 @@ describe('App session shell', () => {
 
     mountWithPinia(App);
     expect(document.body.textContent).toContain('正在確認登入狀態...');
-    await flushAsync();
+    await settleSession();
 
     const calls = vi.mocked(fetch).mock.calls.map(call => String(call[0]));
     expect(calls).toContain('/api/v1/csrf');
@@ -73,7 +78,7 @@ describe('App session shell', () => {
     }));
 
     mountWithPinia(App);
-    await flushAsync();
+    await settleSession();
 
     expect(document.body.textContent).toContain('登入已過期，請重新登入。');
     expect(document.body.textContent).toContain('尚未登入');
@@ -92,7 +97,7 @@ describe('App session shell', () => {
     }));
 
     mountWithPinia(App);
-    await flushAsync();
+    await settleSession();
 
     expect(document.body.textContent).toContain('暫時無法連線到後端，請稍後重試。');
     expect(document.body.textContent).toContain('AUTH_REDIS_UNAVAILABLE');
@@ -125,9 +130,9 @@ describe('App session shell', () => {
     }));
 
     mountWithPinia(App);
-    await flushAsync();
+    await settleSession();
     document.body.querySelector<HTMLButtonElement>('[data-testid="header-logout"]')!.click();
-    await flushAsync();
+    await settleSession();
 
     expect(document.body.textContent).toContain('尚未登入');
     expect(document.body.textContent).toContain('登出');
