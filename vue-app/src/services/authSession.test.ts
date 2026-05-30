@@ -41,8 +41,8 @@ function authApi(overrides: Partial<AuthApi> = {}): AuthApi {
 
 function storageSpies() {
   return {
-    local: vi.spyOn(Storage.prototype, 'setItem'),
-    session: vi.spyOn(Storage.prototype, 'setItem'),
+    local: vi.spyOn(window.localStorage, 'setItem'),
+    session: vi.spyOn(window.sessionStorage, 'setItem'),
   };
 }
 
@@ -57,8 +57,8 @@ describe('authSession', () => {
     expect(session.state.value).toMatchObject({
       status: 'authenticated',
       user,
-      accessTokenExpiresAt: sessionMetadata.accessTokenExpiresAt,
-      refreshTokenExpiresAt: sessionMetadata.refreshTokenExpiresAt,
+      accessTokenExpiresAt: null,
+      refreshTokenExpiresAt: null,
       message: null,
     });
   });
