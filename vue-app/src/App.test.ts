@@ -149,4 +149,18 @@ describe('App session shell', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith('/api/v1/me', expect.anything());
     expect(document.body.textContent).toContain('總資產');
   });
+
+  it('invalid explicit runtime mode renders a configuration error without mock content', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'prod');
+    vi.stubGlobal('fetch', vi.fn());
+
+    mountWithPinia(App);
+    await flushAsync();
+
+    expect(document.body.textContent).toContain('資料模式設定無效，請修正 VITE_DATA_MODE。');
+    expect(document.body.textContent).toContain('INVALID_RUNTIME_DATA_MODE');
+    expect(document.body.textContent).not.toContain('總資產');
+    expect(document.body.textContent).not.toContain('最近交易');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
 });
