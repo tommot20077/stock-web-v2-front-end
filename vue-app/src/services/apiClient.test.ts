@@ -5,10 +5,12 @@ import {
   apiRequest,
   bootstrapCsrf,
   buildQueryString,
+  configureApiClientSessionHandlers,
   ensureCsrfToken,
 } from './apiClient';
 
 afterEach(() => {
+  configureApiClientSessionHandlers({});
   document.cookie = 'XSRF-TOKEN=; Max-Age=0; path=/';
   vi.unstubAllGlobals();
 });
@@ -330,5 +332,170 @@ describe('apiClient', () => {
       message: 'CSRF token invalid',
       requestId: 'trace_csrf_failed',
     });
+  });
+
+  it('refreshes once after a 401 and replays the original request', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_refresh; path=/';
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === '/api/v1/auth/refresh') {
+        return new Response(JSON.stringify({
+          data: { refreshed: true },
+          meta: { traceId: 'trace_refresh' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (calls.filter(call => call === '/api/v1/me').length === 1) {
+        return new Response(JSON.stringify({
+          error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token expired' },
+          meta: { traceId: 'trace_expired' },
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        data: { ok: true },
+        meta: { traceId: 'trace_replay' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(apiRequest('/api/v1/me')).resolves.toEqual({ ok: true });
+
+    expect(calls).toEqual(['/api/v1/me', '/api/v1/auth/refresh', '/api/v1/me']);
+  });
+
+  it('shares one refresh request across parallel 401 responses', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_parallel; path=/';
+    const attempts = new Map<string, number>();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      attempts.set(url, (attempts.get(url) ?? 0) + 1);
+      if (url === '/api/v1/auth/refresh') {
+        return new Response(JSON.stringify({
+          data: { refreshed: true },
+          meta: { traceId: 'trace_refresh' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if ((attempts.get(url) ?? 0) === 1) {
+        return new Response(JSON.stringify({
+          error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token expired' },
+          meta: { traceId: `trace_expired_${url}` },
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        data: { path: url },
+        meta: { traceId: `trace_replay_${url}` },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(Promise.all([
+      apiRequest('/api/v1/protected-a'),
+      apiRequest('/api/v1/protected-b'),
+    ])).resolves.toEqual([{ path: '/api/v1/protected-a' }, { path: '/api/v1/protected-b' }]);
+
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === '/api/v1/auth/refresh')).toHaveLength(1);
+  });
+
+  it('stops without replay when refresh fails and reports safe session metadata', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_refresh_fail; path=/';
+    const onRefreshFailed = vi.fn();
+    configureApiClientSessionHandlers({ onRefreshFailed });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/auth/refresh') {
+        return new Response(JSON.stringify({
+          error: { code: 'AUTH_REFRESH_TOKEN_INVALID', message: 'Refresh token invalid' },
+          meta: { traceId: 'trace_refresh_failed' },
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token expired' },
+        meta: { traceId: 'trace_original_401' },
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(apiRequest('/api/v1/me')).rejects.toMatchObject({
+      code: 'AUTH_REFRESH_TOKEN_INVALID',
+      status: 401,
+      requestId: 'trace_refresh_failed',
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onRefreshFailed).toHaveBeenCalledWith({
+      code: 'AUTH_REFRESH_TOKEN_INVALID',
+      status: 401,
+      message: 'Refresh token invalid',
+      requestId: 'trace_refresh_failed',
+    });
+  });
+
+  it('does not refresh again when the replay also returns 401', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_replay_401; path=/';
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === '/api/v1/auth/refresh') {
+        return new Response(JSON.stringify({
+          data: { refreshed: true },
+          meta: { traceId: 'trace_refresh' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token expired' },
+        meta: { traceId: `trace_${calls.length}` },
+      }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(apiRequest('/api/v1/me')).rejects.toMatchObject({
+      code: 'AUTH_TOKEN_EXPIRED',
+      status: 401,
+    });
+
+    expect(calls).toEqual(['/api/v1/me', '/api/v1/auth/refresh', '/api/v1/me']);
+  });
+
+  it('runs the CSRF guard again before replaying unsafe requests', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf_initial; path=/';
+    const requestHeaders: Array<string | null> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/v1/csrf') {
+        document.cookie = 'XSRF-TOKEN=csrf_replay; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          meta: { traceId: 'trace_csrf_replay' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/api/v1/auth/refresh') {
+        document.cookie = 'XSRF-TOKEN=; Max-Age=0; path=/';
+        return new Response(JSON.stringify({
+          data: { refreshed: true },
+          meta: { traceId: 'trace_refresh' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      requestHeaders.push(new Headers(init?.headers).get('X-XSRF-TOKEN'));
+      if (requestHeaders.length === 1) {
+        return new Response(JSON.stringify({
+          error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Token expired' },
+          meta: { traceId: 'trace_expired' },
+        }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        data: { ok: true },
+        meta: { traceId: 'trace_replay' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    await expect(apiRequest('/api/v1/trades', { method: 'POST', json: { symbol: 'AAPL' } }))
+      .resolves.toEqual({ ok: true });
+
+    expect(requestHeaders).toEqual(['csrf_initial', 'csrf_replay']);
+    expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/v1/trades',
+      '/api/v1/auth/refresh',
+      '/api/v1/csrf',
+      '/api/v1/trades',
+    ]);
   });
 });
