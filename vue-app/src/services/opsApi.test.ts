@@ -87,7 +87,16 @@ describe('opsApi', () => {
   });
 
   it('http adapter sends idempotency key header', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/v1/csrf')) {
+        document.cookie = 'XSRF-TOKEN=csrf-ops; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          requestId: 'req_csrf',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
       data: {
         id: 'ops_1',
         actionKey: 'refetchNews',
@@ -99,7 +108,8 @@ describe('opsApi', () => {
         message: null,
       },
       requestId: 'req_1',
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
 
     const api = createHttpOpsApi('/api/v1');
     await api.triggerJob({ actionKey: 'refetchNews', params: {}, idempotencyKey: 'idem_1' });
@@ -107,6 +117,7 @@ describe('opsApi', () => {
     const init = lastFetchInit();
     expect(fetch).toHaveBeenCalledWith('/api/v1/ops/jobs', expect.any(Object));
     expect(headerValue(init, 'idempotency-key')).toBe('idem_1');
+    expect(headerValue(init, 'x-xsrf-token')).toBe('csrf-ops');
     expect(JSON.parse(String(init.body))).toEqual({ actionKey: 'refetchNews', params: {} });
   });
 

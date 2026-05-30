@@ -70,6 +70,13 @@ describe('backtestApi', () => {
   it('http adapter calls contract endpoints', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith('/api/v1/csrf')) {
+        document.cookie = 'XSRF-TOKEN=csrf-backtest; path=/';
+        return new Response(JSON.stringify({
+          data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
+          requestId: 'req_csrf',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.endsWith('/api/v1/backtests/runs')) {
         return new Response(JSON.stringify({
           data: {
@@ -149,6 +156,7 @@ describe('backtestApi', () => {
     expect(run.id).toBe('bt_1');
     expect(createInit.body).toBe(JSON.stringify(request));
     expect(headerValue(createInit, 'content-type')).toBe('application/json');
+    expect(headerValue(createInit, 'x-xsrf-token')).toBe('csrf-backtest');
     expect(validateInit.method).toBe('POST');
     expect(loaded.status).toBe('running');
     expect(result.runId).toBe('bt_1');
