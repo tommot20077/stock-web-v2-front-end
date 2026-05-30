@@ -127,10 +127,12 @@ describe('aiAccessApi', () => {
     await api.listProviders();
     await api.revokeKey('key_1');
     await api.listAuditCalls({ limit: 5, cursor: 'call 1/2' });
+    const auditInit = lastFetchInit();
 
     expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/providers', expect.any(Object));
     expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/keys/key_1', expect.objectContaining({ method: 'DELETE' }));
     expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/audit-calls?limit=5&cursor=call%201%2F2', expect.any(Object));
+    expect(auditInit.credentials).toBe('include');
   });
 
   it('http adapter sends POST and PATCH payloads through json', async () => {
@@ -201,6 +203,23 @@ describe('aiAccessApi', () => {
       code: 'AI_ACCESS_PERMISSION_DENIED',
       message: 'Forbidden',
       requestId: 'req_6',
+    });
+  });
+
+  it('http adapter listAuditCalls uses shared paginated error parsing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'AI_ACCESS_PERMISSION_DENIED', message: 'Forbidden' },
+      meta: { traceId: 'trace_ai_access' },
+    }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
+
+    const api = createHttpAiAccessApi('/api/v1');
+
+    await expect(api.listAuditCalls({ limit: 5 })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 403,
+      code: 'AI_ACCESS_PERMISSION_DENIED',
+      message: 'Forbidden',
+      requestId: 'trace_ai_access',
     });
   });
 

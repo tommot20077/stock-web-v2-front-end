@@ -128,10 +128,29 @@ describe('opsApi', () => {
 
     const api = createHttpOpsApi('/api/v1');
     const logs = await api.listLogs({ limit: 5, cursor: 'log 2/3' });
+    const init = lastFetchInit();
 
     expect(logs.page).toEqual({ nextCursor: 'log_1', hasMore: true });
     expect(logs.data[0].id).toBe('log_1');
+    expect(init.credentials).toBe('include');
     expect(fetch).toHaveBeenCalledWith('/api/v1/ops/logs?limit=5&cursor=log%202%2F3', expect.any(Object));
+  });
+
+  it('http adapter listLogs uses shared paginated error parsing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
+      meta: { traceId: 'trace_ops' },
+    }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
+
+    const api = createHttpOpsApi('/api/v1');
+
+    await expect(api.listLogs({ limit: 5 })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 403,
+      code: 'OPS_PERMISSION_DENIED',
+      message: 'Forbidden',
+      requestId: 'trace_ops',
+    });
   });
 
   it('http adapter converts failed listLogs envelopes to typed errors', async () => {

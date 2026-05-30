@@ -144,6 +144,7 @@ describe('backtestApi', () => {
     const loaded = await api.getRun('bt_1');
     const result = await api.getResult('bt_1');
     const list = await api.listRuns({ limit: 5 });
+    const listInit = lastFetchInit();
 
     expect(run.id).toBe('bt_1');
     expect(createInit.body).toBe(JSON.stringify(request));
@@ -152,7 +153,25 @@ describe('backtestApi', () => {
     expect(loaded.status).toBe('running');
     expect(result.runId).toBe('bt_1');
     expect(list.page.hasMore).toBe(false);
+    expect(listInit.credentials).toBe('include');
     expect(fetch).toHaveBeenCalledWith('/api/v1/backtests/runs?limit=5', expect.any(Object));
+  });
+
+  it('http adapter listRuns uses shared paginated error parsing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'BACKTEST_PERMISSION_DENIED', message: 'Forbidden' },
+      meta: { traceId: 'trace_backtest' },
+    }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
+
+    const api = createHttpBacktestApi('/api/v1');
+
+    await expect(api.listRuns({ limit: 5 })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 403,
+      code: 'BACKTEST_PERMISSION_DENIED',
+      message: 'Forbidden',
+      requestId: 'trace_backtest',
+    });
   });
 
   it('http adapter falls back for malformed paginated error envelopes', async () => {
