@@ -63,8 +63,7 @@ describe('AuthPanel', () => {
 
     const email = inputByLabel('Email');
     const password = inputByLabel('密碼');
-    const signIn = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
-      .find(button => button.textContent?.includes('登入'));
+    const signIn = document.body.querySelector<HTMLButtonElement>('[data-testid="auth-login-submit"]');
 
     expect(email.autocomplete).toBe('email');
     expect(password.autocomplete).toBe('current-password');
@@ -97,6 +96,7 @@ describe('AuthPanel', () => {
 
     expect(document.body.textContent).toContain('已登入');
     expect(document.body.textContent).toContain('yuan@example.com');
+    expect(document.body.textContent).toContain('登出');
     document.body.querySelector<HTMLButtonElement>('[data-testid="auth-logout"]')!.click();
     await flushAsync(1);
     expect(onLogout).toHaveBeenCalledTimes(1);
