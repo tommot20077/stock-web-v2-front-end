@@ -36,11 +36,11 @@ VITE_DATA_MODE=api npm test && npm run build  # 涉及 API mode 時加跑
 
 - `docs/api-contracts/mock-to-real-contract.md`(872 行)— Backtest/Ops/AI-Access 端點規格與錯誤碼。信封一節過時,見鐵律 4。
 - `docs/superpowers/plans/`(最大 1630 行)、`docs/superpowers/specs/` — 歷史計畫/設計,查針對段落。
-- 後端契約與制度:`../../java/stock-web-v2/ai-docs/browser-auth-contract.md`(auth/CSRF 契約)、`ai-docs/judgment.md`(判斷準則)、`ai-docs/task-briefs.md`(交辦範本)。
+- 後端契約與制度:`../../java/stock-web-v2/ai-docs/browser-auth-contract.md`(auth/CSRF 契約)、`../../java/stock-web-v2/ai-docs/judgment.md`(判斷準則)、`../../java/stock-web-v2/ai-docs/task-briefs.md`(交辦範本)——judgment/task-briefs 隨後端 `docs/governance-institution` PR 合併後才存在。
 - `references/react-prototypes/` — 舊 React 視覺原型,僅供 UI 參考。
 
 ## 學習與 Git
 
 - 踩坑一行進 `docs/LEARNINGS.md`(格式見該檔);同坑第 2 次 → 晉升進本檔鐵律或對應文件。
-- Commit:Conventional Commits,繁中 subject,格式同後端 `ai-docs/git-convention.md`(例:`feat(02-05): ...`)。
+- Commit:Conventional Commits,繁中 subject;type/subject 規則同後端 `git-convention.md`,**scope 用 phase 編號(NN-NN),與後端的 module scope 不同**(例:`feat(02-05): ...`)。
 - 本 repo CI 在 develop 跑 `npm ci → test → build`;PR 開向 `develop`。
