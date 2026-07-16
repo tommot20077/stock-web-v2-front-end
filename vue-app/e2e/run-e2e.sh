@@ -98,5 +98,21 @@ if [ "${E2E_ENV_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-# 5. Playwright(Task 10 串接)
-log "Playwright 串接尚未啟用(Task 10)"
+# 5. Playwright(無參數預設只跑 @smoke;其他參數原樣傳遞,如 --grep @extended)
+if [ $# -eq 0 ]; then
+  set -- --grep @smoke
+fi
+log "執行 Playwright:npx playwright test $*"
+cd "$APP_DIR"
+set +e
+npx playwright test "$@"
+TEST_EXIT=$?
+set -e
+
+if [ "$TEST_EXIT" -ne 0 ]; then
+  log "Playwright 失敗(exit=$TEST_EXIT)。artifacts:"
+  log "  - 後端 stdout:$BACKEND_LOG"
+  log "  - HTML report:$SCRIPT_DIR/artifacts/playwright-report"
+  log "  - trace/screenshot:$SCRIPT_DIR/artifacts/test-results"
+fi
+exit "$TEST_EXIT"

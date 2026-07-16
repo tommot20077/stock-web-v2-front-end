@@ -1,5 +1,7 @@
-# Browser E2E 一鍵腳本(PowerShell 版,行為對齊 run-e2e.sh)
+﻿# Browser E2E 一鍵腳本(PowerShell 版,行為對齊 run-e2e.sh)
 # 環境變數:E2E_BACKEND_DIR / E2E_BACKEND_PORT / E2E_SKIP_BUILD / E2E_KEEP / E2E_ENV_ONLY
+# 參數:原樣傳給 playwright test(預設 --grep @smoke)
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PlaywrightArgs)
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -41,7 +43,9 @@ function Invoke-Cleanup {
 function Test-HealthUp {
     try {
         $res = Invoke-WebRequest -Uri $HealthUrl -TimeoutSec 2 -UseBasicParsing
-        return ($res.Content -match '"status"\s*:\s*"UP"')
+        # actuator 的 Content-Type(vnd.spring-boot.actuator.v3+json)在 PS 5.1 會以 byte[] 回傳
+        $text = if ($res.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($res.Content) } else { [string]$res.Content }
+        return ($text -match '"status"\s*:\s*"UP"')
     } catch { return $false }
 }
 
@@ -102,8 +106,24 @@ try {
         exit 0
     }
 
-    # 5. Playwright(Task 10 串接)
-    Write-Log 'Playwright 串接尚未啟用(Task 10)'
+    # 5. Playwright(無參數預設只跑 @smoke;其他參數原樣傳遞,如 --grep @extended)
+    if (-not $PlaywrightArgs -or $PlaywrightArgs.Count -eq 0) {
+        $PlaywrightArgs = @('--grep', '@smoke')
+    }
+    Write-Log "執行 Playwright:npx playwright test $($PlaywrightArgs -join ' ')"
+    Push-Location $AppDir
+    try {
+        & npx playwright test @PlaywrightArgs
+        $testExit = $LASTEXITCODE
+    } finally { Pop-Location }
+
+    if ($testExit -ne 0) {
+        Write-Log "Playwright 失敗(exit=$testExit)。artifacts:"
+        Write-Log "  - 後端 stdout:$BackendLog"
+        Write-Log "  - HTML report:$(Join-Path $ArtifactsDir 'playwright-report')"
+        Write-Log "  - trace/screenshot:$(Join-Path $ArtifactsDir 'test-results')"
+    }
+    exit $testExit
 } finally {
     Invoke-Cleanup
 }
