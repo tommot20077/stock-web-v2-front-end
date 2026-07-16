@@ -1,4 +1,4 @@
-import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
+import { ApiClientError, apiRequest, buildQueryString } from './apiClient';
 import type {
   BacktestResultDto,
   BacktestRunDto,
@@ -190,7 +190,25 @@ export function createHttpBacktestApi(basePath = '/api/v1'): BacktestApi {
     validateStrategy: request => apiRequest(`${basePath}/backtests/strategies/validate`, { method: 'POST', json: request }),
     getRun: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}`),
     getResult: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}/result`),
-    listRuns: params => apiPaginatedRequest(`${basePath}/backtests/runs${buildQueryString(params ?? {})}`),
+    // 後端 list 信封為 PageResponse(items + page/size/totalElements/totalPages),
+    // 於 adapter 轉為介面的 cursor 形狀(cursor ↔ page 序號)。契約差異已回報,見 PR 說明。
+    listRuns: async params => {
+      const page = params?.cursor ? Number(params.cursor) : 0;
+      const query = buildQueryString({ symbol: params?.symbol, page, size: params?.limit ?? 20 });
+      const data = await apiRequest<{
+        items: BacktestRunDto[];
+        page: number;
+        size: number;
+        totalElements: number;
+        totalPages: number;
+      }>(`${basePath}/backtests/runs${query}`);
+      const hasMore = data.page + 1 < data.totalPages;
+      // 與 apiPaginatedRequest 相同先例:requestId 已在 envelope 拆解時消耗,省略之
+      return {
+        data: data.items,
+        page: { nextCursor: hasMore ? String(data.page + 1) : null, hasMore },
+      } as PaginatedResponse<BacktestRunDto>;
+    },
   };
 }
 
