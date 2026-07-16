@@ -9,6 +9,7 @@
         v-for="it in navItems"
         :key="it.k"
         :class="['nav-btn', { active: page === it.k }]"
+        :data-testid="`nav-${it.k}`"
         @click="$emit('navigate', it.k)"
       >{{ it.l }}</button>
     </nav>
@@ -21,7 +22,7 @@
     <div v-if="sessionStatus" :class="['session-chip', sessionTone]">
       <span class="session-dot" />
       <span class="session-copy">{{ sessionLabel }}</span>
-      <span v-if="safeSessionIdentity" class="session-identity">{{ safeSessionIdentity }}</span>
+      <span v-if="safeSessionIdentity" class="session-identity" data-testid="header-session-identity">{{ safeSessionIdentity }}</span>
       <button
         v-if="sessionStatus === 'authenticated'"
         class="session-logout"

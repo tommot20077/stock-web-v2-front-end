@@ -10,9 +10,9 @@
     <div class="banner-copy">
       <div class="banner-title">{{ copy }}</div>
       <div v-if="message" class="details" :aria-label="t(lang, 'authDetails')">
-        <span>{{ message.code }}</span>
+        <span data-testid="session-error-code">{{ message.code }}</span>
         <span v-if="message.status !== null">{{ t(lang, 'authStatus') }} {{ message.status }}</span>
-        <span v-if="message.requestId">{{ t(lang, 'authRequestId') }} {{ message.requestId }}</span>
+        <span v-if="message.requestId" data-testid="session-request-id">{{ t(lang, 'authRequestId') }} {{ message.requestId }}</span>
       </div>
     </div>
     <button

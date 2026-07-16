@@ -50,14 +50,26 @@
         </button>
       </div>
 
+      <div v-if="message" class="auth-error" data-testid="auth-error" role="alert">
+        <span class="auth-error-code">{{ message.code }}</span>
+        <span>{{ message.message }}</span>
+      </div>
+      <ul v-if="fieldErrors.length" class="auth-field-errors" role="alert">
+        <li
+          v-for="[field, msg] in fieldErrors"
+          :key="field"
+          :data-testid="`auth-field-error-${field}`"
+        >{{ field }}: {{ msg }}</li>
+      </ul>
+
       <form v-if="mode === 'login'" class="auth-form" @submit.prevent="submitLogin">
         <label>
           <span>{{ t(lang, 'authEmail') }}</span>
-          <input v-model="loginEmail" type="email" autocomplete="email" required :disabled="busy">
+          <input v-model="loginEmail" type="email" autocomplete="email" required :disabled="busy" data-testid="auth-login-email">
         </label>
         <label>
           <span>{{ t(lang, 'authPassword') }}</span>
-          <input v-model="loginPassword" type="password" autocomplete="current-password" required :disabled="busy">
+          <input v-model="loginPassword" type="password" autocomplete="current-password" required :disabled="busy" data-testid="auth-login-password">
         </label>
         <button
           class="auth-submit"
@@ -72,15 +84,15 @@
       <form v-else class="auth-form" @submit.prevent="submitRegister">
         <label>
           <span>{{ t(lang, 'authEmail') }}</span>
-          <input v-model="registerEmail" type="email" autocomplete="email" required :disabled="busy">
+          <input v-model="registerEmail" type="email" autocomplete="email" required :disabled="busy" data-testid="auth-register-email">
         </label>
         <label>
           <span>{{ t(lang, 'authUsername') }}</span>
-          <input v-model="registerUsername" autocomplete="username" required :disabled="busy">
+          <input v-model="registerUsername" autocomplete="username" required :disabled="busy" data-testid="auth-register-username">
         </label>
         <label>
           <span>{{ t(lang, 'authPassword') }}</span>
-          <input v-model="registerPassword" type="password" autocomplete="new-password" required :disabled="busy">
+          <input v-model="registerPassword" type="password" autocomplete="new-password" required :disabled="busy" data-testid="auth-register-password">
         </label>
         <button
           class="auth-submit"
@@ -96,19 +108,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { t } from '../i18n';
 import type { Lang } from '../types';
 import type { AuthUser, LoginRequest, RegisterRequest } from '../services/authApi';
 import type { SessionMessage, SessionState } from '../services/authSession';
 
-defineProps<{
+const props = defineProps<{
   lang: Lang;
   status: SessionState['status'];
   user: AuthUser | null;
   message: SessionMessage | null;
   busy: boolean;
 }>();
+
+const fieldErrors = computed(() => Object.entries(props.message?.fields ?? {}));
 
 const emit = defineEmits<{
   login: [request: LoginRequest];
@@ -174,6 +188,19 @@ p { margin: 4px 0 0; color: var(--fg-dim); }
 .seg-pill button.active {
   background: var(--surface); color: var(--fg);
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+.auth-error {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 16px; padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--dn) 42%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--dn) 8%, var(--surface));
+  color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere;
+}
+.auth-error-code { font-weight: 600; color: var(--dn); }
+.auth-field-errors {
+  margin: 8px 0 0; padding: 0 0 0 18px;
+  color: var(--dn); font-size: 12px;
 }
 .auth-form { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
 label { display: flex; flex-direction: column; gap: 8px; color: var(--fg-dim); font-size: 12px; }

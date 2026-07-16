@@ -196,6 +196,49 @@ describe('authSession', () => {
     });
   });
 
+  it('login/register failures land in anonymous state with the API error message', async () => {
+    const api = authApi({
+      login: async () => {
+        throw new ApiClientError({
+          status: 401,
+          code: 'AUTH_INVALID_CREDENTIALS',
+          message: 'Invalid credentials',
+          requestId: 'trace_login_fail',
+        });
+      },
+      register: async () => {
+        throw new ApiClientError({
+          status: 400,
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed',
+          requestId: 'trace_register_fail',
+          fields: { password: 'must match rule' },
+        });
+      },
+    });
+    const authSession = createAuthSession({ api, mode: 'api' });
+
+    await authSession.login({ email: 'yuan@example.com', password: 'wrong' });
+    expect(authSession.state.value).toMatchObject({
+      status: 'anonymous',
+      user: null,
+      message: {
+        code: 'AUTH_INVALID_CREDENTIALS',
+        status: 401,
+        requestId: 'trace_login_fail',
+      },
+    });
+
+    await authSession.register({ email: 'yuan@example.com', username: 'Yuan', password: 'short' });
+    expect(authSession.state.value).toMatchObject({
+      status: 'anonymous',
+      message: {
+        code: 'VALIDATION_FAILED',
+        fields: { password: 'must match rule' },
+      },
+    });
+  });
+
   it('mock mode restores anonymous state without calling the backend', async () => {
     const me = vi.fn(async () => user);
     const session = createAuthSession({ api: authApi({ me }), mode: 'mock' });
