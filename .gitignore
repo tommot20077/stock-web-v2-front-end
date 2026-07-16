@@ -11,3 +11,6 @@ Thumbs.db
 .playwright/
 .playwright-cli/
 screenshots/
+vue-app/e2e/artifacts/
+vue-app/playwright-report/
+vue-app/test-results/
