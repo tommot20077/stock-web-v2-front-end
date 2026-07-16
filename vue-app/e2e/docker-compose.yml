@@ -1,0 +1,58 @@
+# Browser E2E 暫時 infra:版本對齊後端 ContainerIT(Testcontainers)
+# - timescale/timescaledb:2.17.2-pg16 / redis:7.4-alpine / confluentinc/cp-kafka:7.6.0
+# 固定 host port(15432/16379/19092)與後端 application-e2e-browser.yaml 預設值一致。
+name: stock-e2e
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: stock-e2e-timescaledb
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: stock_e2e
+      POSTGRES_USER: stock
+      POSTGRES_PASSWORD: stock
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock -d stock_e2e"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: stock-e2e-redis
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: stock-e2e-kafka
+    ports:
+      - "19092:19092"
+    environment:
+      # KRaft 單節點(無 ZooKeeper),EXTERNAL listener 供 host 上的後端連線
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
