@@ -21,6 +21,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     exclude: [...configDefaults.exclude, 'e2e/**'],
-    maxWorkers: 1,
+    pool: 'threads',
+    fileParallelism: false,
   },
 });
