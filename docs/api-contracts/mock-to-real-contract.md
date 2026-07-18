@@ -41,6 +41,13 @@ Keep mock mode available until backend parity is confirmed.
 
 ## Common API Conventions
 
+> ⚠️ **權威更正(2026-07-18)**:本節下方的 Success / Error / Pagination 信封是 **mock 早期草案**,
+> **與真實後端不一致**。REST 信封權威是後端 `stock-common` 的 `ApiResponse<T>`
+> (`{ success, data, error, meta.traceId }`);分頁端點回 `ApiResponse<PageResponse<T>>`,
+> 其中 `data = { items, page, size, totalElements, totalPages }`,是 **page-number 分頁(非 cursor)**。
+> 前端保留 cursor 介面時,須在 service adapter 內轉接(見 `vue-app/src/services/backtestApi.ts` 的 `listRuns`)。
+> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`;本檔全面對齊留待後續 follow-up。
+
 Base path:
 
 ```text
@@ -293,10 +300,13 @@ Response:
 ### List Runs
 
 ```http
-GET /api/v1/backtests/runs?symbol=AAPL&limit=20&cursor=...
+GET /api/v1/backtests/runs?symbol=AAPL&page=0&size=20
 ```
 
-The response uses the common pagination envelope.
+> ⚠️ 真後端為 **page-number** 分頁:query 用 `page`/`size`(非 `limit`/`cursor`),
+> 回 `ApiResponse<PageResponse<BacktestRunDto>>`(`data = { items, page, size, totalElements, totalPages }`)。
+> 前端 cursor 介面由 `backtestApi.ts` 的 `listRuns` adapter 轉接(page 序號 ↔ opaque cursor)。
+> 見上方「權威更正」與 `ai-docs/judgment.md §4`。
 
 ### Backtest Error Codes
 

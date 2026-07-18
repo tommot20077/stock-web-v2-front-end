@@ -342,6 +342,16 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   return payload.data;
 }
 
+/**
+ * 舊「扁平 cursor 信封」helper:期待整個 payload 為 { data: [], page: { nextCursor, hasMore } }。
+ *
+ * ⚠️ 真後端不回這個 shape。stock-common 的分頁端點回 ApiResponse<PageResponse<T>>
+ *    (= { success, data: { items, page, size, totalElements, totalPages }, meta.traceId }),
+ *    對本 helper 會判定 isPaginatedResponse=false 而丟 INVALID_API_RESPONSE。
+ *    對接真分頁端點者請照 backtestApi.ts 的 listRuns adapter:以 apiRequest 拆 data 再轉 cursor。
+ *    目前僅 aiAccessApi.listAuditCalls / opsApi.listLogs 仍用它(兩者後端尚未存在)。
+ *    契約權威見 ai-docs/judgment.md §4 與 docs/api-contracts/mock-to-real-contract.md。
+ */
 export async function apiPaginatedRequest<T>(
   path: string,
   options: ApiRequestOptions = {},
@@ -364,5 +374,5 @@ export async function apiPaginatedRequest<T>(
   return {
     data: payload.data,
     page: payload.page,
-  } as PaginatedResponse<T>;
+  };
 }

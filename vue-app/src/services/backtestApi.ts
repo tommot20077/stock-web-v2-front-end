@@ -190,8 +190,9 @@ export function createHttpBacktestApi(basePath = '/api/v1'): BacktestApi {
     validateStrategy: request => apiRequest(`${basePath}/backtests/strategies/validate`, { method: 'POST', json: request }),
     getRun: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}`),
     getResult: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}/result`),
-    // 後端 list 信封為 PageResponse(items + page/size/totalElements/totalPages),
-    // 於 adapter 轉為介面的 cursor 形狀(cursor ↔ page 序號)。契約差異已回報,見 PR 說明。
+    // 後端回 ApiResponse<PageResponse>(data.items + page/size/totalElements/totalPages),page-number 分頁。
+    // 前端介面採 cursor 抽象,故此 adapter 為刻意的 anti-corruption layer:page 序號 ↔ opaque cursor 字串。
+    // 契約差異裁決見 ai-docs/judgment.md §4 與 docs/api-contracts/mock-to-real-contract.md。
     listRuns: async params => {
       const page = params?.cursor ? Number(params.cursor) : 0;
       const query = buildQueryString({ symbol: params?.symbol, page, size: params?.limit ?? 20 });
@@ -203,11 +204,11 @@ export function createHttpBacktestApi(basePath = '/api/v1'): BacktestApi {
         totalPages: number;
       }>(`${basePath}/backtests/runs${query}`);
       const hasMore = data.page + 1 < data.totalPages;
-      // 與 apiPaginatedRequest 相同先例:requestId 已在 envelope 拆解時消耗,省略之
+      // requestId 為舊草案欄位,真信封改用 meta.traceId,此處省略(PaginatedResponse.requestId 已改選填)
       return {
         data: data.items,
         page: { nextCursor: hasMore ? String(data.page + 1) : null, hasMore },
-      } as PaginatedResponse<BacktestRunDto>;
+      };
     },
   };
 }
