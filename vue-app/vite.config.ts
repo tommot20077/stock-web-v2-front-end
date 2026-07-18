@@ -20,6 +20,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    setupFiles: ['./src/testSetup.ts'],
     exclude: [...configDefaults.exclude, 'e2e/**'],
     pool: 'threads',
     fileParallelism: false,
