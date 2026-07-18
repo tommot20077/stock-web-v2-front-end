@@ -151,6 +151,39 @@ describe('apiClient', () => {
     });
   });
 
+  it('parses field-level validation errors from the contract error.fields map', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        code: 'VALIDATION_FAILED',
+        message: 'Validation failed',
+        fields: { password: 'must match rule', ignored: 123 },
+      },
+      meta: { traceId: 'trace_fields' },
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(apiRequest('/api/v1/auth/register', { method: 'POST', json: {} })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'VALIDATION_FAILED',
+      fields: { password: 'must match rule' },
+    });
+  });
+
+  it('does not attempt session refresh for 401s from login/register/token endpoints', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' },
+      meta: { traceId: 'trace_login' },
+    }), { status: 401, headers: { 'Content-Type': 'application/json' } })));
+    document.cookie = 'XSRF-TOKEN=csrf-login; path=/';
+
+    await expect(apiRequest('/api/v1/auth/login', { method: 'POST', json: {} })).rejects.toMatchObject({
+      code: 'AUTH_INVALID_CREDENTIALS',
+      status: 401,
+      requestId: 'trace_login',
+    });
+    // 僅 login 本身這一次呼叫:沒有 refresh、沒有 replay
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
   it('returns valid paginated envelopes from the shared paginated helper', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: [{ id: 'bt_1' }],

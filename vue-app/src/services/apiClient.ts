@@ -6,6 +6,8 @@ export class ApiClientError extends Error {
   readonly requestId: string | null;
   readonly field?: string;
   readonly details?: Record<string, unknown>;
+  /** 欄位級驗證錯誤(契約 error.fields,見 ai-docs/browser-auth-contract.md) */
+  readonly fields: Record<string, string> | null;
 
   constructor(input: {
     status: number;
@@ -14,6 +16,7 @@ export class ApiClientError extends Error {
     requestId?: string | null;
     field?: string;
     details?: Record<string, unknown>;
+    fields?: Record<string, string> | null;
   }) {
     super(input.message);
     this.name = 'ApiClientError';
@@ -22,6 +25,7 @@ export class ApiClientError extends Error {
     this.requestId = input.requestId ?? null;
     this.field = input.field;
     this.details = input.details;
+    this.fields = input.fields ?? null;
   }
 }
 
@@ -50,6 +54,9 @@ const DEFAULT_API_BASE_PATH = '/api/v1';
 const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
 const CSRF_HEADER_NAME = 'X-XSRF-TOKEN';
 const REFRESH_PATH = endpoint(DEFAULT_API_BASE_PATH, 'auth/refresh');
+// 這些端點的 401 是語意結果(帳密錯誤),不代表 session 過期,不觸發 refresh 重試
+const SESSION_ENTRY_PATHS = ['auth/login', 'auth/register', 'auth/token']
+  .map(path => endpoint(DEFAULT_API_BASE_PATH, path));
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 let refreshPromise: Promise<void> | null = null;
@@ -126,6 +133,10 @@ function isUnsafeMethod(method: string | undefined): boolean {
 
 function isRefreshPath(path: string): boolean {
   return path === REFRESH_PATH || path.endsWith(REFRESH_PATH);
+}
+
+function isSessionEntryPath(path: string): boolean {
+  return SESSION_ENTRY_PATHS.some(entry => path === entry || path.endsWith(entry));
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -210,6 +221,14 @@ async function prepareRequestInit(options: ApiRequestOptions): Promise<RequestIn
   return init;
 }
 
+function fieldsFrom(error: unknown): Record<string, string> | null {
+  if (!isRecord(error) || !isRecord(error.fields)) return null;
+  const entries = Object.entries(error.fields).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
 function errorFromResponse(response: Response, payload: unknown): ApiClientError {
   if (isApiFailure(payload)) {
     return new ApiClientError({
@@ -219,6 +238,7 @@ function errorFromResponse(response: Response, payload: unknown): ApiClientError
       requestId: requestIdFrom(payload),
       field: payload.error.field,
       details: payload.error.details,
+      fields: fieldsFrom(payload.error),
     });
   }
   return new ApiClientError({
@@ -283,7 +303,7 @@ async function fetchWithSessionRecovery(
   const response = await fetch(path, init);
   const payload = await readJson(response);
 
-  if (response.status !== 401 || retried || isRefreshPath(path)) {
+  if (response.status !== 401 || retried || isRefreshPath(path) || isSessionEntryPath(path)) {
     return { response, payload };
   }
 
@@ -322,6 +342,16 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   return payload.data;
 }
 
+/**
+ * 舊「扁平 cursor 信封」helper:期待整個 payload 為 { data: [], page: { nextCursor, hasMore } }。
+ *
+ * ⚠️ 真後端不回這個 shape。stock-common 的分頁端點回 ApiResponse<PageResponse<T>>
+ *    (= { success, data: { items, page, size, totalElements, totalPages }, meta.traceId }),
+ *    對本 helper 會判定 isPaginatedResponse=false 而丟 INVALID_API_RESPONSE。
+ *    對接真分頁端點者請照 backtestApi.ts 的 listRuns adapter:以 apiRequest 拆 data 再轉 cursor。
+ *    目前僅 aiAccessApi.listAuditCalls / opsApi.listLogs 仍用它(兩者後端尚未存在)。
+ *    契約權威見 ai-docs/judgment.md §4 與 docs/api-contracts/mock-to-real-contract.md。
+ */
 export async function apiPaginatedRequest<T>(
   path: string,
   options: ApiRequestOptions = {},
@@ -344,5 +374,5 @@ export async function apiPaginatedRequest<T>(
   return {
     data: payload.data,
     page: payload.page,
-  } as PaginatedResponse<T>;
+  };
 }

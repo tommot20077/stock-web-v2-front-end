@@ -14,7 +14,7 @@
     <div class="config card">
       <div class="cfg-grp">
         <span class="lab">{{ lang === 'zh' ? '策略' : 'Strategy' }}</span>
-        <select v-model="strategy" class="inp">
+        <select v-model="strategy" class="inp" data-testid="backtest-strategy">
           <option value="ma_cross">MA Cross (20/50)</option>
           <option value="rsi">RSI Mean Reversion</option>
           <option value="momentum">Momentum (3M)</option>
@@ -24,13 +24,13 @@
       </div>
       <div class="cfg-grp">
         <span class="lab">{{ lang === 'zh' ? '標的' : 'Symbol' }}</span>
-        <select v-model="sym" class="inp">
+        <select v-model="sym" class="inp" data-testid="backtest-symbol">
           <option v-for="s in ['AAPL', 'NVDA', 'MSFT', 'BTC', 'ETH', '2330.TW']" :key="s" :value="s">{{ s }}</option>
         </select>
       </div>
       <div class="cfg-grp">
         <span class="lab">{{ lang === 'zh' ? '期間' : 'Period' }}</span>
-        <select v-model="period" class="inp">
+        <select v-model="period" class="inp" data-testid="backtest-period">
           <option value="1Y">1 Year</option>
           <option value="3Y">3 Years</option>
           <option value="5Y">5 Years</option>
@@ -38,22 +38,23 @@
       </div>
       <div class="cfg-grp">
         <span class="lab">{{ lang === 'zh' ? '初始資金' : 'Initial' }}</span>
-        <input type="number" v-model.number="initial" class="inp" style="width:120px" min="1" required />
+        <input type="number" v-model.number="initial" class="inp" style="width:120px" min="1" required data-testid="backtest-initial" />
       </div>
       <button class="btn-ghost" @click="showEditor = !showEditor" :class="{ active: showEditor }">
         <span class="caret">{{ showEditor ? '▾' : '▸' }}</span>
         {{ lang === 'zh' ? '客製化策略' : 'Customize' }}
         <span v-if="strategy === 'custom'" class="dot"></span>
       </button>
-      <button class="btn-accent" @click="run">▶ {{ lang === 'zh' ? '執行回測' : 'Run' }}</button>
+      <button class="btn-accent" data-testid="backtest-run" :disabled="running" @click="run">▶ {{ lang === 'zh' ? '執行回測' : 'Run' }}</button>
     </div>
-    <div v-if="latestRun" class="run-note">
+    <div v-if="latestRun" class="run-note" data-testid="backtest-run-note">
       <span class="dim">{{ lang === 'zh' ? '最新模擬回測' : 'Latest simulated run' }}</span>
       <strong>{{ latestRunLabel }}</strong>
       <span>{{ latestRun.symbol }}</span>
       <span>{{ latestRun.period }}</span>
+      <span data-testid="backtest-run-status">{{ latestRun.status }}</span>
     </div>
-    <div v-if="runError" class="strategy-error">{{ runError }}</div>
+    <div v-if="runError" class="strategy-error" data-testid="backtest-run-error">{{ runError }}</div>
     <div v-if="strategyError" class="strategy-error">
       {{ lang === 'zh' ? '策略編譯錯誤' : 'Strategy compile error' }}: {{ strategyError }}
     </div>
@@ -64,7 +65,7 @@
     </div>
 
     <!-- KPI strip -->
-    <div class="kpi-grid">
+    <div class="kpi-grid" data-testid="backtest-result">
       <div class="kpi-card">
         <div class="kl">{{ lang === 'zh' ? '總報酬' : 'Total return' }}</div>
         <div class="kv num" :class="result.totalRet >= 0 ? 'up' : 'dn'">{{ result.totalRet >= 0 ? '+' : '' }}{{ result.totalRet.toFixed(1) }}%</div>
@@ -147,6 +148,26 @@
       </div>
     </div>
 
+    <!-- Run history(真實 API 紀錄;reload 後仍在) -->
+    <div class="card" style="margin-top:14px" data-testid="backtest-history">
+      <div class="card-hd"><div class="ttl">{{ lang === 'zh' ? '歷史回測' : 'Run history' }}</div></div>
+      <table class="tl">
+        <thead>
+          <tr><th>{{ lang === 'zh' ? '策略' : 'Strategy' }}</th><th>Symbol</th><th>Period</th><th>Status</th><th>{{ lang === 'zh' ? '建立時間' : 'Created' }}</th></tr>
+        </thead>
+        <tbody>
+          <tr v-if="!history.length"><td class="dim" colspan="5">{{ lang === 'zh' ? '尚無紀錄' : 'No runs yet' }}</td></tr>
+          <tr v-for="h in history" :key="h.id" data-testid="backtest-history-row">
+            <td>{{ strategyLabel(h.strategyId) }}</td>
+            <td class="num">{{ h.symbol }}</td>
+            <td class="num">{{ h.period }}</td>
+            <td>{{ h.status }}</td>
+            <td class="dim">{{ h.createdAt }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <!-- Trade log -->
     <div class="card" style="margin-top:14px">
       <div class="card-hd"><div class="ttl">{{ lang === 'zh' ? '交易明細' : 'Trade log' }}</div></div>
@@ -172,10 +193,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { t } from '../i18n';
 import StrategyEditor from '../components/StrategyEditor.vue';
 import { getRuntimeApiClients } from '../services/pageApiClients';
+import { ApiClientError } from '../services/apiClient';
 import type { BacktestPeriod, BacktestRunDto, BacktestStrategyId } from '../services/apiTypes';
 import type { Lang } from '../types';
 
@@ -194,6 +216,8 @@ const sym = ref('AAPL');
 const period = ref('3Y');
 const initial = ref(100000);
 const latestRun = ref<BacktestRunDto | null>(null);
+const running = ref(false);
+const history = ref<BacktestRunDto[]>([]);
 
 interface ActiveRunConfig {
   strategy: string;
@@ -277,7 +301,18 @@ const result = computed(() => {
   };
 });
 
+async function loadHistory() {
+  try {
+    history.value = (await backtestApi.listRuns({ limit: 20 })).data;
+  } catch {
+    // 歷史載入失敗不阻擋主要功能;錯誤由建立流程另行呈現
+  }
+}
+
+onMounted(() => { void loadHistory(); });
+
 async function run() {
+  if (running.value) return;
   if (!Number.isFinite(initial.value) || initial.value <= 0) {
     runError.value = props.lang === 'zh' ? '初始資金必須大於 0' : 'Initial capital must be greater than 0';
     return;
@@ -287,6 +322,7 @@ async function run() {
   const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, initial.value, nextRunNonce, customSeed.value);
   runError.value = '';
   strategyError.value = '';
+  running.value = true;
   try {
     latestRun.value = await backtestApi.createRun({
       strategyId: nextConfig.strategy as BacktestStrategyId,
@@ -300,8 +336,12 @@ async function run() {
     });
     runNonce.value = nextRunNonce;
     activeRunConfig.value = nextConfig;
+    void loadHistory();
   } catch (error: any) {
-    runError.value = error?.message || (props.lang === 'zh' ? '回測執行失敗' : 'Backtest run failed');
+    const detail = error?.message || (props.lang === 'zh' ? '回測執行失敗' : 'Backtest run failed');
+    runError.value = error instanceof ApiClientError ? `${error.code}: ${detail}` : detail;
+  } finally {
+    running.value = false;
   }
 }
 

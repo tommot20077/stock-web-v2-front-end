@@ -136,10 +136,10 @@ describe('backtestApi', () => {
           requestId: 'req_4',
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      // 真實後端 list 信封:data 為 PageResponse(items/page/size/totalElements/totalPages)
       return new Response(JSON.stringify({
-        data: [],
-        page: { nextCursor: null, hasMore: false },
-        requestId: 'req_5',
+        data: { items: [], page: 0, size: 5, totalElements: 0, totalPages: 0 },
+        meta: { traceId: 'req_5' },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
@@ -162,7 +162,7 @@ describe('backtestApi', () => {
     expect(result.runId).toBe('bt_1');
     expect(list.page.hasMore).toBe(false);
     expect(listInit.credentials).toBe('include');
-    expect(fetch).toHaveBeenCalledWith('/api/v1/backtests/runs?limit=5', expect.any(Object));
+    expect(fetch).toHaveBeenCalledWith('/api/v1/backtests/runs?page=0&size=5', expect.any(Object));
   });
 
   it('http adapter listRuns uses shared paginated error parsing', async () => {

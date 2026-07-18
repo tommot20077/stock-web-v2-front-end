@@ -25,7 +25,8 @@ export interface PageInfo {
 export interface PaginatedResponse<T> {
   data: T[];
   page: PageInfo;
-  requestId: string;
+  /** 舊草案信封欄位;真後端信封為 ApiResponse<T>(meta.traceId),此欄位選填、多數轉接不帶。見 judgment.md §4。 */
+  requestId?: string;
 }
 
 export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'custom';

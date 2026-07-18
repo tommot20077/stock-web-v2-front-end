@@ -9,6 +9,8 @@ export interface SessionMessage {
   message: string;
   status: number | null;
   requestId: string | null;
+  /** 欄位級驗證錯誤(契約 error.fields);無則省略 */
+  fields?: Record<string, string> | null;
 }
 
 interface SessionBase {
@@ -86,6 +88,7 @@ function messageFrom(error: unknown): SessionMessage {
       message: error.message,
       status: error.status,
       requestId: error.requestId,
+      fields: error.fields,
     };
   }
 
@@ -164,11 +167,20 @@ export function createAuthSession(options: CreateAuthSessionOptions = {}): AuthS
   }
 
   async function login(request: LoginRequest) {
-    state.value = authenticatedState(await auth.login(request));
+    try {
+      state.value = authenticatedState(await auth.login(request));
+    } catch (error) {
+      // 登入失敗(帳密錯誤/鎖定/驗證失敗)仍是未登入態,錯誤細節交由 UI 顯示
+      state.value = anonymousState(messageFrom(error));
+    }
   }
 
   async function register(request: RegisterRequest) {
-    state.value = authenticatedState(await auth.register(request));
+    try {
+      state.value = authenticatedState(await auth.register(request));
+    } catch (error) {
+      state.value = anonymousState(messageFrom(error));
+    }
   }
 
   async function logout() {
