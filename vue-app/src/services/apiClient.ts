@@ -77,6 +77,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
 }
 
+// 這兩個 type guard 刻意「結構寬容」:只看 data / error 是否存在,不要求 success === true/false。
+// 這是刻意的設計,不是漏寫——client 對輸入應寬容(be liberal in what you accept),
+// 而 data / error 的存在本身已足以判別分支;多要求 success 只增加破裂風險而沒有任何收益。
+// 請勿以「對齊後端契約」為由把 success 檢查加回來。
 function isApiFailure(value: unknown): value is ApiFailure {
   const error = isRecord(value) ? value.error : null;
   return !!value
@@ -105,11 +109,11 @@ function isCsrfTokenNames(value: unknown): value is CsrfTokenNames {
     && value.headerName === CSRF_HEADER_NAME;
 }
 
+/** 後端 ApiResponse 只在 meta.traceId 帶追蹤 id;沒有其他來源。 */
 function requestIdFrom(value: unknown): string | null {
   if (!isRecord(value)) return null;
   const meta = isRecord(value.meta) ? value.meta : null;
-  if (typeof meta?.traceId === 'string') return meta.traceId;
-  return typeof value.requestId === 'string' ? value.requestId : null;
+  return typeof meta?.traceId === 'string' ? meta.traceId : null;
 }
 
 function endpoint(basePath: string, path: string): string {
@@ -236,8 +240,6 @@ function errorFromResponse(response: Response, payload: unknown): ApiClientError
       code: payload.error.code,
       message: payload.error.message,
       requestId: requestIdFrom(payload),
-      field: payload.error.field,
-      details: payload.error.details,
       fields: fieldsFrom(payload.error),
     });
   }

@@ -46,7 +46,7 @@ describe('apiClient', () => {
   it('unwraps success envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { ok: true },
-      requestId: 'req_1',
+      meta: { traceId: 'req_1' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest<{ ok: boolean }>('/api/v1/example')).resolves.toEqual({ ok: true });
@@ -56,7 +56,7 @@ describe('apiClient', () => {
   it('sends browser credentials by default and preserves explicit overrides', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { ok: true },
-      requestId: 'req_credentials',
+      meta: { traceId: 'req_credentials' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await apiRequest('/api/v1/me');
@@ -66,22 +66,37 @@ describe('apiClient', () => {
     expect(lastFetchInit().credentials).toBe('omit');
   });
 
-  it('uses meta trace ids as request ids while preserving legacy request ids', async () => {
+  it('reads request ids only from meta.traceId and ignores any top-level requestId', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/success')) {
         return new Response(JSON.stringify({
+          success: true,
           data: { ok: true },
+          error: null,
           meta: { traceId: 'trace_success' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.endsWith('/legacy-error')) {
+      if (url.endsWith('/stray-request-id')) {
+        // 後端契約(ApiResponse)沒有 requestId 這個欄位;即使出現也不得被採用
         return new Response(JSON.stringify({
+          success: false,
+          data: null,
           error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
           requestId: 'req_legacy',
         }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.endsWith('/non-string-trace')) {
+        return new Response(JSON.stringify({
+          success: false,
+          data: null,
+          error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
+          meta: { traceId: 42 },
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response(JSON.stringify({
+        success: false,
+        data: null,
         error: { code: 'AUTH_CSRF_TOKEN_INVALID', message: 'CSRF token invalid' },
         meta: { traceId: 'trace_error' },
       }), { status: 403, headers: { 'Content-Type': 'application/json' } });
@@ -92,9 +107,13 @@ describe('apiClient', () => {
       code: 'AUTH_CSRF_TOKEN_INVALID',
       requestId: 'trace_error',
     });
-    await expect(apiRequest('/api/v1/legacy-error')).rejects.toMatchObject({
+    await expect(apiRequest('/api/v1/stray-request-id')).rejects.toMatchObject({
       code: 'OPS_PERMISSION_DENIED',
-      requestId: 'req_legacy',
+      requestId: null,
+    });
+    await expect(apiRequest('/api/v1/non-string-trace')).rejects.toMatchObject({
+      code: 'OPS_PERMISSION_DENIED',
+      requestId: null,
     });
   });
 
@@ -102,7 +121,7 @@ describe('apiClient', () => {
     document.cookie = 'XSRF-TOKEN=csrf_json; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { created: true },
-      requestId: 'req_json',
+      meta: { traceId: 'req_json' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest<{ created: boolean }>('/api/v1/example', {
@@ -118,7 +137,7 @@ describe('apiClient', () => {
     document.cookie = 'XSRF-TOKEN=csrf_headers; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { updated: true },
-      requestId: 'req_headers',
+      meta: { traceId: 'req_headers' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await apiRequest('/api/v1/example', {
@@ -140,7 +159,7 @@ describe('apiClient', () => {
   it('throws typed errors for API error envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
-      requestId: 'req_2',
+      meta: { traceId: 'req_2' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest('/api/v1/ops/jobs')).rejects.toMatchObject({
@@ -254,7 +273,7 @@ describe('apiClient', () => {
   it('falls back to HTTP_ERROR for malformed API error envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED' },
-      requestId: 'req_malformed',
+      meta: { traceId: 'req_malformed' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest('/api/v1/ops/jobs')).rejects.toMatchObject({

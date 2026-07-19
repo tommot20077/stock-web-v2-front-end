@@ -96,7 +96,7 @@ describe('opsApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-ops; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
@@ -110,7 +110,7 @@ describe('opsApi', () => {
         startedBy: 'admin',
         message: null,
       },
-      requestId: 'req_1',
+      meta: { traceId: 'req_1' },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
@@ -189,7 +189,7 @@ describe('opsApi', () => {
   it('http adapter converts failed listLogs envelopes to typed errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
-      requestId: 'req_3',
+      meta: { traceId: 'req_3' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpOpsApi('/api/v1');
@@ -206,7 +206,7 @@ describe('opsApi', () => {
   it('http adapter rejects malformed listLogs paginated envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { items: [], page: 'first', size: 5 },
-      requestId: 'req_4',
+      meta: { traceId: 'req_4' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpOpsApi('/api/v1');

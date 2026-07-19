@@ -119,14 +119,14 @@ describe('aiAccessApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-ai-access; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/ai-access/providers')) {
-        return new Response(JSON.stringify({ data: [], requestId: 'req_1' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ data: [], meta: { traceId: 'req_1' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/ai-access/keys/key_1')) {
-        return new Response(JSON.stringify({ data: { revoked: true }, requestId: 'req_2' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ data: { revoked: true }, meta: { traceId: 'req_2' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
         success: true,
@@ -154,7 +154,7 @@ describe('aiAccessApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-ai-access-write; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/ai-access/keys')) {
@@ -171,7 +171,7 @@ describe('aiAccessApi', () => {
             hitl: 'manual',
             riskLimits: createTradeKeyRequest.riskLimits,
           },
-          requestId: 'req_4',
+          meta: { traceId: 'req_4' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
@@ -187,7 +187,7 @@ describe('aiAccessApi', () => {
           hitl: 'confirm',
           riskLimits: { maxSingleUsd: 2000, maxDailyUsd: 6000, allowedSymbols: ['BTC'], expiresAt: null },
         },
-        requestId: 'req_5',
+        meta: { traceId: 'req_5' },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
@@ -213,7 +213,7 @@ describe('aiAccessApi', () => {
   it('http adapter converts failed audit envelopes to typed errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'AI_ACCESS_PERMISSION_DENIED', message: 'Forbidden' },
-      requestId: 'req_6',
+      meta: { traceId: 'req_6' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpAiAccessApi('/api/v1');

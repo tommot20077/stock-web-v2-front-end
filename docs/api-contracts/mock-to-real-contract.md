@@ -41,14 +41,15 @@ Keep mock mode available until backend parity is confirmed.
 
 ## Common API Conventions
 
-> ⚠️ **權威更正(2026-07-18,分頁部分已於 2026-07-19 對齊)**:本節下方的 Success / Error 信封
-> 仍是 **mock 早期草案**,**與真實後端不一致**。REST 信封權威是後端 `stock-common` 的 `ApiResponse<T>`
-> (`{ success, data, error, meta.traceId }`);分頁端點回 `ApiResponse<PageResponse<T>>`,
-> 其中 `data = { items, page, size, totalElements, totalPages }`,是 **page-number 分頁(非 cursor)**。
-> **分頁已不再是 follow-up**:前端 `PaginatedResponse<T>` 已改為與後端 `PageResponse<T>` 同形,
+> ✅ **本節已與真實後端對齊(信封 2026-07-19、分頁 2026-07-19)**。REST 信封的權威來源是後端
+> `stock-common` 的 `ApiResponse<T>`:`{ success, data, error, meta }`,其中 `meta = { traceId, timestamp }`、
+> `error = { code, message, fields }`。後端 **不送** `requestId`,也 **不送** `error.field`(單數)或 `error.details`;
+> 前端追蹤 id 一律只從 `meta.traceId` 讀取。
+> 分頁端點回 `ApiResponse<PageResponse<T>>`,其中 `data = { items, page, size, totalElements, totalPages }`,
+> 是 **page-number 分頁(非 cursor)**;前端 `PaginatedResponse<T>` 與後端 `PageResponse<T>` 同形,
 > 三個 list API(`listRuns` / `listLogs` / `listAuditCalls`)一律收 `page`/`size`,
 > 原本的 cursor anti-corruption adapter 已移除,前後端分頁契約現為 1:1。
-> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`;Success / Error 信封的全面對齊仍待後續 follow-up。
+> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`。
 
 Base path:
 
@@ -62,22 +63,27 @@ Success envelope:
 
 ```json
 {
+  "success": true,
   "data": {},
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "...", "timestamp": "2026-05-16T01:30:00Z" }
 }
 ```
 
-Error envelope:
+Error envelope(`error.fields` 為欄位級驗證錯誤,`Map<String, String>`,可省略):
 
 ```json
 {
+  "success": false,
+  "data": null,
   "error": {
     "code": "BACKTEST_STRATEGY_COMPILE_FAILED",
     "message": "Unexpected token ';'",
-    "field": "strategyCode",
-    "details": {}
+    "fields": {
+      "strategyCode": "Unexpected token ';' at line 1, column 20"
+    }
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "...", "timestamp": "2026-05-16T01:30:00Z" }
 }
 ```
 
@@ -94,6 +100,7 @@ Pagination uses page-number pagination (query params `page` 起始 0 與 `size`)
     "totalElements": 0,
     "totalPages": 0
   },
+  "error": null,
   "meta": { "traceId": "..." }
 }
 ```
@@ -166,6 +173,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "bt_01HZX...",
     "strategyId": "ma_cross",
@@ -179,7 +187,8 @@ Response:
     "startedAt": null,
     "completedAt": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -201,12 +210,14 @@ Success:
 
 ```json
 {
+  "success": true,
   "data": {
     "valid": true,
     "normalizedName": "strategy",
     "warnings": []
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -214,16 +225,16 @@ Compile failure:
 
 ```json
 {
+  "success": false,
+  "data": null,
   "error": {
     "code": "BACKTEST_STRATEGY_COMPILE_FAILED",
     "message": "Unexpected token ';'",
-    "field": "strategyCode",
-    "details": {
-      "line": 1,
-      "column": 20
+    "fields": {
+      "strategyCode": "Unexpected token ';' at line 1, column 20"
     }
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -237,6 +248,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "bt_01HZX...",
     "status": "running",
@@ -249,7 +261,8 @@ Response:
     "completedAt": null,
     "error": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -263,6 +276,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "runId": "bt_01HZX...",
     "status": "succeeded",
@@ -299,7 +313,8 @@ Response:
       }
     ]
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -361,6 +376,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "key": "refetchNews",
@@ -379,7 +395,8 @@ Response:
       "enabled": true
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -408,6 +425,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "ops_01HZX...",
     "actionKey": "refetchNews",
@@ -418,7 +436,8 @@ Response:
     "startedBy": "admin",
     "message": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -432,6 +451,7 @@ Response when busy:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "ops_01HZX...",
     "actionKey": "refetchNews",
@@ -440,7 +460,8 @@ Response when busy:
     "startedAt": "2026-05-16T01:34:00Z",
     "startedBy": "admin"
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -448,8 +469,10 @@ Response when idle:
 
 ```json
 {
+  "success": true,
   "data": null,
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -495,6 +518,7 @@ Response:
     "totalElements": 1,
     "totalPages": 1
   },
+  "error": null,
   "meta": { "traceId": "..." }
 }
 ```
@@ -548,6 +572,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "binance",
@@ -566,7 +591,8 @@ Response:
       "supportsSandbox": false
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -580,6 +606,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "key_01HZX...",
@@ -599,7 +626,8 @@ Response:
       }
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -635,6 +663,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "key_01HZX...",
     "provider": "binance",
@@ -651,7 +680,8 @@ Response:
       "expiresAt": null
     }
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -665,6 +695,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "keyId": "key_01HZX...",
     "status": "ok",
@@ -672,7 +703,8 @@ Response:
     "latencyMs": 218,
     "message": "Connected"
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -711,10 +743,12 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "revoked": true
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -728,6 +762,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "readonly",
@@ -757,7 +792,8 @@ Response:
       "editable": false
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -783,6 +819,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "agent_01HZX...",
@@ -792,7 +829,8 @@ Response:
       "lastUsedAt": "2026-05-16T01:35:00Z"
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -831,6 +869,7 @@ Response:
     "totalElements": 1,
     "totalPages": 1
   },
+  "error": null,
   "meta": { "traceId": "..." }
 }
 ```

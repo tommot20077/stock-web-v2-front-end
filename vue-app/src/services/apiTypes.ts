@@ -1,20 +1,33 @@
 export type RuntimeDataMode = 'mock' | 'api';
 
-export interface ApiSuccess<T> {
-  data: T;
-  requestId: string;
+/** 對應後端 stock-common 的 ApiMeta(traceId + timestamp)。 */
+export interface ApiMeta {
+  traceId: string;
+  timestamp?: string;
 }
 
+/** 對應後端 stock-common 的 ApiError;後端只送 code / message / fields。 */
 export interface ApiErrorBody {
   code: string;
   message: string;
-  field?: string;
-  details?: Record<string, unknown>;
+  /** 欄位級驗證錯誤;後端 ApiError.fields(Map<String,String>) */
+  fields?: Record<string, string>;
 }
 
+/** 對應後端 ApiResponse<T> 的成功分支。 */
+export interface ApiSuccess<T> {
+  success: true;
+  data: T;
+  error: null;
+  meta: ApiMeta;
+}
+
+/** 對應後端 ApiResponse<T> 的失敗分支。 */
 export interface ApiFailure {
+  success: false;
+  data: null;
   error: ApiErrorBody;
-  requestId: string;
+  meta: ApiMeta;
 }
 
 /** 對應後端 stock-common 的 PageResponse<T>;為 ApiResponse 信封中的 data 內容。 */

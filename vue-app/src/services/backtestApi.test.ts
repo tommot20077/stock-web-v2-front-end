@@ -76,7 +76,7 @@ describe('backtestApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-backtest; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs')) {
@@ -90,13 +90,13 @@ describe('backtestApi', () => {
             startedAt: null,
             completedAt: null,
           },
-          requestId: 'req_1',
+          meta: { traceId: 'req_1' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/strategies/validate')) {
         return new Response(JSON.stringify({
           data: { valid: true, normalizedName: 'strategy', warnings: [] },
-          requestId: 'req_2',
+          meta: { traceId: 'req_2' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs/bt_1')) {
@@ -110,7 +110,7 @@ describe('backtestApi', () => {
             startedAt: null,
             completedAt: null,
           },
-          requestId: 'req_3',
+          meta: { traceId: 'req_3' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs/bt_1/result')) {
@@ -135,7 +135,7 @@ describe('backtestApi', () => {
             drawdownCurve: [],
             trades: [],
           },
-          requestId: 'req_4',
+          meta: { traceId: 'req_4' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       // 真實後端 list 信封:data 為 PageResponse(items/page/size/totalElements/totalPages)
@@ -184,10 +184,12 @@ describe('backtestApi', () => {
     });
   });
 
-  it('http adapter converts paginated error envelopes to typed errors without request ids', async () => {
+  it('http adapter converts paginated error envelopes without usable meta.traceId to null request ids', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      data: null,
       error: { code: 'BACKTEST_RUN_TIMEOUT', message: 'Timed out' },
-      requestId: 123,
+      meta: { traceId: 123 },
     }), { status: 504, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpBacktestApi('/api/v1');
