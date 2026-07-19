@@ -87,29 +87,29 @@ describe('aiAccessApi', () => {
     expect(freshAgent.scopes).not.toContain('mutated');
   });
 
-  it('mock adapter paginates audit calls with stable call id cursors', async () => {
+  it('mock adapter paginates audit calls by page number', async () => {
     const api = createMockAiAccessApi();
 
-    const firstPage = await api.listAuditCalls({ limit: 2 });
-    const secondPage = await api.listAuditCalls({ limit: 2, cursor: firstPage.page.nextCursor });
+    const firstPage = await api.listAuditCalls({ size: 2 });
+    const secondPage = await api.listAuditCalls({ size: 2, page: 1 });
 
-    expect(firstPage.data).toHaveLength(2);
-    expect(firstPage.page).toEqual({ nextCursor: firstPage.data[1].id, hasMore: true });
-    expect(secondPage.data.map(call => call.id)).not.toContain(firstPage.data[0].id);
-    expect(secondPage.data.map(call => call.id)).not.toContain(firstPage.data[1].id);
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage).toMatchObject({ page: 0, size: 2, totalElements: 5, totalPages: 3 });
+    expect(secondPage).toMatchObject({ page: 1, size: 2, totalElements: 5, totalPages: 3 });
+    expect(secondPage.items.map(call => call.id)).not.toContain(firstPage.items[0].id);
+    expect(secondPage.items.map(call => call.id)).not.toContain(firstPage.items[1].id);
   });
 
-  it('mock adapter keeps audit pagination stable when a newer call is prepended', async () => {
+  it('mock adapter reports page-number drift when a newer audit call is prepended', async () => {
     const api = createMockAiAccessApi();
 
-    const firstPage = await api.listAuditCalls({ limit: 2 });
+    const firstPage = await api.listAuditCalls({ size: 2 });
     await api.testKey('key_1');
-    const secondPage = await api.listAuditCalls({ limit: 2, cursor: firstPage.page.nextCursor });
+    const secondPage = await api.listAuditCalls({ size: 2, page: 1 });
 
-    expect(new Set([...firstPage.data, ...secondPage.data].map(call => call.id)).size)
-      .toBe(firstPage.data.length + secondPage.data.length);
-    expect(secondPage.data.map(call => call.id)).not.toContain(firstPage.data[0].id);
-    expect(secondPage.data.map(call => call.id)).not.toContain(firstPage.data[1].id);
+    // page-number 分頁與後端一致:新資料插入後,第 2 頁往後位移,首頁末筆會重複出現
+    expect(secondPage.items.map(call => call.id)).toContain(firstPage.items[1].id);
+    expect(secondPage).toMatchObject({ page: 1, size: 2, totalElements: 6, totalPages: 3 });
   });
 
   it('http adapter calls expected endpoints', async () => {
@@ -128,18 +128,22 @@ describe('aiAccessApi', () => {
       if (url.endsWith('/api/v1/ai-access/keys/key_1')) {
         return new Response(JSON.stringify({ data: { revoked: true }, requestId: 'req_2' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      return new Response(JSON.stringify({ data: [], page: { nextCursor: null, hasMore: false }, requestId: 'req_3' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({
+        success: true,
+        data: { items: [], page: 1, size: 5, totalElements: 0, totalPages: 0 },
+        meta: { traceId: 'req_3' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
     const api = createHttpAiAccessApi('/api/v1');
     await api.listProviders();
     await api.revokeKey('key_1');
-    await api.listAuditCalls({ limit: 5, cursor: 'call 1/2' });
+    await api.listAuditCalls({ page: 1, size: 5 });
     const auditInit = lastFetchInit();
 
     expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/providers', expect.any(Object));
     expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/keys/key_1', expect.objectContaining({ method: 'DELETE' }));
-    expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/audit-calls?limit=5&cursor=call%201%2F2', expect.any(Object));
+    expect(fetch).toHaveBeenCalledWith('/api/v1/ai-access/audit-calls?page=1&size=5', expect.any(Object));
     expect(auditInit.credentials).toBe('include');
   });
 
@@ -214,7 +218,7 @@ describe('aiAccessApi', () => {
 
     const api = createHttpAiAccessApi('/api/v1');
 
-    await expect(api.listAuditCalls({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listAuditCalls({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 403,
       code: 'AI_ACCESS_PERMISSION_DENIED',
@@ -231,7 +235,7 @@ describe('aiAccessApi', () => {
 
     const api = createHttpAiAccessApi('/api/v1');
 
-    await expect(api.listAuditCalls({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listAuditCalls({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 403,
       code: 'AI_ACCESS_PERMISSION_DENIED',

@@ -17,16 +17,13 @@ export interface ApiFailure {
   requestId: string;
 }
 
-export interface PageInfo {
-  nextCursor: string | null;
-  hasMore: boolean;
-}
-
+/** 對應後端 stock-common 的 PageResponse<T>;為 ApiResponse 信封中的 data 內容。 */
 export interface PaginatedResponse<T> {
-  data: T[];
-  page: PageInfo;
-  /** 舊草案信封欄位;真後端信封為 ApiResponse<T>(meta.traceId),此欄位選填、多數轉接不帶。見 judgment.md §4。 */
-  requestId?: string;
+  items: T[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
 }
 
 export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'custom';

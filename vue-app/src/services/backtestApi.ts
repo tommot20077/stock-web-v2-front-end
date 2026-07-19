@@ -1,4 +1,4 @@
-import { ApiClientError, apiRequest, buildQueryString } from './apiClient';
+import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import type {
   BacktestResultDto,
   BacktestRunDto,
@@ -16,7 +16,7 @@ export interface BacktestApi {
   validateStrategy(request: StrategyValidationRequest): Promise<StrategyValidationDto>;
   getRun(runId: string): Promise<BacktestRunDto>;
   getResult(runId: string): Promise<BacktestResultDto>;
-  listRuns(params?: { symbol?: string; limit?: number; cursor?: string | null }): Promise<PaginatedResponse<BacktestRunDto>>;
+  listRuns(params?: { symbol?: string; page?: number; size?: number }): Promise<PaginatedResponse<BacktestRunDto>>;
 }
 
 type StoredBacktestRun = BacktestRunDto & { seed: number };
@@ -170,14 +170,14 @@ export function createMockBacktestApi(): BacktestApi {
     },
     async listRuns(params = {}) {
       const filtered = params.symbol ? runs.filter(run => run.symbol === params.symbol) : runs;
-      const limit = params.limit ?? 20;
-      const offset = Number(params.cursor ?? 0);
-      const nextOffset = offset + limit;
-      const hasMore = nextOffset < filtered.length;
+      const page = params.page ?? 0;
+      const size = params.size ?? 20;
       return {
-        data: filtered.slice(offset, nextOffset).map(toRunDto),
-        page: { nextCursor: hasMore ? String(nextOffset) : null, hasMore },
-        requestId: 'mock',
+        items: filtered.slice(page * size, page * size + size).map(toRunDto),
+        page,
+        size,
+        totalElements: filtered.length,
+        totalPages: Math.ceil(filtered.length / size),
       };
     },
   };
@@ -190,26 +190,9 @@ export function createHttpBacktestApi(basePath = '/api/v1'): BacktestApi {
     validateStrategy: request => apiRequest(`${basePath}/backtests/strategies/validate`, { method: 'POST', json: request }),
     getRun: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}`),
     getResult: runId => apiRequest(`${basePath}/backtests/runs/${encodeURIComponent(runId)}/result`),
-    // 後端回 ApiResponse<PageResponse>(data.items + page/size/totalElements/totalPages),page-number 分頁。
-    // 前端介面採 cursor 抽象,故此 adapter 為刻意的 anti-corruption layer:page 序號 ↔ opaque cursor 字串。
-    // 契約差異裁決見 ai-docs/judgment.md §4 與 docs/api-contracts/mock-to-real-contract.md。
-    listRuns: async params => {
-      const page = params?.cursor ? Number(params.cursor) : 0;
-      const query = buildQueryString({ symbol: params?.symbol, page, size: params?.limit ?? 20 });
-      const data = await apiRequest<{
-        items: BacktestRunDto[];
-        page: number;
-        size: number;
-        totalElements: number;
-        totalPages: number;
-      }>(`${basePath}/backtests/runs${query}`);
-      const hasMore = data.page + 1 < data.totalPages;
-      // requestId 為舊草案欄位,真信封改用 meta.traceId,此處省略(PaginatedResponse.requestId 已改選填)
-      return {
-        data: data.items,
-        page: { nextCursor: hasMore ? String(data.page + 1) : null, hasMore },
-      };
-    },
+    listRuns: params => apiPaginatedRequest<BacktestRunDto>(
+      `${basePath}/backtests/runs${buildQueryString({ symbol: params?.symbol, page: params?.page ?? 0, size: params?.size ?? 20 })}`,
+    ),
   };
 }
 

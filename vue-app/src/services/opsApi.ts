@@ -14,7 +14,7 @@ export interface OpsApi {
   triggerJob(request: TriggerOpsJobRequest): Promise<OpsJobDto>;
   getCurrentJob(): Promise<OpsJobDto | null>;
   getJob(jobId: string): Promise<OpsJobDto>;
-  listLogs(params?: { limit?: number; cursor?: string | null }): Promise<PaginatedResponse<OpsLogDto>>;
+  listLogs(params?: { page?: number; size?: number }): Promise<PaginatedResponse<OpsLogDto>>;
 }
 
 const actions: OpsActionDto[] = [
@@ -34,14 +34,8 @@ function cloneLog(log: OpsLogDto): OpsLogDto {
   return { ...log };
 }
 
-function normalizeLimit(limit: number | undefined, fallback: number): number {
-  return Number.isFinite(limit) && limit !== undefined && limit > 0 ? Math.floor(limit) : fallback;
-}
-
-function startIndexAfterCursor(logs: OpsLogDto[], cursor: string | null | undefined): number {
-  if (!cursor) return 0;
-  const index = logs.findIndex(log => log.id === cursor);
-  return index >= 0 ? index + 1 : 0;
+function normalizeSize(size: number | undefined, fallback: number): number {
+  return Number.isFinite(size) && size !== undefined && size > 0 ? Math.floor(size) : fallback;
 }
 
 export function createMockOpsApi(): OpsApi {
@@ -131,15 +125,15 @@ export function createMockOpsApi(): OpsApi {
       return cloneJob(job);
     },
     async listLogs(params = {}) {
-      const limit = normalizeLimit(params.limit, 30);
-      const startIndex = startIndexAfterCursor(logs, params.cursor);
-      const pageData = logs.slice(startIndex, startIndex + limit);
-      const hasMore = startIndex + pageData.length < logs.length;
+      const size = normalizeSize(params.size, 30);
+      const page = params.page ?? 0;
 
       return {
-        data: pageData.map(cloneLog),
-        page: { nextCursor: hasMore && pageData.length > 0 ? pageData[pageData.length - 1].id : null, hasMore },
-        requestId: 'mock',
+        items: logs.slice(page * size, page * size + size).map(cloneLog),
+        page,
+        size,
+        totalElements: logs.length,
+        totalPages: Math.ceil(logs.length / size),
       };
     },
   };
@@ -160,7 +154,9 @@ export function createHttpOpsApi(basePath = '/api/v1'): OpsApi {
     },
     getCurrentJob: () => apiRequest<OpsJobDto | null>(`${basePath}/ops/jobs/current`),
     getJob: jobId => apiRequest<OpsJobDto>(`${basePath}/ops/jobs/${encodeURIComponent(jobId)}`),
-    listLogs: params => apiPaginatedRequest<OpsLogDto>(`${basePath}/ops/logs${buildQueryString(params ?? {})}`),
+    listLogs: params => apiPaginatedRequest<OpsLogDto>(
+      `${basePath}/ops/logs${buildQueryString({ page: params?.page ?? 0, size: params?.size ?? 30 })}`,
+    ),
   };
 }
 

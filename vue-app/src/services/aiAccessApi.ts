@@ -24,7 +24,7 @@ export interface AiAccessApi {
   updateMcpEndpoint(endpointId: string, request: { enabled: boolean }): Promise<McpEndpointDto>;
   listAgents(): Promise<AiAgentDto[]>;
   revokeAgent(agentId: string): Promise<{ revoked: boolean }>;
-  listAuditCalls(params?: { limit?: number; cursor?: string | null }): Promise<PaginatedResponse<AiAuditCallDto>>;
+  listAuditCalls(params?: { page?: number; size?: number }): Promise<PaginatedResponse<AiAuditCallDto>>;
 }
 
 const providers: AiProviderDto[] = [
@@ -66,14 +66,8 @@ function cloneAuditCall(call: AiAuditCallDto): AiAuditCallDto {
   return { ...call };
 }
 
-function normalizeLimit(limit: number | undefined, fallback: number): number {
-  return Number.isFinite(limit) && limit !== undefined && limit > 0 ? Math.floor(limit) : fallback;
-}
-
-function startIndexAfterCursor(calls: AiAuditCallDto[], cursor: string | null | undefined): number {
-  if (!cursor) return 0;
-  const index = calls.findIndex(call => call.id === cursor);
-  return index >= 0 ? index + 1 : 0;
+function normalizeSize(size: number | undefined, fallback: number): number {
+  return Number.isFinite(size) && size !== undefined && size > 0 ? Math.floor(size) : fallback;
 }
 
 function findKey(keys: AiAccessKeyDto[], keyId: string): AiAccessKeyDto {
@@ -306,15 +300,15 @@ export function createMockAiAccessApi(): AiAccessApi {
       return { revoked: true };
     },
     async listAuditCalls(params = {}) {
-      const limit = normalizeLimit(params.limit, 50);
-      const startIndex = startIndexAfterCursor(calls, params.cursor);
-      const pageData = calls.slice(startIndex, startIndex + limit);
-      const hasMore = startIndex + pageData.length < calls.length;
+      const size = normalizeSize(params.size, 20);
+      const page = params.page ?? 0;
 
       return {
-        data: pageData.map(cloneAuditCall),
-        page: { nextCursor: hasMore && pageData.length > 0 ? pageData[pageData.length - 1].id : null, hasMore },
-        requestId: 'mock',
+        items: calls.slice(page * size, page * size + size).map(cloneAuditCall),
+        page,
+        size,
+        totalElements: calls.length,
+        totalPages: Math.ceil(calls.length / size),
       };
     },
   };
@@ -333,7 +327,9 @@ export function createHttpAiAccessApi(basePath = '/api/v1'): AiAccessApi {
     updateMcpEndpoint: (endpointId, request) => apiRequest<McpEndpointDto>(`${basePath}/ai-access/mcp-endpoints/${encodeURIComponent(endpointId)}`, { method: 'PATCH', json: request }),
     listAgents: () => apiRequest<AiAgentDto[]>(`${basePath}/ai-access/agents`),
     revokeAgent: agentId => apiRequest<{ revoked: boolean }>(`${basePath}/ai-access/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
-    listAuditCalls: params => apiPaginatedRequest<AiAuditCallDto>(`${basePath}/ai-access/audit-calls${buildQueryString(params ?? {})}`),
+    listAuditCalls: params => apiPaginatedRequest<AiAuditCallDto>(
+      `${basePath}/ai-access/audit-calls${buildQueryString({ page: params?.page ?? 0, size: params?.size ?? 20 })}`,
+    ),
   };
 }
 

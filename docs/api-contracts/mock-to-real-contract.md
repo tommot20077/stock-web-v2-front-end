@@ -41,12 +41,14 @@ Keep mock mode available until backend parity is confirmed.
 
 ## Common API Conventions
 
-> ⚠️ **權威更正(2026-07-18)**:本節下方的 Success / Error / Pagination 信封是 **mock 早期草案**,
-> **與真實後端不一致**。REST 信封權威是後端 `stock-common` 的 `ApiResponse<T>`
+> ⚠️ **權威更正(2026-07-18,分頁部分已於 2026-07-19 對齊)**:本節下方的 Success / Error 信封
+> 仍是 **mock 早期草案**,**與真實後端不一致**。REST 信封權威是後端 `stock-common` 的 `ApiResponse<T>`
 > (`{ success, data, error, meta.traceId }`);分頁端點回 `ApiResponse<PageResponse<T>>`,
 > 其中 `data = { items, page, size, totalElements, totalPages }`,是 **page-number 分頁(非 cursor)**。
-> 前端保留 cursor 介面時,須在 service adapter 內轉接(見 `vue-app/src/services/backtestApi.ts` 的 `listRuns`)。
-> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`;本檔全面對齊留待後續 follow-up。
+> **分頁已不再是 follow-up**:前端 `PaginatedResponse<T>` 已改為與後端 `PageResponse<T>` 同形,
+> 三個 list API(`listRuns` / `listLogs` / `listAuditCalls`)一律收 `page`/`size`,
+> 原本的 cursor anti-corruption adapter 已移除,前後端分頁契約現為 1:1。
+> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`;Success / Error 信封的全面對齊仍待後續 follow-up。
 
 Base path:
 
@@ -79,16 +81,20 @@ Error envelope:
 }
 ```
 
-Pagination uses cursor pagination:
+Pagination uses page-number pagination (query params `page` 起始 0 與 `size`),
+回應為 `ApiResponse<PageResponse<T>>`:
 
 ```json
 {
-  "data": [],
-  "page": {
-    "nextCursor": "cursor_...",
-    "hasMore": true
+  "success": true,
+  "data": {
+    "items": [],
+    "page": 0,
+    "size": 20,
+    "totalElements": 0,
+    "totalPages": 0
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -303,10 +309,10 @@ Response:
 GET /api/v1/backtests/runs?symbol=AAPL&page=0&size=20
 ```
 
-> ⚠️ 真後端為 **page-number** 分頁:query 用 `page`/`size`(非 `limit`/`cursor`),
-> 回 `ApiResponse<PageResponse<BacktestRunDto>>`(`data = { items, page, size, totalElements, totalPages }`)。
-> 前端 cursor 介面由 `backtestApi.ts` 的 `listRuns` adapter 轉接(page 序號 ↔ opaque cursor)。
-> 見上方「權威更正」與 `ai-docs/judgment.md §4`。
+真後端為 **page-number** 分頁:query 用 `page`(起始 0,預設 0)/`size`(預設 20),
+回 `ApiResponse<PageResponse<BacktestRunDto>>`(`data = { items, page, size, totalElements, totalPages }`)。
+前端 `backtestApi.listRuns` 直接透過共用的 `apiPaginatedRequest` 消費此形狀,**無轉接層**。
+見上方「Common API Conventions」與 `ai-docs/judgment.md §4`。
 
 ### Backtest Error Codes
 
@@ -463,30 +469,33 @@ Status values:
 ### List Logs
 
 ```http
-GET /api/v1/ops/logs?limit=30&cursor=...
+GET /api/v1/ops/logs?page=0&size=30
 ```
 
 Response:
 
 ```json
 {
-  "data": [
-    {
-      "id": "log_01HZX...",
-      "time": "2026-05-16T01:34:01Z",
-      "actionKey": "refetchNews",
-      "operation": "Refetch news",
-      "actor": "admin",
-      "status": "success",
-      "durationMs": 700,
-      "message": "Completed"
-    }
-  ],
-  "page": {
-    "nextCursor": null,
-    "hasMore": false
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "log_01HZX...",
+        "time": "2026-05-16T01:34:01Z",
+        "actionKey": "refetchNews",
+        "operation": "Refetch news",
+        "actor": "admin",
+        "status": "success",
+        "durationMs": 700,
+        "message": "Completed"
+      }
+    ],
+    "page": 0,
+    "size": 30,
+    "totalElements": 1,
+    "totalPages": 1
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -796,30 +805,33 @@ Revokes the agent token/session.
 ### Recent Tool Calls
 
 ```http
-GET /api/v1/ai-access/audit-calls?limit=50&cursor=...
+GET /api/v1/ai-access/audit-calls?page=0&size=20
 ```
 
 Response:
 
 ```json
 {
-  "data": [
-    {
-      "id": "call_01HZX...",
-      "time": "2026-05-16T01:35:00Z",
-      "agent": "Claude Desktop",
-      "tool": "markets.get_quote",
-      "argsSummary": "symbol=AAPL",
-      "ok": true,
-      "durationMs": 84,
-      "errorCode": null
-    }
-  ],
-  "page": {
-    "nextCursor": null,
-    "hasMore": false
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "call_01HZX...",
+        "time": "2026-05-16T01:35:00Z",
+        "agent": "Claude Desktop",
+        "tool": "markets.get_quote",
+        "argsSummary": "symbol=AAPL",
+        "ok": true,
+        "durationMs": 84,
+        "errorCode": null
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "..." }
 }
 ```
 

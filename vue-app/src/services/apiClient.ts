@@ -90,13 +90,13 @@ function isApiSuccess<T>(value: unknown): value is ApiSuccess<T> {
   return !!value && typeof value === 'object' && 'data' in value;
 }
 
-function isPaginatedResponse<T>(value: unknown): value is PaginatedResponse<T> {
-  const page = isRecord(value) ? value.page : null;
+function isPageResponse<T>(value: unknown): value is PaginatedResponse<T> {
   return isRecord(value)
-    && Array.isArray(value.data)
-    && isRecord(page)
-    && (typeof page.nextCursor === 'string' || page.nextCursor === null)
-    && typeof page.hasMore === 'boolean';
+    && Array.isArray(value.items)
+    && typeof value.page === 'number'
+    && typeof value.size === 'number'
+    && typeof value.totalElements === 'number'
+    && typeof value.totalPages === 'number';
 }
 
 function isCsrfTokenNames(value: unknown): value is CsrfTokenNames {
@@ -343,14 +343,9 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 }
 
 /**
- * 舊「扁平 cursor 信封」helper:期待整個 payload 為 { data: [], page: { nextCursor, hasMore } }。
- *
- * ⚠️ 真後端不回這個 shape。stock-common 的分頁端點回 ApiResponse<PageResponse<T>>
- *    (= { success, data: { items, page, size, totalElements, totalPages }, meta.traceId }),
- *    對本 helper 會判定 isPaginatedResponse=false 而丟 INVALID_API_RESPONSE。
- *    對接真分頁端點者請照 backtestApi.ts 的 listRuns adapter:以 apiRequest 拆 data 再轉 cursor。
- *    目前僅 aiAccessApi.listAuditCalls / opsApi.listLogs 仍用它(兩者後端尚未存在)。
- *    契約權威見 ai-docs/judgment.md §4 與 docs/api-contracts/mock-to-real-contract.md。
+ * 分頁端點 helper:消費後端 ApiResponse<PageResponse<T>>
+ * (= { success, data: { items, page, size, totalElements, totalPages }, error, meta.traceId }),
+ * 拆掉信封後回傳 PageResponse 本體。
  */
 export async function apiPaginatedRequest<T>(
   path: string,
@@ -362,7 +357,7 @@ export async function apiPaginatedRequest<T>(
     throw errorFromResponse(response, payload);
   }
 
-  if (!isPaginatedResponse<T>(payload)) {
+  if (!isApiSuccess<unknown>(payload) || !isPageResponse<T>(payload.data)) {
     throw new ApiClientError({
       status: response.status,
       code: 'INVALID_API_RESPONSE',
@@ -371,8 +366,5 @@ export async function apiPaginatedRequest<T>(
     });
   }
 
-  return {
-    data: payload.data,
-    page: payload.page,
-  };
+  return payload.data;
 }

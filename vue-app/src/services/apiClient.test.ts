@@ -38,8 +38,9 @@ function logicalHeaderNames(headers: HeadersInit | undefined, name: string): str
 
 describe('apiClient', () => {
   it('builds query strings without nullish values', () => {
-    expect(buildQueryString({ symbol: 'AAPL', limit: 20, cursor: null, empty: undefined }))
-      .toBe('?symbol=AAPL&limit=20');
+    expect(buildQueryString({ symbol: 'AAPL', page: 0, size: 20, missing: null, empty: undefined }))
+      .toBe('?symbol=AAPL&page=0&size=20');
+    expect(buildQueryString({ symbol: 'BRK B/A' })).toBe('?symbol=BRK%20B%2FA');
   });
 
   it('unwraps success envelopes', async () => {
@@ -184,16 +185,20 @@ describe('apiClient', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
-  it('returns valid paginated envelopes from the shared paginated helper', async () => {
+  it('unwraps ApiResponse<PageResponse> from the shared paginated helper', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      data: [{ id: 'bt_1' }],
-      page: { nextCursor: null, hasMore: false },
+      success: true,
+      data: { items: [{ id: 'bt_1' }], page: 0, size: 20, totalElements: 1, totalPages: 1 },
+      error: null,
       meta: { traceId: 'trace_page' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiPaginatedRequest<{ id: string }>('/api/v1/backtests/runs')).resolves.toEqual({
-      data: [{ id: 'bt_1' }],
-      page: { nextCursor: null, hasMore: false },
+      items: [{ id: 'bt_1' }],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
     });
     expect(lastFetchInit().credentials).toBe('include');
   });
@@ -215,6 +220,7 @@ describe('apiClient', () => {
 
   it('rejects malformed paginated envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      // 舊 cursor 扁平信封不再是合法分頁回應
       data: [],
       page: { nextCursor: 3, hasMore: 'yes' },
       meta: { traceId: 'trace_malformed' },
@@ -226,6 +232,22 @@ describe('apiClient', () => {
       code: 'INVALID_API_RESPONSE',
       message: 'Response did not include a paginated envelope',
       requestId: 'trace_malformed',
+    });
+  });
+
+  it('rejects page envelopes with non-numeric pagination metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { items: [], page: '0', size: 20, totalElements: 0, totalPages: 0 },
+      meta: { traceId: 'trace_bad_page' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(apiPaginatedRequest('/api/v1/backtests/runs')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 200,
+      code: 'INVALID_API_RESPONSE',
+      message: 'Response did not include a paginated envelope',
+      requestId: 'trace_bad_page',
     });
   });
 
