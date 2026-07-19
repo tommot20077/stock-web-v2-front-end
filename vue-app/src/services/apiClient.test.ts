@@ -38,14 +38,15 @@ function logicalHeaderNames(headers: HeadersInit | undefined, name: string): str
 
 describe('apiClient', () => {
   it('builds query strings without nullish values', () => {
-    expect(buildQueryString({ symbol: 'AAPL', limit: 20, cursor: null, empty: undefined }))
-      .toBe('?symbol=AAPL&limit=20');
+    expect(buildQueryString({ symbol: 'AAPL', page: 0, size: 20, missing: null, empty: undefined }))
+      .toBe('?symbol=AAPL&page=0&size=20');
+    expect(buildQueryString({ symbol: 'BRK B/A' })).toBe('?symbol=BRK%20B%2FA');
   });
 
   it('unwraps success envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { ok: true },
-      requestId: 'req_1',
+      meta: { traceId: 'req_1' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest<{ ok: boolean }>('/api/v1/example')).resolves.toEqual({ ok: true });
@@ -55,7 +56,7 @@ describe('apiClient', () => {
   it('sends browser credentials by default and preserves explicit overrides', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { ok: true },
-      requestId: 'req_credentials',
+      meta: { traceId: 'req_credentials' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await apiRequest('/api/v1/me');
@@ -65,22 +66,37 @@ describe('apiClient', () => {
     expect(lastFetchInit().credentials).toBe('omit');
   });
 
-  it('uses meta trace ids as request ids while preserving legacy request ids', async () => {
+  it('reads request ids only from meta.traceId and ignores any top-level requestId', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/success')) {
         return new Response(JSON.stringify({
+          success: true,
           data: { ok: true },
+          error: null,
           meta: { traceId: 'trace_success' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.endsWith('/legacy-error')) {
+      if (url.endsWith('/stray-request-id')) {
+        // 後端契約(ApiResponse)沒有 requestId 這個欄位;即使出現也不得被採用
         return new Response(JSON.stringify({
+          success: false,
+          data: null,
           error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
           requestId: 'req_legacy',
         }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.endsWith('/non-string-trace')) {
+        return new Response(JSON.stringify({
+          success: false,
+          data: null,
+          error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
+          meta: { traceId: 42 },
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response(JSON.stringify({
+        success: false,
+        data: null,
         error: { code: 'AUTH_CSRF_TOKEN_INVALID', message: 'CSRF token invalid' },
         meta: { traceId: 'trace_error' },
       }), { status: 403, headers: { 'Content-Type': 'application/json' } });
@@ -91,9 +107,13 @@ describe('apiClient', () => {
       code: 'AUTH_CSRF_TOKEN_INVALID',
       requestId: 'trace_error',
     });
-    await expect(apiRequest('/api/v1/legacy-error')).rejects.toMatchObject({
+    await expect(apiRequest('/api/v1/stray-request-id')).rejects.toMatchObject({
       code: 'OPS_PERMISSION_DENIED',
-      requestId: 'req_legacy',
+      requestId: null,
+    });
+    await expect(apiRequest('/api/v1/non-string-trace')).rejects.toMatchObject({
+      code: 'OPS_PERMISSION_DENIED',
+      requestId: null,
     });
   });
 
@@ -101,7 +121,7 @@ describe('apiClient', () => {
     document.cookie = 'XSRF-TOKEN=csrf_json; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { created: true },
-      requestId: 'req_json',
+      meta: { traceId: 'req_json' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest<{ created: boolean }>('/api/v1/example', {
@@ -117,7 +137,7 @@ describe('apiClient', () => {
     document.cookie = 'XSRF-TOKEN=csrf_headers; path=/';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: { updated: true },
-      requestId: 'req_headers',
+      meta: { traceId: 'req_headers' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await apiRequest('/api/v1/example', {
@@ -139,7 +159,7 @@ describe('apiClient', () => {
   it('throws typed errors for API error envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
-      requestId: 'req_2',
+      meta: { traceId: 'req_2' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest('/api/v1/ops/jobs')).rejects.toMatchObject({
@@ -184,16 +204,20 @@ describe('apiClient', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
-  it('returns valid paginated envelopes from the shared paginated helper', async () => {
+  it('unwraps ApiResponse<PageResponse> from the shared paginated helper', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      data: [{ id: 'bt_1' }],
-      page: { nextCursor: null, hasMore: false },
+      success: true,
+      data: { items: [{ id: 'bt_1' }], page: 0, size: 20, totalElements: 1, totalPages: 1 },
+      error: null,
       meta: { traceId: 'trace_page' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiPaginatedRequest<{ id: string }>('/api/v1/backtests/runs')).resolves.toEqual({
-      data: [{ id: 'bt_1' }],
-      page: { nextCursor: null, hasMore: false },
+      items: [{ id: 'bt_1' }],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
     });
     expect(lastFetchInit().credentials).toBe('include');
   });
@@ -215,6 +239,7 @@ describe('apiClient', () => {
 
   it('rejects malformed paginated envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      // 舊 cursor 扁平信封不再是合法分頁回應
       data: [],
       page: { nextCursor: 3, hasMore: 'yes' },
       meta: { traceId: 'trace_malformed' },
@@ -229,10 +254,26 @@ describe('apiClient', () => {
     });
   });
 
+  it('rejects page envelopes with non-numeric pagination metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { items: [], page: '0', size: 20, totalElements: 0, totalPages: 0 },
+      meta: { traceId: 'trace_bad_page' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(apiPaginatedRequest('/api/v1/backtests/runs')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 200,
+      code: 'INVALID_API_RESPONSE',
+      message: 'Response did not include a paginated envelope',
+      requestId: 'trace_bad_page',
+    });
+  });
+
   it('falls back to HTTP_ERROR for malformed API error envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED' },
-      requestId: 'req_malformed',
+      meta: { traceId: 'req_malformed' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     await expect(apiRequest('/api/v1/ops/jobs')).rejects.toMatchObject({

@@ -33,11 +33,12 @@ describe('opsApi', () => {
     expect(current?.actionKey).toBe('refetchNews');
 
     const job = await finishJob(runPromise);
-    const logs = await api.listLogs({ limit: 10 });
+    const logs = await api.listLogs({ size: 10 });
 
     expect(job.status).toBe('success');
     expect(await api.getCurrentJob()).toBeNull();
-    expect(logs.data[0]).toMatchObject({ actionKey: 'refetchNews', status: 'success' });
+    expect(logs.items[0]).toMatchObject({ actionKey: 'refetchNews', status: 'success' });
+    expect(logs).toMatchObject({ page: 0, size: 10, totalElements: 1, totalPages: 1 });
   });
 
   it('mock adapter rejects duplicate jobs while busy', async () => {
@@ -52,7 +53,7 @@ describe('opsApi', () => {
     await finishJob(runPromise);
   });
 
-  it('mock adapter paginates logs with stable log id cursors', async () => {
+  it('mock adapter paginates logs by page number', async () => {
     vi.useFakeTimers();
     const api = createMockOpsApi();
 
@@ -60,16 +61,16 @@ describe('opsApi', () => {
     const secondJob = await finishJob(api.triggerJob({ actionKey: 'recalcPos', params: {} }));
     const thirdJob = await finishJob(api.triggerJob({ actionKey: 'recalcRoi', params: {} }));
 
-    const firstPage = await api.listLogs({ limit: 2 });
-    const secondPage = await api.listLogs({ limit: 2, cursor: firstPage.page.nextCursor });
+    const firstPage = await api.listLogs({ size: 2 });
+    const secondPage = await api.listLogs({ size: 2, page: 1 });
 
-    expect(firstPage.data.map(item => item.actionKey)).toEqual([thirdJob.actionKey, secondJob.actionKey]);
-    expect(firstPage.page).toEqual({ nextCursor: firstPage.data[1].id, hasMore: true });
-    expect(secondPage.data.map(item => item.actionKey)).toEqual([firstJob.actionKey]);
-    expect(secondPage.page).toEqual({ nextCursor: null, hasMore: false });
+    expect(firstPage.items.map(item => item.actionKey)).toEqual([thirdJob.actionKey, secondJob.actionKey]);
+    expect(firstPage).toMatchObject({ page: 0, size: 2, totalElements: 3, totalPages: 2 });
+    expect(secondPage.items.map(item => item.actionKey)).toEqual([firstJob.actionKey]);
+    expect(secondPage).toMatchObject({ page: 1, size: 2, totalElements: 3, totalPages: 2 });
   });
 
-  it('mock adapter keeps page 2 stable when a newer log is prepended', async () => {
+  it('mock adapter reports page-number drift when a newer log is prepended', async () => {
     vi.useFakeTimers();
     const api = createMockOpsApi();
 
@@ -77,13 +78,15 @@ describe('opsApi', () => {
     const secondJob = await finishJob(api.triggerJob({ actionKey: 'recalcPos', params: {} }));
     const thirdJob = await finishJob(api.triggerJob({ actionKey: 'recalcRoi', params: {} }));
 
-    const firstPage = await api.listLogs({ limit: 2 });
+    const firstPage = await api.listLogs({ size: 2 });
     await finishJob(api.triggerJob({ actionKey: 'refetchMkt', params: {} }));
-    const secondPage = await api.listLogs({ limit: 2, cursor: firstPage.page.nextCursor });
+    const secondPage = await api.listLogs({ size: 2, page: 1 });
 
-    expect(firstPage.data.map(item => item.actionKey)).toEqual([thirdJob.actionKey, secondJob.actionKey]);
-    expect(secondPage.data.map(item => item.actionKey)).toEqual([firstJob.actionKey]);
-    expect(new Set([...firstPage.data, ...secondPage.data].map(item => item.id)).size).toBe(3);
+    expect(firstPage.items.map(item => item.actionKey)).toEqual([thirdJob.actionKey, secondJob.actionKey]);
+    // page-number 分頁與後端一致:新資料插入後,第 2 頁會往後位移,故 secondJob 會重複出現
+    expect(secondPage.items.map(item => item.actionKey)).toEqual([secondJob.actionKey, firstJob.actionKey]);
+    expect(secondPage.totalElements).toBe(4);
+    expect(secondPage.totalPages).toBe(2);
   });
 
   it('http adapter sends idempotency key header', async () => {
@@ -93,7 +96,7 @@ describe('opsApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-ops; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
@@ -107,7 +110,7 @@ describe('opsApi', () => {
         startedBy: 'admin',
         message: null,
       },
-      requestId: 'req_1',
+      meta: { traceId: 'req_1' },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
@@ -121,30 +124,49 @@ describe('opsApi', () => {
     expect(JSON.parse(String(init.body))).toEqual({ actionKey: 'refetchNews', params: {} });
   });
 
-  it('http adapter encodes listLogs query and returns paginated envelopes', async () => {
+  it('http adapter encodes listLogs query and returns page envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      data: [{
-        id: 'log_1',
-        time: '2026-05-16T00:00:00Z',
-        actionKey: 'refetchNews',
-        operation: 'Refetch news',
-        actor: 'admin',
-        status: 'success',
-        durationMs: 700,
-        message: 'Completed',
-      }],
-      page: { nextCursor: 'log_1', hasMore: true },
-      requestId: 'req_2',
+      success: true,
+      data: {
+        items: [{
+          id: 'log_1',
+          time: '2026-05-16T00:00:00Z',
+          actionKey: 'refetchNews',
+          operation: 'Refetch news',
+          actor: 'admin',
+          status: 'success',
+          durationMs: 700,
+          message: 'Completed',
+        }],
+        page: 1,
+        size: 5,
+        totalElements: 11,
+        totalPages: 3,
+      },
+      meta: { traceId: 'req_2' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpOpsApi('/api/v1');
-    const logs = await api.listLogs({ limit: 5, cursor: 'log 2/3' });
+    const logs = await api.listLogs({ page: 1, size: 5 });
     const init = lastFetchInit();
 
-    expect(logs.page).toEqual({ nextCursor: 'log_1', hasMore: true });
-    expect(logs.data[0].id).toBe('log_1');
+    expect(logs).toMatchObject({ page: 1, size: 5, totalElements: 11, totalPages: 3 });
+    expect(logs.items[0].id).toBe('log_1');
     expect(init.credentials).toBe('include');
-    expect(fetch).toHaveBeenCalledWith('/api/v1/ops/logs?limit=5&cursor=log%202%2F3', expect.any(Object));
+    expect(fetch).toHaveBeenCalledWith('/api/v1/ops/logs?page=1&size=5', expect.any(Object));
+  });
+
+  it('http adapter defaults listLogs to page 0 size 30', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { items: [], page: 0, size: 30, totalElements: 0, totalPages: 0 },
+      meta: { traceId: 'req_default' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const api = createHttpOpsApi('/api/v1');
+    await api.listLogs();
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/ops/logs?page=0&size=30', expect.any(Object));
   });
 
   it('http adapter listLogs uses shared paginated error parsing', async () => {
@@ -155,7 +177,7 @@ describe('opsApi', () => {
 
     const api = createHttpOpsApi('/api/v1');
 
-    await expect(api.listLogs({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listLogs({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 403,
       code: 'OPS_PERMISSION_DENIED',
@@ -167,12 +189,12 @@ describe('opsApi', () => {
   it('http adapter converts failed listLogs envelopes to typed errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_PERMISSION_DENIED', message: 'Forbidden' },
-      requestId: 'req_3',
+      meta: { traceId: 'req_3' },
     }), { status: 403, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpOpsApi('/api/v1');
 
-    await expect(api.listLogs({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listLogs({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 403,
       code: 'OPS_PERMISSION_DENIED',
@@ -183,14 +205,13 @@ describe('opsApi', () => {
 
   it('http adapter rejects malformed listLogs paginated envelopes', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      data: [],
-      page: { nextCursor: 3, hasMore: 'yes' },
-      requestId: 'req_4',
+      data: { items: [], page: 'first', size: 5 },
+      meta: { traceId: 'req_4' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpOpsApi('/api/v1');
 
-    await expect(api.listLogs({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listLogs({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 200,
       code: 'INVALID_API_RESPONSE',

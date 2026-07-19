@@ -41,12 +41,15 @@ Keep mock mode available until backend parity is confirmed.
 
 ## Common API Conventions
 
-> ⚠️ **權威更正(2026-07-18)**:本節下方的 Success / Error / Pagination 信封是 **mock 早期草案**,
-> **與真實後端不一致**。REST 信封權威是後端 `stock-common` 的 `ApiResponse<T>`
-> (`{ success, data, error, meta.traceId }`);分頁端點回 `ApiResponse<PageResponse<T>>`,
-> 其中 `data = { items, page, size, totalElements, totalPages }`,是 **page-number 分頁(非 cursor)**。
-> 前端保留 cursor 介面時,須在 service adapter 內轉接(見 `vue-app/src/services/backtestApi.ts` 的 `listRuns`)。
-> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`;本檔全面對齊留待後續 follow-up。
+> ✅ **本節已與真實後端對齊(信封 2026-07-19、分頁 2026-07-19)**。REST 信封的權威來源是後端
+> `stock-common` 的 `ApiResponse<T>`:`{ success, data, error, meta }`,其中 `meta = { traceId, timestamp }`、
+> `error = { code, message, fields }`。後端 **不送** `requestId`,也 **不送** `error.field`(單數)或 `error.details`;
+> 前端追蹤 id 一律只從 `meta.traceId` 讀取。
+> 分頁端點回 `ApiResponse<PageResponse<T>>`,其中 `data = { items, page, size, totalElements, totalPages }`,
+> 是 **page-number 分頁(非 cursor)**;前端 `PaginatedResponse<T>` 與後端 `PageResponse<T>` 同形,
+> 三個 list API(`listRuns` / `listLogs` / `listAuditCalls`)一律收 `page`/`size`,
+> 原本的 cursor anti-corruption adapter 已移除,前後端分頁契約現為 1:1。
+> 完整裁決見 `stock-web-v2/ai-docs/judgment.md §4`。
 
 Base path:
 
@@ -60,35 +63,45 @@ Success envelope:
 
 ```json
 {
+  "success": true,
   "data": {},
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "...", "timestamp": "2026-05-16T01:30:00Z" }
 }
 ```
 
-Error envelope:
+Error envelope(`error.fields` 為欄位級驗證錯誤,`Map<String, String>`,可省略):
 
 ```json
 {
+  "success": false,
+  "data": null,
   "error": {
     "code": "BACKTEST_STRATEGY_COMPILE_FAILED",
     "message": "Unexpected token ';'",
-    "field": "strategyCode",
-    "details": {}
+    "fields": {
+      "strategyCode": "Unexpected token ';' at line 1, column 20"
+    }
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "...", "timestamp": "2026-05-16T01:30:00Z" }
 }
 ```
 
-Pagination uses cursor pagination:
+Pagination uses page-number pagination (query params `page` 起始 0 與 `size`),
+回應為 `ApiResponse<PageResponse<T>>`:
 
 ```json
 {
-  "data": [],
-  "page": {
-    "nextCursor": "cursor_...",
-    "hasMore": true
+  "success": true,
+  "data": {
+    "items": [],
+    "page": 0,
+    "size": 20,
+    "totalElements": 0,
+    "totalPages": 0
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -160,6 +173,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "bt_01HZX...",
     "strategyId": "ma_cross",
@@ -173,7 +187,8 @@ Response:
     "startedAt": null,
     "completedAt": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -195,12 +210,14 @@ Success:
 
 ```json
 {
+  "success": true,
   "data": {
     "valid": true,
     "normalizedName": "strategy",
     "warnings": []
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -208,16 +225,16 @@ Compile failure:
 
 ```json
 {
+  "success": false,
+  "data": null,
   "error": {
     "code": "BACKTEST_STRATEGY_COMPILE_FAILED",
     "message": "Unexpected token ';'",
-    "field": "strategyCode",
-    "details": {
-      "line": 1,
-      "column": 20
+    "fields": {
+      "strategyCode": "Unexpected token ';' at line 1, column 20"
     }
   },
-  "requestId": "req_01HZX..."
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -231,6 +248,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "bt_01HZX...",
     "status": "running",
@@ -243,7 +261,8 @@ Response:
     "completedAt": null,
     "error": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -257,6 +276,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "runId": "bt_01HZX...",
     "status": "succeeded",
@@ -293,7 +313,8 @@ Response:
       }
     ]
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -303,10 +324,10 @@ Response:
 GET /api/v1/backtests/runs?symbol=AAPL&page=0&size=20
 ```
 
-> ⚠️ 真後端為 **page-number** 分頁:query 用 `page`/`size`(非 `limit`/`cursor`),
-> 回 `ApiResponse<PageResponse<BacktestRunDto>>`(`data = { items, page, size, totalElements, totalPages }`)。
-> 前端 cursor 介面由 `backtestApi.ts` 的 `listRuns` adapter 轉接(page 序號 ↔ opaque cursor)。
-> 見上方「權威更正」與 `ai-docs/judgment.md §4`。
+真後端為 **page-number** 分頁:query 用 `page`(起始 0,預設 0)/`size`(預設 20),
+回 `ApiResponse<PageResponse<BacktestRunDto>>`(`data = { items, page, size, totalElements, totalPages }`)。
+前端 `backtestApi.listRuns` 直接透過共用的 `apiPaginatedRequest` 消費此形狀,**無轉接層**。
+見上方「Common API Conventions」與 `ai-docs/judgment.md §4`。
 
 ### Backtest Error Codes
 
@@ -355,6 +376,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "key": "refetchNews",
@@ -373,7 +395,8 @@ Response:
       "enabled": true
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -402,6 +425,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "ops_01HZX...",
     "actionKey": "refetchNews",
@@ -412,7 +436,8 @@ Response:
     "startedBy": "admin",
     "message": null
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -426,6 +451,7 @@ Response when busy:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "ops_01HZX...",
     "actionKey": "refetchNews",
@@ -434,7 +460,8 @@ Response when busy:
     "startedAt": "2026-05-16T01:34:00Z",
     "startedBy": "admin"
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -442,8 +469,10 @@ Response when idle:
 
 ```json
 {
+  "success": true,
   "data": null,
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -463,30 +492,34 @@ Status values:
 ### List Logs
 
 ```http
-GET /api/v1/ops/logs?limit=30&cursor=...
+GET /api/v1/ops/logs?page=0&size=30
 ```
 
 Response:
 
 ```json
 {
-  "data": [
-    {
-      "id": "log_01HZX...",
-      "time": "2026-05-16T01:34:01Z",
-      "actionKey": "refetchNews",
-      "operation": "Refetch news",
-      "actor": "admin",
-      "status": "success",
-      "durationMs": 700,
-      "message": "Completed"
-    }
-  ],
-  "page": {
-    "nextCursor": null,
-    "hasMore": false
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "log_01HZX...",
+        "time": "2026-05-16T01:34:01Z",
+        "actionKey": "refetchNews",
+        "operation": "Refetch news",
+        "actor": "admin",
+        "status": "success",
+        "durationMs": 700,
+        "message": "Completed"
+      }
+    ],
+    "page": 0,
+    "size": 30,
+    "totalElements": 1,
+    "totalPages": 1
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -539,6 +572,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "binance",
@@ -557,7 +591,8 @@ Response:
       "supportsSandbox": false
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -571,6 +606,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "key_01HZX...",
@@ -590,7 +626,8 @@ Response:
       }
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -626,6 +663,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "id": "key_01HZX...",
     "provider": "binance",
@@ -642,7 +680,8 @@ Response:
       "expiresAt": null
     }
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -656,6 +695,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "keyId": "key_01HZX...",
     "status": "ok",
@@ -663,7 +703,8 @@ Response:
     "latencyMs": 218,
     "message": "Connected"
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -702,10 +743,12 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": {
     "revoked": true
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -719,6 +762,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "readonly",
@@ -748,7 +792,8 @@ Response:
       "editable": false
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -774,6 +819,7 @@ Response:
 
 ```json
 {
+  "success": true,
   "data": [
     {
       "id": "agent_01HZX...",
@@ -783,7 +829,8 @@ Response:
       "lastUsedAt": "2026-05-16T01:35:00Z"
     }
   ],
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 
@@ -796,30 +843,34 @@ Revokes the agent token/session.
 ### Recent Tool Calls
 
 ```http
-GET /api/v1/ai-access/audit-calls?limit=50&cursor=...
+GET /api/v1/ai-access/audit-calls?page=0&size=20
 ```
 
 Response:
 
 ```json
 {
-  "data": [
-    {
-      "id": "call_01HZX...",
-      "time": "2026-05-16T01:35:00Z",
-      "agent": "Claude Desktop",
-      "tool": "markets.get_quote",
-      "argsSummary": "symbol=AAPL",
-      "ok": true,
-      "durationMs": 84,
-      "errorCode": null
-    }
-  ],
-  "page": {
-    "nextCursor": null,
-    "hasMore": false
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "call_01HZX...",
+        "time": "2026-05-16T01:35:00Z",
+        "agent": "Claude Desktop",
+        "tool": "markets.get_quote",
+        "argsSummary": "symbol=AAPL",
+        "ok": true,
+        "durationMs": 84,
+        "errorCode": null
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1
   },
-  "requestId": "req_01HZX..."
+  "error": null,
+  "meta": { "traceId": "..." }
 }
 ```
 

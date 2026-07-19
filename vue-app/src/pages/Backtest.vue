@@ -303,7 +303,7 @@ const result = computed(() => {
 
 async function loadHistory() {
   try {
-    history.value = (await backtestApi.listRuns({ limit: 20 })).data;
+    history.value = (await backtestApi.listRuns({ size: 20 })).items;
   } catch {
     // 歷史載入失敗不阻擋主要功能;錯誤由建立流程另行呈現
   }

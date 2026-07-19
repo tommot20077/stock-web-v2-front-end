@@ -33,29 +33,31 @@ describe('backtestApi', () => {
     const run = await api.createRun(request);
     const loaded = await api.getRun(run.id);
     const result = await api.getResult(run.id);
-    const list = await api.listRuns({ symbol: 'AAPL', limit: 10 });
+    const list = await api.listRuns({ symbol: 'AAPL', size: 10 });
 
     expect(run).toMatchObject({ strategyId: 'ma_cross', symbol: 'AAPL', status: 'succeeded' });
     expect(loaded.id).toBe(run.id);
     expect(result.runId).toBe(run.id);
     expect(result.kpis.tradeCount).toBeGreaterThan(0);
-    expect(list.data.map(item => item.id)).toContain(run.id);
+    expect(list.items.map(item => item.id)).toContain(run.id);
+    expect(list.page).toBe(0);
+    expect(list.size).toBe(10);
   });
 
-  it('mock adapter paginates runs with offset cursors', async () => {
+  it('mock adapter paginates runs by page number', async () => {
     const api = createMockBacktestApi();
     const firstRun = await api.createRun({ ...request, symbol: 'MSFT' });
     const secondRun = await api.createRun({ ...request, symbol: 'MSFT' });
     const thirdRun = await api.createRun({ ...request, symbol: 'MSFT' });
 
-    const firstPage = await api.listRuns({ symbol: 'MSFT', limit: 2 });
-    const secondPage = await api.listRuns({ symbol: 'MSFT', limit: 2, cursor: firstPage.page.nextCursor });
+    const firstPage = await api.listRuns({ symbol: 'MSFT', size: 2 });
+    const secondPage = await api.listRuns({ symbol: 'MSFT', size: 2, page: 1 });
 
-    expect(firstPage.data.map(item => item.id)).toEqual([thirdRun.id, secondRun.id]);
-    expect(firstPage.page).toEqual({ nextCursor: '2', hasMore: true });
-    expect(secondPage.data.map(item => item.id)).toEqual([firstRun.id]);
-    expect(secondPage.page).toEqual({ nextCursor: null, hasMore: false });
-    expect(new Set([...firstPage.data, ...secondPage.data].map(item => item.id)).size).toBe(3);
+    expect(firstPage.items.map(item => item.id)).toEqual([thirdRun.id, secondRun.id]);
+    expect(firstPage).toMatchObject({ page: 0, size: 2, totalElements: 3, totalPages: 2 });
+    expect(secondPage.items.map(item => item.id)).toEqual([firstRun.id]);
+    expect(secondPage).toMatchObject({ page: 1, size: 2, totalElements: 3, totalPages: 2 });
+    expect(new Set([...firstPage.items, ...secondPage.items].map(item => item.id)).size).toBe(3);
   });
 
   it('mock adapter rejects invalid custom strategy code', async () => {
@@ -74,7 +76,7 @@ describe('backtestApi', () => {
         document.cookie = 'XSRF-TOKEN=csrf-backtest; path=/';
         return new Response(JSON.stringify({
           data: { cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' },
-          requestId: 'req_csrf',
+          meta: { traceId: 'req_csrf' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs')) {
@@ -88,13 +90,13 @@ describe('backtestApi', () => {
             startedAt: null,
             completedAt: null,
           },
-          requestId: 'req_1',
+          meta: { traceId: 'req_1' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/strategies/validate')) {
         return new Response(JSON.stringify({
           data: { valid: true, normalizedName: 'strategy', warnings: [] },
-          requestId: 'req_2',
+          meta: { traceId: 'req_2' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs/bt_1')) {
@@ -108,7 +110,7 @@ describe('backtestApi', () => {
             startedAt: null,
             completedAt: null,
           },
-          requestId: 'req_3',
+          meta: { traceId: 'req_3' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/api/v1/backtests/runs/bt_1/result')) {
@@ -133,7 +135,7 @@ describe('backtestApi', () => {
             drawdownCurve: [],
             trades: [],
           },
-          requestId: 'req_4',
+          meta: { traceId: 'req_4' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       // 真實後端 list 信封:data 為 PageResponse(items/page/size/totalElements/totalPages)
@@ -150,7 +152,7 @@ describe('backtestApi', () => {
     const validateInit = lastFetchInit();
     const loaded = await api.getRun('bt_1');
     const result = await api.getResult('bt_1');
-    const list = await api.listRuns({ limit: 5 });
+    const list = await api.listRuns({ size: 5 });
     const listInit = lastFetchInit();
 
     expect(run.id).toBe('bt_1');
@@ -160,7 +162,7 @@ describe('backtestApi', () => {
     expect(validateInit.method).toBe('POST');
     expect(loaded.status).toBe('running');
     expect(result.runId).toBe('bt_1');
-    expect(list.page.hasMore).toBe(false);
+    expect(list).toEqual({ items: [], page: 0, size: 5, totalElements: 0, totalPages: 0 });
     expect(listInit.credentials).toBe('include');
     expect(fetch).toHaveBeenCalledWith('/api/v1/backtests/runs?page=0&size=5', expect.any(Object));
   });
@@ -173,7 +175,7 @@ describe('backtestApi', () => {
 
     const api = createHttpBacktestApi('/api/v1');
 
-    await expect(api.listRuns({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listRuns({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 403,
       code: 'BACKTEST_PERMISSION_DENIED',
@@ -182,15 +184,17 @@ describe('backtestApi', () => {
     });
   });
 
-  it('http adapter converts paginated error envelopes to typed errors without request ids', async () => {
+  it('http adapter converts paginated error envelopes without usable meta.traceId to null request ids', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: false,
+      data: null,
       error: { code: 'BACKTEST_RUN_TIMEOUT', message: 'Timed out' },
-      requestId: 123,
+      meta: { traceId: 123 },
     }), { status: 504, headers: { 'Content-Type': 'application/json' } })));
 
     const api = createHttpBacktestApi('/api/v1');
 
-    await expect(api.listRuns({ limit: 5 })).rejects.toMatchObject({
+    await expect(api.listRuns({ size: 5 })).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 504,
       code: 'BACKTEST_RUN_TIMEOUT',

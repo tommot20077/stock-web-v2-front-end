@@ -1,32 +1,42 @@
 export type RuntimeDataMode = 'mock' | 'api';
 
-export interface ApiSuccess<T> {
-  data: T;
-  requestId: string;
+/** 對應後端 stock-common 的 ApiMeta(traceId + timestamp)。 */
+export interface ApiMeta {
+  traceId: string;
+  timestamp?: string;
 }
 
+/** 對應後端 stock-common 的 ApiError;後端只送 code / message / fields。 */
 export interface ApiErrorBody {
   code: string;
   message: string;
-  field?: string;
-  details?: Record<string, unknown>;
+  /** 欄位級驗證錯誤;後端 ApiError.fields(Map<String,String>) */
+  fields?: Record<string, string>;
 }
 
+/** 對應後端 ApiResponse<T> 的成功分支。 */
+export interface ApiSuccess<T> {
+  success: true;
+  data: T;
+  error: null;
+  meta: ApiMeta;
+}
+
+/** 對應後端 ApiResponse<T> 的失敗分支。 */
 export interface ApiFailure {
+  success: false;
+  data: null;
   error: ApiErrorBody;
-  requestId: string;
+  meta: ApiMeta;
 }
 
-export interface PageInfo {
-  nextCursor: string | null;
-  hasMore: boolean;
-}
-
+/** 對應後端 stock-common 的 PageResponse<T>;為 ApiResponse 信封中的 data 內容。 */
 export interface PaginatedResponse<T> {
-  data: T[];
-  page: PageInfo;
-  /** 舊草案信封欄位;真後端信封為 ApiResponse<T>(meta.traceId),此欄位選填、多數轉接不帶。見 judgment.md §4。 */
-  requestId?: string;
+  items: T[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
 }
 
 export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'custom';

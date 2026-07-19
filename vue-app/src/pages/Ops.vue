@@ -91,11 +91,11 @@ async function refreshOpsData() {
     const [nextActions, nextCurrentJob, nextLogs] = await Promise.all([
       opsApi.getActions(),
       opsApi.getCurrentJob(),
-      opsApi.listLogs({ limit: 30 }),
+      opsApi.listLogs({ size: 30 }),
     ]);
     actions.value = nextActions;
     currentJob.value = nextCurrentJob;
-    logs.value = nextLogs.data;
+    logs.value = nextLogs.items;
   } catch (error: any) {
     actions.value = [];
     currentJob.value = null;

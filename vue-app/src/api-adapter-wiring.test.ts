@@ -94,7 +94,7 @@ describe('page API adapter wiring', () => {
     vi.stubEnv('VITE_DATA_MODE', 'api');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'OPS_UNAVAILABLE', message: 'Ops unavailable' },
-      requestId: 'req_ops_down',
+      meta: { traceId: 'req_ops_down' },
     }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
     const toasts: string[] = [];
 
@@ -135,7 +135,7 @@ describe('page API adapter wiring', () => {
     vi.stubEnv('VITE_DATA_MODE', 'api');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { code: 'AI_ACCESS_UNAVAILABLE', message: 'AI access unavailable' },
-      requestId: 'req_ai_down',
+      meta: { traceId: 'req_ai_down' },
     }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
     const toasts: string[] = [];
 

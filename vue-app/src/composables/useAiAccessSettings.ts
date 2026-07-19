@@ -302,8 +302,8 @@ export function useAiAccessSettings(options: UseAiAccessSettingsOptions) {
 
   async function refreshAuditCalls() {
     try {
-      const nextCalls = await api.listAuditCalls({ limit: 20 });
-      calls.splice(0, calls.length, ...nextCalls.data.map(callFromDto));
+      const nextCalls = await api.listAuditCalls({ size: 20 });
+      calls.splice(0, calls.length, ...nextCalls.items.map(callFromDto));
     } catch {
       calls.splice(0, calls.length);
     }
