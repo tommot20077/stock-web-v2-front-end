@@ -351,6 +351,16 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(rows()).toHaveLength(1);
   });
 
+  it('API mode 的持倉列不帶 lastFill 高亮(無成交事件來源,Phase 4 才接 post-trade refetch)', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
+      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+    );
+
+    expect(rows()).toHaveLength(2);
+    expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(0);
+  });
+
   it('Positions 不 import mock store,一律經 getRuntimeApiClients(PORT-04 / judgment §3)', () => {
     expect(positionsSource).not.toContain('useMockPortfolioStore');
     expect(positionsSource).not.toContain('stores/mockPortfolio');
