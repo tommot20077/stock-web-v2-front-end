@@ -3,27 +3,37 @@
     <div class="row-between" style="grid-column: span 12; align-items:center">
       <div>
         <h2>{{ t(lang, 'positions') }}</h2>
-        <div class="sub">${{ fmtNum(totalVal, 0) }} · {{ portfolio.positions.length }} {{ lang === 'zh' ? '檔' : 'holdings' }}</div>
+        <!-- 標題列彙總:mock 由持倉陣列加總,API mode 讀 summary 後端欄位(D-04) -->
+        <div v-if="live" class="sub">${{ fmtNum(totalVal, 0) }} · {{ mockPositions.length }} {{ lang === 'zh' ? '檔' : 'holdings' }}</div>
+        <div v-else-if="summary" class="sub" data-testid="positions-header-summary">
+          ${{ fmtNum(summary.totalMarketValue, 0) }} · {{ summary.holdingCount }} {{ lang === 'zh' ? '檔' : 'holdings' }}
+        </div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
-        <div class="seg">
-          <button
-            v-for="r in ranges"
-            :key="r.id"
-            :class="['seg-btn', { active: range === r.id }]"
-            @click="range = r.id"
-          >{{ r.label }}</button>
-        </div>
-        <button class="btn-tm" :class="{ on: scrubOn }" @click="toggleScrub">
-          <span style="font-size:13px">🕐</span>
-          {{ lang === 'zh' ? '時光機' : 'Time machine' }}
-        </button>
+        <!--
+          range 選擇器與時光機都建構在 genSeries / priceAt 的合成序列之上,
+          後端沒有日級歷史可推導 → API mode 隱藏(D-16)。
+        -->
+        <template v-if="live">
+          <div class="seg">
+            <button
+              v-for="r in ranges"
+              :key="r.id"
+              :class="['seg-btn', { active: range === r.id }]"
+              @click="range = r.id"
+            >{{ r.label }}</button>
+          </div>
+          <button class="btn-tm" :class="{ on: scrubOn }" @click="toggleScrub">
+            <span style="font-size:13px">🕐</span>
+            {{ lang === 'zh' ? '時光機' : 'Time machine' }}
+          </button>
+        </template>
         <button class="btn-accent" @click="$emit('order')">+ {{ t(lang, 'newOrder') }}</button>
       </div>
     </div>
 
-    <!-- ===== Time machine scrubber ===== -->
-    <div v-if="scrubOn" class="tm-bar" style="grid-column: span 12">
+    <!-- ===== Time machine scrubber(mock only,D-16) ===== -->
+    <div v-if="live && scrubOn" class="tm-bar" style="grid-column: span 12">
       <div class="tm-l">
         <span class="tm-icon">📅</span>
         <div>
@@ -63,15 +73,51 @@
       </div>
     </div>
 
-    <!-- KPIs (animated, change with range/scrub) -->
-    <div v-for="(s, i) in stats" :key="i" class="card stat" :class="{ scrubbed: scrubDays > 0 }">
-      <div class="stat-l">{{ s.l }}</div>
-      <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}</div>
-      <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
+    <!--
+      彙總條。mock:六張含 Sharpe/年化/MaxDD 的合成卡照舊。
+      API mode(D-14 落點 + D-16):六張全部改讀 summary 後端欄位,假 KPI 就地被取代。
+    -->
+    <div
+      v-if="!live && summaryLoading"
+      class="card stat block-state"
+      data-testid="positions-summary-loading"
+      style="grid-column: span 12"
+    >
+      {{ t(lang, 'loading') }}
     </div>
+    <div
+      v-else-if="!live && summaryError"
+      class="card stat block-error"
+      data-testid="positions-summary-error"
+      style="grid-column: span 12"
+    >
+      <div>{{ t(lang, 'loadFailed') }}</div>
+      <div class="details">
+        <span data-testid="positions-summary-error-code">{{ summaryError.code }}</span>
+        <span v-if="summaryError.traceId" data-testid="positions-summary-trace-id">
+          {{ t(lang, 'authRequestId') }} {{ summaryError.traceId }}
+        </span>
+      </div>
+      <button class="block-retry" data-testid="positions-summary-retry" @click="loadSummary">
+        {{ t(lang, 'authRetry') }}
+      </button>
+    </div>
+    <template v-else>
+      <div
+        v-for="(s, i) in statCards"
+        :key="i"
+        class="card stat"
+        data-testid="positions-stat"
+        :class="{ scrubbed: scrubDays > 0 }"
+      >
+        <div class="stat-l">{{ s.l }}</div>
+        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}</div>
+        <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
+      </div>
+    </template>
 
-    <!-- Equity curve -->
-    <div class="card chart" style="grid-column: span 8">
+    <!-- Equity curve:genSeries 合成序列,需日級歷史 → API mode 隱藏(D-16) -->
+    <div v-if="live" class="card chart" style="grid-column: span 8">
       <div class="row-between" style="margin-bottom:6px">
         <div>
           <div class="ttl">{{ t(lang, 'assetTrend') }}</div>
@@ -95,10 +141,10 @@
       </div>
     </div>
 
-    <!-- Top movers -->
-    <div class="card" style="grid-column: span 4; padding: 20px">
+    <!-- Top movers:API mode 由後端 unrealizedPnl 排序推導(D-16 例外:可真實推導者不隱藏) -->
+    <div v-if="live || movers.length" class="card" :style="{ gridColumn: live ? 'span 4' : 'span 12', padding: '20px' }">
       <div class="ttl" style="margin-bottom:14px">{{ t(lang, 'topMovers') }}</div>
-      <div v-for="m in topMovers" :key="m.sym" class="mover">
+      <div v-for="m in movers" :key="m.sym" class="mover">
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
           <div class="mtag">{{ m.sym.slice(0, 2) }}</div>
           <div style="min-width:0">
@@ -115,8 +161,11 @@
       </div>
     </div>
 
-    <!-- Sector breakdown -->
-    <div class="card" style="grid-column: span 12; padding: 20px">
+    <!--
+      Sector breakdown:HoldingDto 無 sector,API mode 全部持倉會歸 'Other' 等同假資料
+      → 隱藏(D-01 更正 + D-16)。mock mode 照舊。
+    -->
+    <div v-if="live" class="card" style="grid-column: span 12; padding: 20px">
       <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'sectorBreakdown') }}</div>
       <div class="sectors">
         <div v-for="(s, i) in sectorStats" :key="s.name" class="sector">
@@ -141,7 +190,30 @@
 
     <!-- Holdings table -->
     <div class="card" style="grid-column: span 12; overflow: hidden">
-      <table>
+      <!--
+        Q5(大清單):loading 不依賴資料筆數,先渲染固定骨架列,資料到位後一次填入完整表格。
+        本階段不做虛擬捲動(holdings 後端不分頁,實測筆數見 SUMMARY)。
+      -->
+      <div v-if="!live && holdingsLoading" class="block-state" data-testid="positions-holdings-loading">
+        <div style="margin-bottom:10px">{{ t(lang, 'loading') }}</div>
+        <div v-for="i in 6" :key="i" class="skeleton-row" />
+      </div>
+      <div v-else-if="!live && holdingsError" class="block-error" data-testid="positions-holdings-error">
+        <div>{{ t(lang, 'loadFailed') }}</div>
+        <div class="details">
+          <span data-testid="positions-holdings-error-code">{{ holdingsError.code }}</span>
+          <span v-if="holdingsError.traceId" data-testid="positions-holdings-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ holdingsError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="positions-holdings-retry" @click="loadHoldings">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
+      <div v-else-if="!live && !holdings.length" class="block-state" data-testid="positions-holdings-empty">
+        {{ t(lang, 'noHoldings') }}
+      </div>
+      <table v-else>
         <thead>
           <tr>
             <th @click="sort('sym')" :class="{ s: sortKey === 'sym' }">{{ t(lang, 'symbol') }}<SortArrow :k="'sym'" :sk="sortKey" :sd="sortDir" /></th>
@@ -154,11 +226,13 @@
             <th @click="sort('weight')" :class="{ s: sortKey === 'weight' }" style="text-align:right;padding-right:16px">{{ t(lang, 'weight') }}<SortArrow :k="'weight'" :sk="sortKey" :sd="sortDir" /></th>
           </tr>
         </thead>
-        <tbody>
+        <!-- mock 路徑:計算邏輯與 Phase 3 之前逐字相同(含時光機 scrub 效果與 lastFill 高亮) -->
+        <tbody v-if="live">
           <tr
             v-for="p in sortedPositions"
             :key="p.sym"
-            :class="{ fresh: portfolio.lastFill && p.sym === portfolio.lastFill.sym, scrubbed: scrubDays > 0 }"
+            data-testid="positions-row"
+            :class="{ fresh: mockLastFill && p.sym === mockLastFill.sym, scrubbed: scrubDays > 0 }"
             @click="$emit('order', { sym: p.sym })"
           >
             <td style="font-weight:600;padding-left:16px">{{ p.sym }}</td>
@@ -184,23 +258,157 @@
             </td>
           </tr>
         </tbody>
+        <!--
+          API 路徑:每一格都是後端欄位(D-04)。唯一的前端衍生是 weight,
+          且分母是 summary.totalMarketValue 而非 qty×price 的自行加總(D-04 例外條款)。
+          lastFill 在 API mode 無成交事件來源,故不綁 fresh class(Phase 4 引入 post-trade refetch 時再接)。
+        -->
+        <tbody v-else>
+          <tr
+            v-for="h in sortedHoldings"
+            :key="h.assetId"
+            data-testid="positions-row"
+            @click="$emit('order', { sym: h.symbol })"
+          >
+            <td style="font-weight:600;padding-left:16px">{{ h.symbol }}</td>
+            <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
+            <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(h.avgCost) }}</td>
+            <td class="num" style="text-align:right">
+              ${{ fmtNum(h.marketPrice) }}
+              <!-- D-03:行情來自快取可能延遲,顯示時間讓使用者知道資料新鮮度 -->
+              <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
+            </td>
+            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(h.marketValue, 0) }}</td>
+            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
+              <div>{{ signedMoney(h.unrealizedPnl) }}</div>
+              <div style="font-size:11px">{{ fmtPct(h.roi * 100) }}</div>
+            </td>
+            <td style="text-align:right;padding-right:16px">
+              <div style="display:inline-flex;align-items:center;gap:8px">
+                <div class="bar"><div class="bar-fill" :style="{ width: holdingWeightWidth(h) }" /></div>
+                <span data-testid="positions-weight" style="font-size:11px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
       </table>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue';
+import { computed, h as createElement, onMounted, ref } from 'vue';
 import { t } from '../i18n';
 import { genSeries, fmtNum, fmtPct } from '../data';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { Lang, Position } from '../types';
+import { ApiClientError } from '../services/apiClient';
+import type { HoldingDto, PortfolioSummaryDto } from '../services/apiTypes';
+import { getRuntimeApiClients } from '../services/pageApiClients';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
 defineEmits<{ (e: 'order', preset?: { sym: string }): void }>();
-const portfolio = useMockPortfolioStore();
 
+// judgment §3:頁面只認 domain service,永不 import mock store。
+// 分支條件是 `live` 是否存在,不是 mode 字串(見 03-02-SUMMARY 的消費契約)。
+const api = getRuntimeApiClients().portfolio;
+const live = api.live;
+
+// live 的 getter 每次存取才解析 store,故必須在 computed / render 內取用才有 reactivity。
+const mockPositions = computed<Position[]>(() => (live ? live.positions : []));
+const mockLastFill = computed(() => (live ? live.lastFill : null));
+
+// =============== API mode 區塊狀態機(D-11:兩區塊各自載入、各自重試) ===============
+interface BlockError {
+  code: string;
+  traceId: string | null;
+}
+
+type BlockState<T> =
+  | { status: 'loading' }
+  | { status: 'loaded'; data: T }
+  | { status: 'error'; error: BlockError };
+
+const summaryState = ref<BlockState<PortfolioSummaryDto>>({ status: 'loading' });
+const holdingsState = ref<BlockState<HoldingDto[]>>({ status: 'loading' });
+
+// 模板不做型別窄化(vue-tsc 對模板內 union 窄化支援不穩),一律先投影成 computed。
+const summaryLoading = computed(() => summaryState.value.status === 'loading');
+const summaryError = computed(() => (summaryState.value.status === 'error' ? summaryState.value.error : null));
+const summary = computed(() => (summaryState.value.status === 'loaded' ? summaryState.value.data : null));
+
+const holdingsLoading = computed(() => holdingsState.value.status === 'loading');
+const holdingsError = computed(() => (holdingsState.value.status === 'error' ? holdingsState.value.error : null));
+const holdings = computed(() => (holdingsState.value.status === 'loaded' ? holdingsState.value.data : []));
+
+// D-12:診斷資訊只在錯誤狀態出現,且只露 code / traceId(不外洩後端 message)。
+function describeError(error: unknown): BlockError {
+  if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
+  return { code: 'UNKNOWN_ERROR', traceId: null };
+}
+
+async function loadSummary() {
+  summaryState.value = { status: 'loading' };
+  try {
+    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+  } catch (error) {
+    summaryState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+async function loadHoldings() {
+  holdingsState.value = { status: 'loading' };
+  try {
+    holdingsState.value = { status: 'loaded', data: await api.listHoldings() };
+  } catch (error) {
+    holdingsState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+onMounted(() => {
+  // mock mode 完全走 live 委派,不打任何網路。
+  if (live) return;
+  void loadSummary();
+  void loadHoldings();
+});
+
+function signedMoney(value: number): string {
+  return `${value >= 0 ? '+' : '-'}$${fmtNum(Math.abs(value), 0)}`;
+}
+
+/** D-03:priceTime 為 ISO-8601 或 null(mock 端恆為 null),格式化為本地日期時間短格式。 */
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * D-04 明文例外:後端 HoldingDto / PortfolioSummaryDto 都沒有 weight,只能前端衍生。
+ * 但分母必須是後端的 summary.totalMarketValue —— 不得改用本頁 holdings 的 qty×price 自行加總。
+ * summary 尚未載入(或分母為 0)時回 null,呈現為破折號而非編造 0.0%。
+ */
+function holdingWeight(holding: HoldingDto): number | null {
+  const s = summary.value;
+  if (!s || !Number.isFinite(s.totalMarketValue) || s.totalMarketValue === 0) return null;
+  if (!Number.isFinite(holding.marketValue)) return null;
+  return holding.marketValue / s.totalMarketValue * 100;
+}
+
+function holdingWeightLabel(holding: HoldingDto): string {
+  const w = holdingWeight(holding);
+  return w === null ? '—' : `${w.toFixed(1)}%`;
+}
+
+function holdingWeightWidth(holding: HoldingDto): string {
+  const w = holdingWeight(holding);
+  return `${w === null ? 0 : Math.max(0, Math.min(100, w))}%`;
+}
+
+// =============== mock mode:以下計算與模板與 Phase 3 之前完全相同 ===============
 type Range = '1D' | '1W' | '1M' | '3M' | '1Y' | 'ALL';
 const range = ref<Range>('1M');
 const ranges = computed(() => [
@@ -234,8 +442,8 @@ const rangeCfg: Record<Range, { n: number; mult: number; vol: number; sharpe: st
   'ALL': { n: 180, mult: 0.348, vol: 0.0110, sharpe: '1.62', annual: '+16.8%', dd: '-18.6%', seed: 41 },
 };
 
-const totalCost = computed(() => portfolio.positions.reduce((s, p) => s + p.qty * p.avg, 0));
-const totalVal = computed(() => portfolio.positions.reduce((s, p) => s + p.qty * p.price, 0));
+const totalCost = computed(() => mockPositions.value.reduce((s, p) => s + p.qty * p.avg, 0));
+const totalVal = computed(() => mockPositions.value.reduce((s, p) => s + p.qty * p.price, 0));
 
 // Range-scoped P&L (so it changes with range)
 const rangePnl = computed(() => {
@@ -252,7 +460,7 @@ const series = computed(() => {
   return genSeries(cfg.n, start, cfg.vol, cfg.seed);
 });
 
-const stats = computed(() => {
+const mockStats = computed(() => {
   const cfg = rangeCfg[range.value];
   const pnl = rangePnl.value;
   return [
@@ -295,21 +503,50 @@ const stats = computed(() => {
   ];
 });
 
+/**
+ * API mode 的六張卡全部來自 summary 後端欄位(D-14 授權落點 + D-04);
+ * roi 是比值,×100 是顯示格式化而非平行重算。Sharpe / 年化 / MaxDD 三張寫死卡就地被取代(D-16)。
+ */
+const apiStats = computed(() => {
+  const s = summary.value;
+  if (!s) return [];
+  return [
+    { l: t(props.lang, 'mktValue'), v: '$' + fmtNum(s.totalMarketValue, 0), up: null as boolean | null, delta: '' },
+    { l: t(props.lang, 'unrealized'), v: signedMoney(s.unrealizedPnl), up: (s.unrealizedPnl >= 0) as boolean | null, delta: '' },
+    { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), up: (s.roi >= 0) as boolean | null, delta: '' },
+    { l: t(props.lang, 'realizedPnl'), v: signedMoney(s.realizedPnl), up: (s.realizedPnl >= 0) as boolean | null, delta: '' },
+    { l: t(props.lang, 'totalPnlLabel'), v: signedMoney(s.totalPnl), up: (s.totalPnl >= 0) as boolean | null, delta: '' },
+    { l: t(props.lang, 'costBasis'), v: '$' + fmtNum(s.totalCostBasis, 0), up: null as boolean | null, delta: '' },
+  ];
+});
+
+const statCards = computed(() => (live ? mockStats.value : apiStats.value));
+
 // Top movers (P&L abs) — top 4
-const topMovers = computed(() => {
-  return [...portfolio.positions]
+const mockTopMovers = computed(() => {
+  return [...mockPositions.value]
     .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p) }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
     .slice(0, 4);
 });
 
-// Sector breakdown
+// D-16 例外:可由後端 unrealizedPnl / roi 真實推導,故不隱藏。
+const apiTopMovers = computed(() => {
+  return [...holdings.value]
+    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnl, pct: x.roi * 100 }))
+    .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
+    .slice(0, 4);
+});
+
+const movers = computed(() => (live ? mockTopMovers.value : apiTopMovers.value));
+
+// Sector breakdown(mock only)
 const SECTOR_COLORS = ['var(--accent)', '#3b82f6', '#a855f7', '#f59e0b', '#94a3b8', '#10b981'];
 function sectorColor(i: number) { return SECTOR_COLORS[i % SECTOR_COLORS.length]; }
 
 const sectorStats = computed(() => {
   const map: Record<string, { value: number; cost: number; count: number }> = {};
-  for (const p of portfolio.positions) {
+  for (const p of mockPositions.value) {
     const k = p.sector || 'Other';
     if (!map[k]) map[k] = { value: 0, cost: 0, count: 0 };
     map[k].value += p.qty * p.price;
@@ -334,7 +571,7 @@ const sortKey = ref<SortKey | ''>('value');
 const sortDir = ref<'asc' | 'desc'>('desc');
 
 const sortedPositions = computed(() => {
-  const rows = [...portfolio.positions];
+  const rows = [...mockPositions.value];
   if (!sortKey.value) return rows;
   const dir = sortDir.value === 'asc' ? 1 : -1;
   const k = sortKey.value;
@@ -355,6 +592,32 @@ const sortedPositions = computed(() => {
   return rows;
 });
 
+/**
+ * API 路徑的排序值一律取後端欄位(D-04);holdings 為完整 List 不分頁,
+ * client-side 排序因此是正確的 —— 與 trades 的分頁情境不同,勿套用後端排序(CONTEXT specifics)。
+ */
+const sortedHoldings = computed(() => {
+  const rows = [...holdings.value];
+  if (!sortKey.value) return rows;
+  const dir = sortDir.value === 'asc' ? 1 : -1;
+  const k = sortKey.value;
+  rows.sort((a, b) => {
+    let va: any, vb: any;
+    switch (k) {
+      case 'sym': va = a.symbol; vb = b.symbol; break;
+      case 'qty': va = a.totalQuantity; vb = b.totalQuantity; break;
+      case 'avg': va = a.avgCost; vb = b.avgCost; break;
+      case 'price': va = a.marketPrice; vb = b.marketPrice; break;
+      case 'value': va = a.marketValue; vb = b.marketValue; break;
+      case 'pnl': va = a.unrealizedPnl; vb = b.unrealizedPnl; break;
+      case 'weight': va = holdingWeight(a) ?? 0; vb = holdingWeight(b) ?? 0; break;
+    }
+    if (typeof va === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb)) * dir;
+  });
+  return rows;
+});
+
 function sort(k: SortKey) {
   if (sortKey.value === k) {
     sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
@@ -365,7 +628,7 @@ function sort(k: SortKey) {
 }
 
 const SortArrow = (p: { k: string; sk: string; sd: 'asc' | 'desc' }) =>
-  p.k === p.sk ? h('span', { class: 'sort-a' }, p.sd === 'asc' ? '↑' : '↓') : null;
+  p.k === p.sk ? createElement('span', { class: 'sort-a' }, p.sd === 'asc' ? '↑' : '↓') : null;
 
 function safePct(numerator: number, denominator: number) {
   if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return 0;
@@ -375,7 +638,7 @@ function pnl(p: Position) { return p.qty * p.price - p.qty * p.avg; }
 function pnlPct(p: Position) { return safePct(pnl(p), p.qty * p.avg); }
 function weight(p: Position) { return safePct(p.qty * p.price, totalVal.value); }
 
-// =============== Time machine ===============
+// =============== Time machine(mock only,D-16) ===============
 const scrubOn = ref(false);
 const scrubDays = ref(0); // 0 = today, 365 = a year ago
 
@@ -411,7 +674,7 @@ function effPnlPct(p: Position) {
   return safePct(effPnl(p), p.qty * p.avg);
 }
 function effTotalVal() {
-  return portfolio.positions.reduce((s, p) => s + p.qty * effPrice(p), 0);
+  return mockPositions.value.reduce((s, p) => s + p.qty * effPrice(p), 0);
 }
 function effWeight(p: Position) {
   return safePct(p.qty * effPrice(p), effTotalVal());
@@ -435,7 +698,6 @@ const scrubDateLabel = computed(() => {
 // Scrubber marker position on the chart (% from left)
 const scrubMarkerPct = computed(() => {
   // Map scrubDays vs current range's lookback window
-  const cfg = rangeCfg[range.value];
   // approx days the curve spans
   const spanDays: Record<Range, number> = { '1D': 1, '1W': 7, '1M': 30, '3M': 90, '1Y': 365, 'ALL': 365 };
   const span = spanDays[range.value];
@@ -588,4 +850,25 @@ tr.scrubbed:hover { background: color-mix(in oklch, #a855f7 8%, transparent); }
   font-size: 10px; font-weight: 600; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* 區塊級狀態(D-11/D-12):診斷樣式沿用 SessionBanner / Overview 的 code/traceId 呈現慣例 */
+.block-state { padding: 18px 20px; font-size: 13px; color: var(--fg-dim); }
+.block-error { padding: 18px 20px; font-size: 13px; }
+.block-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.block-error .details span { overflow-wrap: anywhere; }
+.block-retry {
+  margin-top: 8px; min-height: 32px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
+}
+/* Q5:骨架列固定筆數,載入呈現不隨資料量變動 */
+.skeleton-row {
+  height: 14px; margin: 8px 0; border-radius: 4px;
+  background: var(--surface2);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>
