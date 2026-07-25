@@ -127,6 +127,18 @@ export const I18N: Record<Lang, Record<string, string>> = {
     authDetails: '診斷資訊',
     authStatus: 'HTTP 狀態',
     authRequestId: '追蹤 ID',
+    // Portfolio 頁面(持倉/交易/總覽)共用狀態文案;重試鈕複用既有 authRetry。
+    loading: '載入中…',
+    loadFailed: '讀取失敗',
+    noTrades: '尚無交易',
+    noHoldings: '尚無持倉',
+    noData: '尚無資料',
+    prevPage: '上一頁',
+    nextPage: '下一頁',
+    priceAsOf: '行情時間',
+    realizedPnl: '已實現損益',
+    totalPnlLabel: '總損益',
+    costBasis: '總成本',
   },
   en: {
     overview: 'Overview', markets: 'Markets', positions: 'Positions', analytics: 'Analytics', trades: 'Trades',
@@ -253,6 +265,18 @@ export const I18N: Record<Lang, Record<string, string>> = {
     authDetails: 'Diagnostics',
     authStatus: 'HTTP status',
     authRequestId: 'Trace ID',
+    // Portfolio page shared state copy; the retry button reuses authRetry.
+    loading: 'Loading…',
+    loadFailed: 'Failed to load',
+    noTrades: 'No trades yet',
+    noHoldings: 'No holdings yet',
+    noData: 'No data yet',
+    prevPage: 'Prev',
+    nextPage: 'Next',
+    priceAsOf: 'Price as of',
+    realizedPnl: 'Realized P&L',
+    totalPnlLabel: 'Total P&L',
+    costBasis: 'Cost basis',
   },
 };
 
