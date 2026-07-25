@@ -39,6 +39,54 @@ export interface PaginatedResponse<T> {
   totalPages: number;
 }
 
+/**
+ * 對應後端 PortfolioSummaryResponse;逐欄同形,勿增刪欄位(信封/契約權威是後端,judgment §4)。
+ */
+export interface PortfolioSummaryDto {
+  totalMarketValue: number;
+  totalCostBasis: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  /** 比值(非百分比):0.0117 = 1.17%。顯示時 ×100,那是格式化不是重算(D-04)。 */
+  roi: number;
+  holdingCount: number;
+}
+
+/** 對應後端 HoldingResponse。 */
+export interface HoldingDto {
+  assetId: string;
+  symbol: string;
+  assetName: string;
+  totalQuantity: number;
+  avgCost: number;
+  costBasis: number;
+  marketPrice: number;
+  marketValue: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  /** 比值(非百分比),同 PortfolioSummaryDto.roi。 */
+  roi: number;
+  /** ISO-8601;行情時間,D-03 要顯示。 */
+  priceTime: string | null;
+  lastUpdated: string | null;
+}
+
+/** 對應後端 TradeResponse。 */
+export interface TradeDto {
+  /** uuid;頁面用作 :key */
+  id: string;
+  symbol: string;
+  type: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  fee: number;
+  note: string | null;
+  /** ISO-8601;顯示取日期部分 */
+  executedAt: string;
+  createdAt: string;
+}
+
 export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'custom';
 export type BacktestPeriod = '1Y' | '3Y' | '5Y';
 export type BacktestRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'rejected';

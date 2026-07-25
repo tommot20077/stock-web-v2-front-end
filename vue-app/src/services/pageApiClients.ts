@@ -2,6 +2,7 @@ import { createAiAccessApi, type AiAccessApi } from './aiAccessApi';
 import { createAuthApi, type AuthApi } from './authApi';
 import { createBacktestApi, type BacktestApi } from './backtestApi';
 import { createOpsApi, type OpsApi } from './opsApi';
+import { createPortfolioApi, type PortfolioApi } from './portfolioApi';
 import type { RuntimeDataMode } from './apiTypes';
 import { getRuntimeDataMode } from './runtimeDataMode';
 
@@ -12,6 +13,7 @@ interface RuntimeApiClients {
   aiAccess: AiAccessApi;
   backtest: BacktestApi;
   ops: OpsApi;
+  portfolio: PortfolioApi;
 }
 
 let clients: RuntimeApiClients | null = null;
@@ -26,6 +28,7 @@ export function getRuntimeApiClients(basePath = '/api/v1'): RuntimeApiClients {
       aiAccess: createAiAccessApi(mode, basePath),
       backtest: createBacktestApi(mode, basePath),
       ops: createOpsApi(mode, basePath),
+      portfolio: createPortfolioApi(mode, basePath),
     };
   }
   return clients;

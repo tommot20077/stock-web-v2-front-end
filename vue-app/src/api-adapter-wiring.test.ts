@@ -18,6 +18,7 @@ const mockFactoryCalls = vi.hoisted(() => ({
   aiAccess: vi.fn(),
   backtest: vi.fn(),
   ops: vi.fn(),
+  portfolio: vi.fn(),
 }));
 
 afterEach(() => {
@@ -26,10 +27,12 @@ afterEach(() => {
   mockFactoryCalls.aiAccess.mockReset();
   mockFactoryCalls.backtest.mockReset();
   mockFactoryCalls.ops.mockReset();
+  mockFactoryCalls.portfolio.mockReset();
   vi.doUnmock('./services/authApi');
   vi.doUnmock('./services/aiAccessApi');
   vi.doUnmock('./services/backtestApi');
   vi.doUnmock('./services/opsApi');
+  vi.doUnmock('./services/portfolioApi');
 });
 
 describe('page API adapter wiring', () => {
@@ -192,6 +195,13 @@ describe('page API adapter wiring', () => {
         createMockOpsApi: mockFactoryCalls.ops,
       };
     });
+    vi.doMock('./services/portfolioApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/portfolioApi')>();
+      return {
+        ...actual,
+        createMockPortfolioApi: mockFactoryCalls.portfolio,
+      };
+    });
 
     const { getRuntimeApiClients } = await import('./services/pageApiClients');
     const clients = getRuntimeApiClients();
@@ -201,10 +211,45 @@ describe('page API adapter wiring', () => {
     expect(clients.aiAccess.mode).toBe('api');
     expect(clients.backtest.mode).toBe('api');
     expect(clients.ops.mode).toBe('api');
+    expect(clients.portfolio.mode).toBe('api');
     expect(mockFactoryCalls.auth).not.toHaveBeenCalled();
     expect(mockFactoryCalls.aiAccess).not.toHaveBeenCalled();
     expect(mockFactoryCalls.backtest).not.toHaveBeenCalled();
     expect(mockFactoryCalls.ops).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.portfolio).not.toHaveBeenCalled();
+  });
+
+  it('exposes live mock portfolio data only in mock mode', async () => {
+    vi.resetModules();
+    const mockClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
+
+    expect(mockClients.portfolio.mode).toBe('mock');
+    expect(mockClients.portfolio.live).toBeDefined();
+
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    const apiClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
+
+    expect(apiClients.portfolio.mode).toBe('api');
+    expect(apiClients.portfolio.live).toBeUndefined();
+  });
+
+  it('API mode portfolio failures preserve backend status code and trace id', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { code: 'PORTFOLIO_UNAVAILABLE', message: 'Portfolio unavailable' },
+      meta: { traceId: 'trace-portfolio-down' },
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+
+    const { getRuntimeApiClients } = await import('./services/pageApiClients');
+
+    await expect(getRuntimeApiClients().portfolio.getSummary()).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'PORTFOLIO_UNAVAILABLE',
+      status: 503,
+      requestId: 'trace-portfolio-down',
+    });
   });
 
   it('API mode adapter failures preserve backend status code and trace id', async () => {
