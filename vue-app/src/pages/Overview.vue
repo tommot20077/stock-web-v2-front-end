@@ -1,14 +1,53 @@
 <template>
   <div class="page grid">
-    <div v-for="(k, i) in kpis" :key="i" class="card kpi" style="grid-column: span 3">
-      <div class="kpi-l">{{ k.l }}</div>
-      <div class="kpi-v num">{{ k.v }}</div>
-      <div class="kpi-s" :style="{ color: k.up == null ? 'var(--fg-dim)' : k.up ? 'var(--up)' : 'var(--dn)' }">
-        <template v-if="k.up != null">{{ k.up ? '↗' : '↘' }} </template>{{ k.s }}
-      </div>
+    <!--
+      KPI 區。mock mode:四張合成卡照舊。
+      API mode(D-14):只有 totalMarketValue 與 roi 兩張有後端資料的卡;
+      今日損益 / 可用現金無後端來源,直接不渲染(不顯示假資料)。
+    -->
+    <div
+      v-if="!live && summaryLoading"
+      class="card kpi block-state"
+      data-testid="overview-summary-loading"
+      :style="{ gridColumn: 'span 12' }"
+    >
+      <div class="kpi-l">{{ t(lang, 'loading') }}</div>
     </div>
+    <div
+      v-else-if="!live && summaryError"
+      class="card kpi block-error"
+      data-testid="overview-summary-error"
+      :style="{ gridColumn: 'span 12' }"
+    >
+      <div class="kpi-l">{{ t(lang, 'loadFailed') }}</div>
+      <div class="details">
+        <span data-testid="overview-summary-error-code">{{ summaryError.code }}</span>
+        <span v-if="summaryError.traceId" data-testid="overview-summary-trace-id">
+          {{ t(lang, 'authRequestId') }} {{ summaryError.traceId }}
+        </span>
+      </div>
+      <button class="block-retry" data-testid="overview-summary-retry" @click="loadSummary">
+        {{ t(lang, 'authRetry') }}
+      </button>
+    </div>
+    <template v-else>
+      <div
+        v-for="(k, i) in kpiCards"
+        :key="i"
+        class="card kpi"
+        data-testid="overview-kpi"
+        :style="{ gridColumn: `span ${kpiSpan}` }"
+      >
+        <div class="kpi-l">{{ k.l }}</div>
+        <div class="kpi-v num">{{ k.v }}</div>
+        <div class="kpi-s" :style="{ color: k.up == null ? 'var(--fg-dim)' : k.up ? 'var(--up)' : 'var(--dn)' }">
+          <template v-if="k.up != null">{{ k.up ? '↗' : '↘' }} </template>{{ k.s }}
+        </div>
+      </div>
+    </template>
 
-    <div class="card" style="grid-column: span 8; padding: 20px">
+    <!-- 資產走勢圖:genSeries 亂數,無後端日級歷史來源 → API mode 隱藏(D-16) -->
+    <div v-if="live" class="card" style="grid-column: span 8; padding: 20px">
       <div class="row-between" style="margin-bottom:12px">
         <div>
           <div class="ttl">{{ t(lang, 'assetTrend') }}</div>
@@ -23,7 +62,8 @@
       </div>
     </div>
 
-    <div class="card" style="grid-column: span 4; padding: 20px">
+    <!-- 資產配置 donut:寫死陣列,需資產分類 → API mode 隱藏(D-14) -->
+    <div v-if="live" class="card" style="grid-column: span 4; padding: 20px">
       <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'allocation') }}</div>
       <div style="display:flex;justify-content:center;margin-bottom:16px">
         <Donut :size="150" :thickness="22" :slices="alloc.map(a => ({ value: a.v, color: a.c }))" />
@@ -75,12 +115,31 @@
       </div>
     </div>
 
+    <!-- 近期交易。API mode 走 GET /trades?page=0&size=5(D-09),與交易頁不共用狀態。 -->
     <div class="card" style="grid-column: span 12; padding: 20px">
       <div class="row-between" style="margin-bottom:12px">
         <div class="ttl">{{ t(lang, 'recentTrades') }}</div>
         <button class="btn-accent" @click="emit('order')">+ {{ t(lang, 'addTrade') }}</button>
       </div>
-      <table>
+      <div v-if="!live && tradesLoading" class="block-state" data-testid="overview-trades-loading">
+        {{ t(lang, 'loading') }}
+      </div>
+      <div v-else-if="!live && tradesError" class="block-error" data-testid="overview-trades-error">
+        <div>{{ t(lang, 'loadFailed') }}</div>
+        <div class="details">
+          <span data-testid="overview-trades-error-code">{{ tradesError.code }}</span>
+          <span v-if="tradesError.traceId" data-testid="overview-trades-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ tradesError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="overview-trades-retry" @click="loadRecentTrades">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
+      <div v-else-if="!live && !recentTrades.length" class="block-state" data-testid="overview-trades-empty">
+        {{ t(lang, 'noTrades') }}
+      </div>
+      <table v-else>
         <thead>
           <tr>
             <th>{{ t(lang, 'date') }}</th>
@@ -91,8 +150,12 @@
             <th style="text-align:right">{{ t(lang, 'total') }}</th>
           </tr>
         </thead>
-        <tbody>
-          <tr v-for="tr in portfolio.trades.slice(0, 5)" :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note">
+        <tbody v-if="live">
+          <tr
+            v-for="tr in mockRecentTrades"
+            :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note"
+            data-testid="overview-trade-row"
+          >
             <td style="color:var(--fg-dim)">{{ tr.d }}</td>
             <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
             <td style="font-weight:500">{{ tr.sym }}</td>
@@ -101,17 +164,29 @@
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.qty * tr.px, 0) }}</td>
           </tr>
         </tbody>
+        <tbody v-else>
+          <tr v-for="tr in recentTrades" :key="tr.id" data-testid="overview-trade-row">
+            <td style="color:var(--fg-dim)">{{ tradeDate(tr) }}</td>
+            <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
+            <td style="font-weight:500">{{ tr.symbol }}</td>
+            <td class="num" style="text-align:right">{{ tr.quantity }}</td>
+            <td class="num" style="text-align:right">${{ fmtNum(tr.price) }}</td>
+            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.quantity * tr.price, 0) }}</td>
+          </tr>
+        </tbody>
       </table>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { t } from '../i18n';
 import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang } from '../types';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { ApiClientError } from '../services/apiClient';
+import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import { getRuntimeApiClients } from '../services/pageApiClients';
 import LineChart from '../components/LineChart.vue';
 import Donut from '../components/Donut.vue';
 
@@ -120,7 +195,65 @@ const emit = defineEmits<{
   order: [];
   navigate: [page: 'watchlist' | 'trades' | 'positions'];
 }>();
-const portfolio = useMockPortfolioStore();
+
+// judgment §3:頁面只認 domain service,永不 import mock store。
+// 分支條件是 `live` 是否存在,不是 mode 字串(見 03-02-SUMMARY 的消費契約)。
+const api = getRuntimeApiClients().portfolio;
+const live = api.live;
+
+interface BlockError {
+  code: string;
+  traceId: string | null;
+}
+
+type BlockState<T> =
+  | { status: 'loading' }
+  | { status: 'loaded'; data: T }
+  | { status: 'error'; error: BlockError };
+
+const summaryState = ref<BlockState<PortfolioSummaryDto>>({ status: 'loading' });
+const tradesState = ref<BlockState<TradeDto[]>>({ status: 'loading' });
+
+const summaryLoading = computed(() => summaryState.value.status === 'loading');
+const summaryError = computed(() => (summaryState.value.status === 'error' ? summaryState.value.error : null));
+const summary = computed(() => (summaryState.value.status === 'loaded' ? summaryState.value.data : null));
+
+const tradesLoading = computed(() => tradesState.value.status === 'loading');
+const tradesError = computed(() => (tradesState.value.status === 'error' ? tradesState.value.error : null));
+const recentTrades = computed(() => (tradesState.value.status === 'loaded' ? tradesState.value.data : []));
+
+// D-12:診斷資訊只在錯誤狀態出現,且只露 code / traceId。
+function describeError(error: unknown): BlockError {
+  if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
+  return { code: 'UNKNOWN_ERROR', traceId: null };
+}
+
+// D-11:兩個區塊各自載入、各自重試,一邊失敗不影響另一邊。
+async function loadSummary() {
+  summaryState.value = { status: 'loading' };
+  try {
+    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+  } catch (error) {
+    summaryState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+async function loadRecentTrades() {
+  tradesState.value = { status: 'loading' };
+  try {
+    const page = await api.listTrades({ page: 0, size: 5 });
+    tradesState.value = { status: 'loaded', data: page.items };
+  } catch (error) {
+    tradesState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+onMounted(() => {
+  // mock mode 完全走 live 委派,不打任何網路。
+  if (live) return;
+  void loadSummary();
+  void loadRecentTrades();
+});
 
 const ranges = ['1D','1W','1M','3M','6M','1Y','All'];
 const range = ref('6M');
@@ -129,18 +262,53 @@ const series = genSeries(80, 1_000_000, 0.012, 5);
 const last = series[series.length - 1];
 const ret = (last - series[0]) / series[0] * 100;
 
-const kpis = computed(() => [
+const mockKpis = computed(() => [
   { l: t(props.lang, 'totalAssets'), v: '$' + fmtNum(last, 0), s: '+1.04% ' + t(props.lang, 'yesterday'), up: true as boolean | null },
   { l: t(props.lang, 'todayPnl'), v: '+$12,481', s: '+1.04%', up: true as boolean | null },
   { l: t(props.lang, 'availableCash'), v: '$84,210', s: '8.4%', up: null as boolean | null },
   { l: t(props.lang, 'totalReturn'), v: fmtPct(ret), s: t(props.lang, 'annualized') + ' 18.4%', up: true as boolean | null },
 ]);
 
+function signedMoney(value: number): string {
+  return `${value >= 0 ? '+' : '-'}$${fmtNum(Math.abs(value), 0)}`;
+}
+
+// D-14:API mode 兩張卡皆為後端值。roi 是比值,×100 純屬顯示格式化(D-04 非平行重算);
+// totalPnl 與 holdingCount 落在兩張卡的副標,取代原本的假副標。
+const apiKpis = computed(() => {
+  const s = summary.value;
+  if (!s) return [];
+  return [
+    {
+      l: t(props.lang, 'totalAssets'),
+      v: '$' + fmtNum(s.totalMarketValue, 0),
+      s: `${s.holdingCount} ${t(props.lang, 'positions')}`,
+      up: null as boolean | null,
+    },
+    {
+      l: t(props.lang, 'totalReturn'),
+      v: fmtPct(s.roi * 100),
+      s: `${t(props.lang, 'totalPnlLabel')} ${signedMoney(s.totalPnl)}`,
+      up: (s.totalPnl >= 0) as boolean | null,
+    },
+  ];
+});
+
+const kpiCards = computed(() => (live ? mockKpis.value : apiKpis.value));
+const kpiSpan = computed(() => (live ? 3 : 6));
+
 const alloc = [
   { n: 'Equity', v: 52, c: 'var(--accent)' }, { n: 'Crypto', v: 22, c: '#3b82f6' },
   { n: 'FX', v: 14, c: '#a855f7' }, { n: 'Bonds', v: 8, c: '#f59e0b' }, { n: 'Cash', v: 4, c: '#94a3b8' },
 ];
 
+// getter 每次存取才解析 store,reactivity 由 computed 追蹤(03-02-SUMMARY 提醒 4)。
+const mockRecentTrades = computed(() => (live ? live.trades.slice(0, 5) : []));
+
+/** executedAt 是 ISO-8601,表格只顯示日期部分。 */
+function tradeDate(trade: TradeDto): string {
+  return trade.executedAt.slice(0, 10);
+}
 
 const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filter(c => c.star)]);
 </script>
@@ -190,4 +358,18 @@ tbody td { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 1
 }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+/* 區塊級狀態(D-11/D-12):診斷樣式沿用 SessionBanner 的 code/traceId 呈現慣例 */
+.block-state { padding: 14px 0; font-size: 13px; color: var(--fg-dim); }
+.block-error { padding: 14px 20px; font-size: 13px; }
+.card.block-error { padding: 18px 20px; }
+.block-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.block-error .details span { overflow-wrap: anywhere; }
+.block-retry {
+  margin-top: 8px; min-height: 32px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
+}
 </style>

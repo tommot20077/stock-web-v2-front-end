@@ -46,6 +46,22 @@ describe('App session shell', () => {
           status: 'ACTIVE',
         }));
       }
+      // Phase 3(D-14):API mode 的 Overview KPI 來自 backend summary,不再有合成資料;
+      // 「頁面內容有渲染」這個斷言因此需要 portfolio 端點的 fixture 才成立。
+      if (path.includes('/portfolio/summary')) {
+        return json(apiSuccess({
+          totalMarketValue: 1234567.89,
+          totalCostBasis: 1000000,
+          realizedPnl: 0,
+          unrealizedPnl: 234567.89,
+          totalPnl: 234567.89,
+          roi: 0.2345,
+          holdingCount: 4,
+        }));
+      }
+      if (path.includes('/trades')) {
+        return json(apiSuccess({ items: [], page: 0, size: 5, totalElements: 0, totalPages: 0 }));
+      }
       return apiFailure('UNEXPECTED', 'Unexpected request', 500, 'trace-unexpected');
     }));
 
