@@ -326,6 +326,28 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     expect(p.get('page')).toBe('0');
   });
 
+  it('年度 chip 跟著系統年度走,不是寫死的 2026(D-05)', async () => {
+    // 光用 new Date().getFullYear() 當期望值無法抓到「寫死 2026」——今年剛好就是 2026。
+    // 必須把系統時間推到別的年份,寫死的實作才會現形(2027 年線上才爆炸的那種 bug)。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2029, 5, 15, 12, 0, 0));
+    try {
+      const fetchMock = scriptedFetch(() => success(page()));
+      await mountApiTrades(fetchMock);
+
+      expect(chipLabels()).toEqual(['All', 'Buy', 'Sell', '2029']);
+
+      clickChip('2029');
+      await flushAsync();
+      const p = paramsOf(lastUrl(fetchMock));
+      expect(p.get('dateFrom')!.startsWith('2029-01-01T00:00:00')).toBe(true);
+      expect(p.get('dateTo')!.startsWith('2030-01-01T00:00:00')).toBe(true);
+      expect(p.get('dateFrom')).not.toContain('2026');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('date / total / qty 表頭切換 sort 與 direction 並重置頁碼;type / symbol 表頭不可排序(D-06)', async () => {
     const fetchMock = scriptedFetch(() => success(page({ items: [trade({ id: 'x' })], totalElements: 1, totalPages: 1 })));
     await mountApiTrades(fetchMock);
