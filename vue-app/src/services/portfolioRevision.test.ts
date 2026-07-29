@@ -94,8 +94,9 @@ describe('portfolioRevision — 唯讀性', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     // 三個訊號是 readonly ref:外部只能經 notifyTradeCreated / bumpPortfolioRevision /
-    // clearLastCreatedTrade 改變。`npm run build`(vue-tsc --noEmit)會驗這三個
-    // @ts-expect-error —— 若哪天有人把 readonly() 拿掉,指令會因「未使用的指示詞」而紅。
+    // clearLastCreatedTrade 改變。`npm run build`(vue-tsc --noEmit)會驗下面三個預期錯誤
+    // 指示詞 —— 若哪天有人把 readonly() 拿掉,指令會因「未使用的指示詞」(TS2578)而紅。
+    // (注意:說明文字不可以該指示詞開頭,否則 TypeScript 會把說明本身當成一個指示詞。)
     // @ts-expect-error 唯讀 ref 不得直接賦值
     portfolioRevision.value = 99;
     // @ts-expect-error 唯讀 ref 不得直接賦值
