@@ -139,6 +139,60 @@ export const I18N: Record<Lang, Record<string, string>> = {
     realizedPnl: '已實現損益',
     totalPnlLabel: '總損益',
     costBasis: '總成本',
+    // ── Phase 4:手動記錄交易(權威來源 04-UI-SPEC.md §Copywriting Contract)──
+    // 文案四條硬規則:
+    // 1. 除 tradeErrNetwork 外,每一條「送出之後」的錯誤都必須明說「交易未記錄」。
+    // 2. tradeErrNetwork 是唯一「結果未知」的情境,必須明講「重試不會建立重複交易」。
+    // 3. tradeErrKeyReused 不得說「重複的請求」—— 事實相反,什麼都沒建立。
+    // 4. 任何文案不得回射 idempotency key、後端 error.message、或 error.fields 的英文 value。
+    // 複用既有 key,不新增同義字:loading / loadFailed / authRetry / authRequestId /
+    // cancel / fee / qty / price / symbol / side / notes / selectSymbol / viewPositions。
+    recordTrade: '記錄交易',
+    reviewTrade: '確認內容',
+    recordingTrade: '記錄中…',
+    tradeRecorded: '交易已記錄',
+    backToEdit: '返回修改',
+    recordAnother: '記錄下一筆',
+    // closeTicket 必須是新 key:i18n.ts 內 `close` 零命中,而 cancel 已被 footer 的「取消」佔用;
+    // 同一 dialog 兩個控件共用 label 會讓螢幕閱讀器連播兩個無法分辨的「取消」。
+    closeTicket: '關閉交易記錄視窗',
+    tradeIrreversibleNote: '記錄交易：寫入後無法修改或刪除，請確認上方內容。',
+    tradeExecutedAt: '成交時間',
+    tradeExecutedAtHint: '以本機時區記錄，不可晚於現在。',
+    tradeFeeHint: '手續費會計入成本基礎，記錄後無法修改。',
+    sellableQty: '可賣數量',
+    sellableQtyLoading: '正在讀取持倉…',
+    sellableQtyFailed: '無法讀取持倉，送出後仍會由伺服器檢查。',
+    tradeId: '交易編號',
+    symbolNoResults: '找不到符合的標的',
+    symbolNoTradable: '這個關鍵字沒有可交易的標的，請換個關鍵字。',
+    symbolMoreResults: '僅顯示前 10 筆，輸入更完整的關鍵字可縮小範圍。',
+    quoteChartEmpty: '無走勢資料',
+    quoteChartError: '走勢資料載入失敗',
+    symbolSearchFailed: '無法搜尋標的，請稍後重試。',
+    // 欄位級錯誤:合法範圍靜態寫死(抄自 CreateTradeRequest 註解),不從後端訊息解析。
+    tradeErrSymbol: '請從清單選擇有效的標的。',
+    tradeErrType: '交易類型無效。',
+    tradeErrQuantity: '數量必須大於 0，最多 8 位小數。',
+    tradeErrPrice: '價格必須大於 0，最多 8 位小數。',
+    tradeErrFee: '手續費不可為負。',
+    tradeErrNote: '備註最多 500 字。',
+    tradeErrExecutedAt: '成交時間不可晚於現在。',
+    // 底部錯誤:依 error.code 分派,絕不假設錯誤出現順序。
+    tradeErrOversell: '持倉不足，無法賣出這個數量，交易未記錄。請調整數量後再送出。',
+    tradeErrAssetNotFound: '這個標的不存在或目前不可交易，交易未記錄。請重新選擇標的。',
+    tradeErrValidation: '有欄位不符合規則，交易未記錄。請檢查上方欄位後再送出。',
+    tradeErrConflict: '持倉在記錄期間被其他操作變更，交易未記錄。請直接再送出一次，不會建立重複交易。',
+    tradeErrKeyReused: '這次送出的內容與前一次重試不一致，交易未記錄。請確認欄位後重新送出。',
+    tradeErrForbidden: '這個帳號沒有記錄交易的權限，交易未記錄。',
+    tradeErrCsrf: '安全驗證失敗，交易未記錄。請重新整理頁面後再試。',
+    tradeErrNetwork: '無法連線到伺服器，這筆交易可能尚未記錄。直接再送出一次不會建立重複交易。',
+    tradeErrUnknown: '發生未預期的錯誤，交易未記錄。',
+    portfolioRefreshing: '更新中…',
+    portfolioStaleAfterTrade: '交易已記錄，但這個區塊未更新成功，以下數字可能不是最新。',
+    tradeNotInCurrentView: '已記錄，但這筆交易不在目前的篩選/排序範圍內。',
+    freshBadge: '新',
+    tradeRecordedToast: '已記錄',
   },
   en: {
     overview: 'Overview', markets: 'Markets', positions: 'Positions', analytics: 'Analytics', trades: 'Trades',
@@ -277,6 +331,56 @@ export const I18N: Record<Lang, Record<string, string>> = {
     realizedPnl: 'Realized P&L',
     totalPnlLabel: 'Total P&L',
     costBasis: 'Cost basis',
+    // ── Phase 4: manual trade recording (source of truth: 04-UI-SPEC.md §Copywriting Contract) ──
+    // Four hard rules, mirrored from the zh block above:
+    // 1. Every post-submit error except tradeErrNetwork must say "nothing was recorded".
+    // 2. tradeErrNetwork is the only unknown-outcome case, so it must promise "will not create a duplicate".
+    // 3. tradeErrKeyReused must never say "duplicate request" — the opposite is true, nothing was written.
+    // 4. No string may echo the idempotency key, the backend error.message, or error.fields values.
+    // Reused, never duplicated: loading / loadFailed / authRetry / authRequestId /
+    // cancel / fee / qty / price / symbol / side / notes / selectSymbol / viewPositions.
+    recordTrade: 'Record trade',
+    reviewTrade: 'Review details',
+    recordingTrade: 'Recording…',
+    tradeRecorded: 'Trade recorded',
+    backToEdit: 'Back to edit',
+    recordAnother: 'Record another',
+    closeTicket: 'Close trade ticket',
+    tradeIrreversibleNote: 'Record trade: this cannot be edited or deleted once written. Check the details above.',
+    tradeExecutedAt: 'Executed at',
+    tradeExecutedAtHint: 'Recorded in your local time zone; cannot be in the future.',
+    tradeFeeHint: 'Fee is included in cost basis and cannot be changed after recording.',
+    sellableQty: 'Sellable qty',
+    sellableQtyLoading: 'Loading holdings…',
+    sellableQtyFailed: 'Could not load holdings; the server will still check on submit.',
+    tradeId: 'Trade ID',
+    symbolNoResults: 'No matching symbol',
+    symbolNoTradable: 'No tradeable symbol matches this search. Try another keyword.',
+    symbolMoreResults: 'Showing the first 10 — refine your search to narrow it down.',
+    quoteChartEmpty: 'No chart data',
+    quoteChartError: 'Failed to load chart data',
+    symbolSearchFailed: 'Symbol search failed. Please try again.',
+    tradeErrSymbol: 'Pick a valid symbol from the list.',
+    tradeErrType: 'Invalid trade type.',
+    tradeErrQuantity: 'Quantity must be greater than 0, with at most 8 decimals.',
+    tradeErrPrice: 'Price must be greater than 0, with at most 8 decimals.',
+    tradeErrFee: 'Fee cannot be negative.',
+    tradeErrNote: 'Note must be 500 characters or fewer.',
+    tradeErrExecutedAt: 'Executed at cannot be in the future.',
+    tradeErrOversell: 'Not enough holding for this quantity; nothing was recorded. Adjust the quantity and submit again.',
+    tradeErrAssetNotFound: 'That symbol does not exist or is not tradeable; nothing was recorded. Pick another symbol.',
+    tradeErrValidation: 'Some fields are invalid; nothing was recorded. Check the fields above and submit again.',
+    tradeErrConflict: 'Your holdings changed while recording; nothing was recorded. Submit again — this will not create a duplicate.',
+    tradeErrKeyReused: 'This submission differs from the previous retry, so nothing was recorded. Check the fields and submit again.',
+    tradeErrForbidden: 'This account cannot record trades; nothing was recorded.',
+    tradeErrCsrf: 'Security check failed; nothing was recorded. Refresh the page and try again.',
+    tradeErrNetwork: 'Cannot reach the server; this trade may not have been recorded. Submitting again will not create a duplicate.',
+    tradeErrUnknown: 'Something unexpected happened; nothing was recorded.',
+    portfolioRefreshing: 'Refreshing…',
+    portfolioStaleAfterTrade: 'Trade recorded, but this section failed to refresh — the values below may be out of date.',
+    tradeNotInCurrentView: 'Recorded, but this trade is outside the current filter and sort view.',
+    freshBadge: 'New',
+    tradeRecordedToast: 'Recorded',
   },
 };
 
