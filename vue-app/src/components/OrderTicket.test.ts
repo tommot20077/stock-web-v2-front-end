@@ -385,7 +385,9 @@ async function mountApiTicket(
     onNavigate: () => {},
     onToast: () => {},
   });
-  await flushAsync();
+  // preset 解析 → pickAsset → watch(selected) → listKlines 是一條長 microtask 鏈,
+  // 預設的 6 輪排乾不完(走勢圖會停在 loading)。
+  await flushAsync(16);
 }
 
 function symbolInput(): HTMLInputElement {

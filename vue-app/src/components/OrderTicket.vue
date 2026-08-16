@@ -272,39 +272,79 @@
           </div>
 
           <div class="right">
+            <!--
+              D-16 的**例外分支**:報價卡的每一格後端都有(`AssetDto.java:9-24`),
+              所以走「真實資料」而不是「隱藏」。六格全部來自**同一份** AssetDto,
+              不需要第二個請求,而且**只做格式化、不做任何計算**(judgment §7 / Phase 3 D-04)。
+            -->
             <div v-if="selected" class="quote-card">
               <div class="row-between">
                 <div>
                   <div class="quote-lab">{{ t(lang, 'last') }}</div>
-                  <div class="num quote-last">{{ fmtNum(selected.latestPrice ?? Number.NaN) }}</div>
-                </div>
-                <div
-                  class="num quote-chg-wrap"
-                  :style="{ color: (selected.changePercent ?? 0) >= 0 ? 'var(--up)' : 'var(--dn)' }"
-                >
-                  <div class="quote-chg">
-                    {{ (selected.changePercent ?? 0) >= 0 ? '+' : '' }}{{ fmtNum(selected.change ?? Number.NaN) }}
+                  <div class="num quote-last" data-testid="ticket-quote-last">
+                    {{ numOrDash(selected.latestPrice) }}
                   </div>
-                  <div class="quote-chg-pct">{{ fmtPct(selected.changePercent ?? 0) }}</div>
+                </div>
+                <div class="num quote-chg-wrap" :style="{ color: changeColor(selected.changePercent) }">
+                  <div class="quote-chg" data-testid="ticket-quote-change">
+                    {{ signedNumOrDash(selected.change) }}
+                  </div>
+                  <div class="quote-chg-pct" data-testid="ticket-quote-change-pct">
+                    {{ pctOrDash(selected.changePercent) }}
+                  </div>
                 </div>
               </div>
 
-              <!-- 走勢圖接 GET /market/{symbol}/klines 是 04-10 的範圍。骨架階段誠實顯示
-                   「無走勢資料」,不用 genSeries() 生成看起來像真的假序列(D-16)。 -->
-              <div class="quote-chart" data-testid="ticket-quote-chart-empty">
-                {{ t(lang, 'quoteChartEmpty') }}
+              <!--
+                走勢圖三態。**U-11 硬規則**:任何一態都不得阻擋送出 —— 它是輔助資訊,
+                不是交易前提。error 態的高度不鎖死(診斷列 + 重試鈕放不進 96px),
+                但以 min-height 保住同樣的版位下限。
+              -->
+              <div v-if="chartError" class="chart-error block-error" data-testid="ticket-quote-chart-error">
+                <div>{{ t(lang, 'quoteChartError') }}</div>
+                <div class="details">
+                  <span data-testid="ticket-quote-chart-error-code">{{ chartError.code }}</span>
+                  <span v-if="chartError.traceId" data-testid="ticket-quote-chart-trace-id">
+                    {{ t(lang, 'authRequestId') }} {{ chartError.traceId }}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  class="block-retry"
+                  data-testid="ticket-quote-chart-retry"
+                  @click="retryKlines"
+                >{{ t(lang, 'authRetry') }}</button>
+              </div>
+              <div v-else :class="['quote-chart', { plot: chartSeries.length > 0 }]">
+                <div v-if="chartLoading" class="chart-loading" data-testid="ticket-quote-chart-loading">
+                  <div>{{ t(lang, 'loading') }}</div>
+                  <div class="skeleton-row" />
+                </div>
+                <!-- market_prices 需要 backfill 過才有資料,dev/demo 環境的空序列是常態 -->
+                <div
+                  v-else-if="!chartSeries.length"
+                  data-testid="ticket-quote-chart-empty"
+                >{{ t(lang, 'quoteChartEmpty') }}</div>
+                <LineChart
+                  v-else
+                  :data="chartSeries"
+                  :h="96"
+                  color="var(--accent)"
+                  fill="var(--accent)"
+                />
               </div>
 
               <div class="quote-meta">
                 <div>
                   <div class="qm-l">{{ t(lang, 'dayRange') }}</div>
-                  <div class="num qm-v">
-                    {{ fmtNum(selected.low ?? Number.NaN) }} – {{ fmtNum(selected.high ?? Number.NaN) }}
+                  <div class="num qm-v" data-testid="ticket-quote-range">
+                    {{ numOrDash(selected.low) }} – {{ numOrDash(selected.high) }}
                   </div>
                 </div>
                 <div>
                   <div class="qm-l">{{ t(lang, 'volume') }}</div>
-                  <div class="num qm-v">{{ selected.volumeText }}</div>
+                  <!-- volumeText 後端就是已格式化的 String,前端不得重算 -->
+                  <div class="num qm-v" data-testid="ticket-quote-volume">{{ selected.volumeText }}</div>
                 </div>
               </div>
             </div>
@@ -434,11 +474,15 @@ import { t } from '../i18n';
 // 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
 // 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
 import { fmtNum, fmtPct } from '../data';
+import LineChart from './LineChart.vue';
 import { ApiClientError } from '../services/apiClient';
+// closeSeries 是 KlineDto.close(JSON string)→ number[] 的**唯一**轉換點(04-06 已單測鎖住)。
+// 不得在本檔自己寫 Number() —— 那正是 vue-tsc 在模板內抓不到的 Pitfall 8。
+import { closeSeries } from '../services/marketApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyTradeCreated } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import type { AssetDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
+import type { AssetDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
@@ -567,6 +611,11 @@ function pctOrDash(value: number | null | undefined): string {
   return value == null ? '—' : fmtPct(value);
 }
 
+/** 漲跌值:正數補 `+`(負號由 fmtNum 自帶)。同樣只格式化,不重算。 */
+function signedNumOrDash(value: number | null | undefined): string {
+  return value == null ? '—' : `${value >= 0 ? '+' : ''}${fmtNum(value)}`;
+}
+
 function changeColor(value: number | null | undefined): string {
   if (value == null) return 'var(--fg-mute)';
   return value >= 0 ? 'var(--up)' : 'var(--dn)';
@@ -641,6 +690,60 @@ onBeforeUnmount(() => {
   searchController?.abort();
 });
 
+// =================== 走勢圖的 per-block 狀態機(D-01 / UI-SPEC §Interaction Contract 3) ===================
+// 資料來自 `GET /api/v1/market/{symbol}/klines` —— 前端第一個消費該端點的地方。
+
+/**
+ * 48 小時 × `1h` = 48 點,密度與骨架階段的假序列相當。
+ * ⚠️ 這組參數是 `04-RESEARCH.md` A8 的 **[ASSUMED]** 建議值,不是既有慣例;
+ * 若實際資料密度不合適可調整,不需要視為契約。
+ */
+const KLINE_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+const klineState = ref<BlockState<KlineDto[]>>({ status: 'idle' });
+const chartLoading = computed(() => klineState.value.status === 'loading');
+const chartError = computed(() => (klineState.value.status === 'error' ? klineState.value.error : null));
+const chartSeries = computed(() => (
+  klineState.value.status === 'loaded' ? closeSeries(klineState.value.data) : []
+));
+
+let klineSeq = 0;
+
+async function loadKlines(symbol: string) {
+  const seq = ++klineSeq;
+  klineState.value = { status: 'loading' };
+  try {
+    // 後端 `from` 是 `@RequestParam Instant`,必須是完整 ISO instant ——
+    // 格式錯在 develop 上會回 **500** 而不是 400。
+    const from = new Date(Date.now() - KLINE_WINDOW_MS).toISOString();
+    // symbol 直接用 AssetDto.symbol(後端原值),**不得 toUpperCase()**:
+    // `MarketController` javadoc 明文大小寫敏感(encodeURIComponent 已在 adapter 內處理)。
+    const klines = await apiClients().market.listKlines(symbol, {
+      interval: '1h',
+      from,
+      limit: 48,
+    });
+    if (seq !== klineSeq) return;
+    klineState.value = { status: 'loaded', data: klines };
+  } catch (error) {
+    if (seq !== klineSeq) return;
+    klineState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+function retryKlines() {
+  if (selected.value) void loadKlines(selected.value.symbol);
+}
+
+watch(() => selected.value?.symbol, (symbol) => {
+  if (!symbol) {
+    klineSeq += 1;
+    klineState.value = { status: 'idle' };
+    return;
+  }
+  void loadKlines(symbol);
+});
+
 const qtyStep = computed(() => (selected.value?.assetType === 'CRYPTO' ? 0.01 : 1));
 const estTotal = computed(() => qty.value * px.value);
 // mock mode 專屬的展示值(D-04:API mode 不渲染,後端沒有帳戶餘額模型)。
@@ -679,6 +782,11 @@ const validationError = computed(() =>
   orderError.value || sellPrecheckError.value || executedAtError.value || feeError.value
 );
 
+/**
+ * **U-11 硬規則:這個 computed 不得引用 klines / 走勢圖的任何狀態。**
+ * 走勢圖是輔助資訊,不是交易前提 —— 行情圖掛掉不該讓使用者記不了已經成交的交易。
+ * 若未來有人「順手」把 chartLoading / chartError 加進來,Test 20 會立刻紅。
+ */
 const canSubmit = computed(() =>
   !!selected.value
   && selectedMatchesQuery.value
@@ -728,6 +836,8 @@ function resetTicket() {
   symbolState.value = { status: 'idle' };
   activeQuery.value = '';
   activeIndex.value = -1;
+  klineSeq += 1;
+  klineState.value = { status: 'idle' };
   clearSelection();
 }
 
@@ -990,12 +1100,19 @@ async function submitTrade() {
 .quote-chg-wrap { text-align: right; }
 .quote-chg { font-weight: 600; }
 .quote-chg-pct { font-size: 12px; }
+/* §Layout Contract:走勢圖區固定 96px 高 */
 .quote-chart {
   height: 96px; margin: 16px 0 8px;
   display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--border); border-radius: 8px;
   color: var(--fg-mute); font-size: 12px; font-weight: 400;
+  overflow: hidden;
 }
+/* 真的畫得出線時不需要空狀態的虛線框 */
+.quote-chart.plot { border-color: transparent; }
+.chart-loading { width: 100%; padding: 0 16px; text-align: center; }
+/* error 態放不進 96px(診斷列 + 重試鈕),以 min-height 保住同樣的版位下限 */
+.chart-error { min-height: 96px; margin: 16px 0 8px; }
 .quote-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .qm-v { font-size: 12px; margin-top: 4px; }
 
