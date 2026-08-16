@@ -8,6 +8,7 @@ import Trades from './pages/Trades.vue';
 import OrderTicket from './components/OrderTicket.vue';
 import { useMockPortfolioStore } from './stores/mockPortfolio';
 import { useMockNotificationsStore } from './stores/mockNotifications';
+import { flushAsync } from './testUtils';
 import type { Lang, Position, Trade } from './types';
 
 function mountWithPinia(component: Component, props: Record<string, unknown>) {
@@ -175,8 +176,7 @@ describe('Task 4 trade flow', () => {
     ticket.unmount();
   });
 
-  it('places filled orders through Pinia and adds an unread order notification', async () => {
-    vi.useFakeTimers();
+  it('records trades through Pinia and adds an unread notification', async () => {
     const state = reactive({
       open: false,
       lang: 'en' as Lang,
@@ -194,9 +194,9 @@ describe('Task 4 trade flow', () => {
 
     clickButtonByText(document.body, 'Review');
     await nextTick();
-    clickButtonByText(document.body, 'Place order');
-    await vi.advanceTimersByTimeAsync(1600);
-    await nextTick();
+    clickButtonByText(document.body, 'Record trade');
+    // 送出改為等 adapter 的 promise，不再等假進度的 1600ms 計時器（U-16）。
+    await flushAsync();
 
     expect(portfolio.trades).toHaveLength(initialTrades + 1);
     expect(portfolio.trades[0]).toMatchObject({ sym: 'AAPL', type: 'BUY', qty: 10 });
@@ -372,8 +372,7 @@ describe('Task 4 trade flow', () => {
     expect(buttonByText(document.body, 'Review').disabled).toBe(false);
   });
 
-  it('records only one order when place order is invoked twice while placing', async () => {
-    vi.useFakeTimers();
+  it('records only one trade when the submit button is clicked twice in a row', async () => {
     const state = reactive({
       open: false,
       lang: 'en' as Lang,
@@ -386,17 +385,32 @@ describe('Task 4 trade flow', () => {
     clickButtonByText(document.body, 'Review');
     await nextTick();
 
-    const placeButton = buttonByText(document.body, 'Place order');
-    placeButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    placeButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(1600);
+    /*
+     * 意圖變更（04-09 Task 3）：原本靠「placing 期間按鈕從畫面消失」擋連點，
+     * 那是假進度的副作用。假進度移除後，防線變成 submitTrade 開頭明確的
+     * `if (submitting.value) return;` —— 連點兩次仍只記一筆。
+     */
+    const submitButton = buttonByText(document.body, 'Record trade');
+    expect(submitButton.disabled).toBe(false);
+
+    submitButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await nextTick();
+    // 第一道防線（U-02）：送出期間按鈕明確 disabled，使用者看得見也點不到。
+    expect(submitButton.disabled).toBe(true);
+
+    /*
+     * 第二道防線：programmatic dispatch 不受 disabled 屬性阻擋，
+     * 擋下這一次的是 submitTrade 開頭的 `if (submitting.value) return;`。
+     * 兩道都驗，是因為 disabled 只在 DOM 更新後才生效——真實使用者的
+     * 極速連點可能落在更新之前，那時只剩 JS 守衛。
+     */
+    submitButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushAsync();
 
     expect(portfolio.trades).toHaveLength(initialTrades + 1);
   });
 
-  it('resets side, order type, and TIF from the filled state when starting a new order', async () => {
-    vi.useFakeTimers();
+  it('resets side, order type, and TIF when recording another trade', async () => {
     const state = reactive({
       open: false,
       lang: 'en' as Lang,
@@ -412,11 +426,10 @@ describe('Task 4 trade flow', () => {
     await nextTick();
     clickButtonByText(document.body, 'Review');
     await nextTick();
-    clickButtonByText(document.body, 'Place order');
-    await vi.advanceTimersByTimeAsync(1600);
-    await nextTick();
-    clickButtonByText(document.body, 'New order');
-    await nextTick();
+    clickButtonByText(document.body, 'Record trade');
+    await flushAsync();
+    clickButtonByText(document.body, 'Record another');
+    await flushAsync();
 
     expect(buttonByText(document.body, 'Buy').classList.contains('active')).toBe(true);
     expect(buttonByText(document.body, 'Market').classList.contains('active')).toBe(true);
