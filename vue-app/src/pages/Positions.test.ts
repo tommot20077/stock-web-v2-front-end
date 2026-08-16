@@ -8,7 +8,11 @@ import { fmtNum, fmtPct } from '../data';
 import { t } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
-import { bumpPortfolioRevision, resetPortfolioRevisionForTests } from '../services/portfolioRevision';
+import {
+  bumpPortfolioRevision,
+  notifyTradeCreated,
+  resetPortfolioRevisionForTests,
+} from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import OrderTicket from '../components/OrderTicket.vue';
 import type { AssetDto, HoldingDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
@@ -83,6 +87,21 @@ function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryD
     roi: 0,
     holdingCount: 0,
     ...over,
+  };
+}
+
+/** D-13:成交事件的來源。`notifyTradeCreated` 只用得到其中四欄,其餘給合法佔位值。 */
+function freshTrade(symbol: string): TradeDto {
+  return {
+    id: `trade-${symbol}`,
+    symbol,
+    type: 'BUY',
+    quantity: 1,
+    price: 1,
+    fee: 0,
+    note: null,
+    executedAt: '2026-08-15T10:30:00+08:00',
+    createdAt: '2026-08-15T10:30:05+08:00',
   };
 }
 
@@ -356,14 +375,30 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(rows()).toHaveLength(1);
   });
 
-  it('API mode 的持倉列不帶 lastFill 高亮(無成交事件來源,Phase 4 才接 post-trade refetch)', async () => {
+  /*
+   * ⚠️ DP-10:這條測試在 Phase 3(commit `587e84e`)是刻意鎖住「**不**高亮」的 —— 當時
+   * API mode 根本沒有成交事件來源。Phase 4 的 D-13 是**新的使用者決策**:成交後重讀完成時,
+   * 剛成交的那一列必須看得出來。也就是說**測試意圖本身改變了**,不是「改測試遷就實作」
+   * (judgment §10 的合法例外)。因此這裡是**改寫斷言 + 更新測試名**,而不是默默刪除。
+   * 反轉前的原名:「API mode 的持倉列不帶 lastFill 高亮」。
+   */
+  it('API mode 持倉列依 apiLastFill 帶 fresh 高亮(Phase 4 D-13,反轉 Phase 3 的鎖定)', async () => {
     await mountApiWith(
       [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
       summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
     );
 
     expect(rows()).toHaveLength(2);
+    // 還沒有任何成交事件之前,仍然一列都不高亮(Phase 3 的斷言在這個前提下繼續成立)
     expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(0);
+
+    notifyTradeCreated(freshTrade('BBB'));
+    await flushAsync();
+
+    const bbb = rows().find(row => row.textContent?.includes('BBB'));
+    expect(bbb, 'BBB row').toBeTruthy();
+    expect(bbb!.classList.contains('fresh')).toBe(true);
+    expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(1);
   });
 
   it('Positions 不 import mock store,一律經 getRuntimeApiClients(PORT-04 / judgment §3)', () => {
@@ -811,5 +846,56 @@ describe('Positions + OrderTicket — D-12:refetch 失敗不得汙染 ticket 的
     expect(requireTestid('positions-refresh-error').textContent)
       .toContain(t('en', 'portfolioStaleAfterTrade'));
     expect(rowSymbols()).toEqual(['ZZA']);
+  });
+});
+
+describe('Positions — D-13 fresh 高亮(04-12 / U-12)', () => {
+  it('Test 19(U-12):高亮列有非顏色線索的「新」標記', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
+      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+    );
+
+    notifyTradeCreated(freshTrade('BBB'));
+    await flushAsync();
+
+    // 色盲、高對比模式、或動畫已結束的使用者都必須能看出是哪一列。
+    const badge = requireTestid('positions-fresh-badge');
+    expect(badge.textContent?.trim()).toBe(t('en', 'freshBadge'));
+    const bbb = rows().find(row => row.textContent?.includes('BBB'))!;
+    expect(bbb.contains(badge)).toBe(true);
+    expect(allTestids('positions-fresh-badge')).toHaveLength(1);
+  });
+
+  it('Test 20(來源切換):mock mode 的 fresh 只認 live.lastFill,不看 apiLastFill', async () => {
+    mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    const portfolio = useMockPortfolioStore();
+    notifyTradeCreated(freshTrade(portfolio.positions[0].sym));
+    await nextTick();
+
+    expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(0);
+    expect(testid('positions-fresh-badge')).toBeNull();
+  });
+
+  it('Test 21(U-12):fresh 的壽命不靠計時器', () => {
+    // 計時器會讓元件測試時間相依而 flaky;`App.vue:36` 的 v-if 切頁卸載已界定實際壽命。
+    expect(positionsSource).not.toContain('setTimeout');
+  });
+
+  it('Test 22(a11y):prefers-reduced-motion 下取消動畫,「新」標記照常顯示', () => {
+    expect(positionsSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?tbody tr\.fresh\s*\{[^}]*animation:\s*none/,
+    );
+    expect(positionsSource).toContain('data-testid="positions-fresh-badge"');
+  });
+
+  it('D-13:Phase 3 留下的「Phase 4 再接」TODO 註解已清除', () => {
+    expect(positionsSource).not.toContain('Phase 4 引入 post-trade refetch 時再接');
+    expect(positionsSource).not.toContain('無成交事件來源');
+    // 來源切換用 effectiveLastFill,mockLastFill 的直接引用已不存在
+    expect(positionsSource).toContain('effectiveLastFill');
+    expect(positionsSource).not.toContain('mockLastFill');
   });
 });
