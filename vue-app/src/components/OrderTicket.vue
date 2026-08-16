@@ -424,7 +424,10 @@
               <span>{{ t(lang, 'price') }}</span>
               <b class="num" data-testid="ticket-result-price">${{ fmtNum(recorded?.price ?? Number.NaN) }}</b>
             </div>
-            <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ recorded?.quantity }}</b></div>
+            <div>
+              <span>{{ t(lang, 'qty') }}</span>
+              <b class="num" data-testid="ticket-result-qty">{{ recorded?.quantity }}</b>
+            </div>
             <div><span>{{ t(lang, 'fee') }}</span><b class="num">${{ fmtNum(recorded?.fee ?? Number.NaN) }}</b></div>
             <div>
               <span>{{ t(lang, 'tradeExecutedAt') }}</span>
@@ -434,6 +437,29 @@
               <span>{{ t(lang, 'estTotal') }}</span>
               <b class="num">${{ fmtNum((recorded?.quantity ?? 0) * (recorded?.price ?? 0), 2) }}</b>
             </div>
+          </div>
+        </div>
+
+        <!--
+          §7 版位表:依 `error.code` 分派的錯誤一律落在 **ticket 底部的單一區域**
+          (`role="alert"` —— 一次只有一條,適合立即播報)。
+          有 `error.fields` 時改走欄位級呈現,底部不重複顯示同一件事。
+          診斷列是常駐低調單列(U-07:不用 `<details>`、不加複製按鈕),
+          只露 `code` 與 traceId,**絕不露後端 `message`**(Phase 3 D-12 / T-04-09)。
+        -->
+        <div
+          v-if="submitError && !submitError.fields"
+          class="form-error submit-error"
+          role="alert"
+          data-testid="ticket-error"
+        >
+          <div>{{ submitErrorMessage }}</div>
+          <div class="details">
+            <span data-testid="ticket-error-code">{{ submitError.code }}</span>
+            <!-- 非 ApiClientError 時 traceId 為 null → 整格不渲染(不顯示 `null`) -->
+            <span v-if="submitError.traceId" data-testid="ticket-error-trace-id">
+              {{ t(lang, 'authRequestId') }} {{ submitError.traceId }}
+            </span>
           </div>
         </div>
 
@@ -546,6 +572,34 @@ const maxExecutedAt = ref('');
 const submitting = ref(false);
 const orderError = ref('');
 const recorded = ref<TradeDto | null>(null);
+
+// =================== D-14:idempotency key 的生命週期 ===================
+// 兩條規則就蓋完所有情境:
+//   1. key 在「按下送出」那一刻產生;同一次嘗試的重試(手動或 401 replay)沿用同一把。
+//   2. 使用者改過**任何**欄位 → 下次送出換新 key(改過欄位 = 新意圖)。
+//
+// **這兩條刻意避開與 D-07 的互鎖**:若採「一張 ticket 一把 key」,驗證失敗(400)後
+// 使用者改數量再送就會吃 409 `TRADE_IDEMPOTENCY_KEY_REUSED`,卡死且不知道要關掉
+// ticket 才能繼續。這是設計時發現的實際問題,不是理論風險。
+//
+// **T-04-03:`currentKey` 絕不得綁進任何模板節點** —— UI 顯示 key 只會邀請使用者手動改動。
+const currentKey = ref<string | null>(null);
+/**
+ * DP-11:**不做 form 物件深比較**。「改了又改回原值」在使用者心智模型裡是「我動過了」,
+ * 他期待新 key;深比較會讓他拿到舊 key 而吃 409。
+ */
+const dirtySinceSubmit = ref(false);
+
+/** T-04-09:診斷只露 `code` 與 `traceId`,絕不顯示後端 `message`。 */
+interface SubmitError {
+  code: string;
+  traceId: string | null;
+  /** 後端 `error.fields`。**只用 key 判斷哪個欄位錯了,value(英文 Bean Validation 訊息)絕不入 DOM。** */
+  fields: Record<string, string> | null;
+  status: number;
+}
+
+const submitError = ref<SubmitError | null>(null);
 
 // =================== symbol typeahead 的 per-block 狀態機(D-01 / UI-SPEC §2) ===================
 // 形狀複製 `Positions.vue:336-368`(Phase 3 D-11 的 per-block 四態),多一個 `idle`:
@@ -790,6 +844,18 @@ const validationError = computed(() =>
 );
 
 /**
+ * 底部錯誤的文案。**依 `error.code` 分派,絕不假設錯誤出現的順序**
+ * (PR #15 會把「type 打錯 + symbol 不存在」的優先序從 `ASSET_NOT_FOUND`
+ * 改回 `TRADE_UNSUPPORTED_TYPE`,任何依賴順序的實作都會在那天壞掉)。
+ * 完整對照表在 04-11 Task 2;此處先保底,讓失敗一定有可讀說明。
+ */
+const submitErrorMessage = computed(() => {
+  const error = submitError.value;
+  if (!error) return '';
+  return t(props.lang, error.code === 'NETWORK_ERROR' ? 'tradeErrNetwork' : 'tradeErrUnknown');
+});
+
+/**
  * **U-11 硬規則:這個 computed 不得引用 klines / 走勢圖的任何狀態。**
  * 走勢圖是輔助資訊,不是交易前提 —— 行情圖掛掉不該讓使用者記不了已經成交的交易。
  * 若未來有人「順手」把 chartLoading / chartError 加進來,Test 20 會立刻紅。
@@ -835,6 +901,10 @@ function resetTicket() {
   fee.value = 0;
   note.value = '';
   orderError.value = '';
+  // 關閉並重開 ticket = 全新的意圖,key 一律重置(D-14)。
+  currentKey.value = null;
+  dirtySinceSubmit.value = false;
+  submitError.value = null;
   const now = new Date();
   maxExecutedAt.value = toLocalInputValue(now);
   executedAt.value = maxExecutedAt.value;
@@ -930,20 +1000,50 @@ function goPositions() {
 }
 
 /**
- * D-14 / T-04-10:key 在「按下送出」時產生,且必須是 CSPRNG ——
- * 非密碼學的偽亂數(例如 `crypto` 以外的隨機來源)會有碰撞風險,
- * 而碰撞會讓別人的交易被當成你的重試回傳。
- * key 的完整生命週期(重試沿用、改欄位換新)是 04-11 的範圍。
+ * D-14 / T-04-10:key 在「按下送出」時產生,且必須是 CSPRNG。
+ * `crypto.randomUUID()` 是 Web Crypto 的 CSPRNG;**絕不得**改用非密碼學的偽亂數 ——
+ * 碰撞會讓別人的交易被當成你的重試回傳(`(user_id, key)` 的 user_id 維度把影響
+ * 限縮在同一使用者內,但那是縱深防禦,不是可以放寬隨機來源的理由)。
+ *
+ * 規則:沒有 key、或使用者自上次送出後動過任何欄位 → 換新的;否則沿用。
  */
-function newIdempotencyKey(): string {
-  return crypto.randomUUID();
+function ensureIdempotencyKey(): string {
+  if (currentKey.value === null || dirtySinceSubmit.value) {
+    currentKey.value = crypto.randomUUID();
+  }
+  dirtySinceSubmit.value = false;
+  return currentKey.value;
 }
+
+/**
+ * 任何欄位變動都會讓下一次送出換新 key,並清掉上一次的送出錯誤。
+ * `flush: 'sync'` 是刻意的:使用者改完欄位可能**立刻**按送出,
+ * 預設的 pre-flush 會讓那一次仍沿用舊 key。
+ */
+watch(
+  () => [
+    selected.value?.symbol,
+    side.value,
+    qty.value,
+    px.value,
+    fee.value,
+    note.value,
+    executedAt.value,
+  ],
+  () => {
+    dirtySinceSubmit.value = true;
+    submitError.value = null;
+  },
+  { flush: 'sync' },
+);
 
 async function submitTrade() {
   if (submitting.value) return;
+  orderError.value = '';
+  submitError.value = null;
   if (!selected.value || !canSubmit.value) return;
   submitting.value = true;
-  orderError.value = '';
+  const idempotencyKey = ensureIdempotencyKey();
   try {
     const trade = await apiClients().trading.createTrade({
       symbol: selected.value.symbol,
@@ -954,22 +1054,41 @@ async function submitTrade() {
       note: note.value ? note.value : null,
       // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       executedAt: toLocalIso(new Date(executedAt.value)),
-    }, newIdempotencyKey());
+    }, idempotencyKey);
     recorded.value = trade;
-    // D-10 / D-13:成功後的唯一訊號來源。消費端(三頁重讀與 fresh 高亮)在 04-12 接上。
+    // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
+    // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
+    // 而 notifyTradeCreated 在 replay 時**也要呼叫** —— 重讀同一份資料無害,
+    // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新(§6 連帶契約)。
     notifyTradeCreated(trade);
+    // 下一筆是新意圖,key 不得沿用。
+    currentKey.value = null;
+    dirtySinceSubmit.value = false;
     step.value = 'result';
     emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${trade.quantity} ${trade.symbol} @ ${fmtNum(trade.price)}`);
     await nextTick();
     resultTitle.value?.focus();
-  } catch {
-    // 依 error.code 分派文案、欄位級錯誤綁定與診斷列是 04-11 的範圍;
-    // 骨架階段沿用既有的表單層提示,不新增任何診斷顯示(T-04-09)。
-    step.value = 'ticket';
-    orderError.value = sellPrecheckError.value || 'Order rejected';
+  } catch (error) {
+    handleSubmitFailure(error);
   } finally {
     submitting.value = false;
   }
+}
+
+/**
+ * 送出失敗的統一落點。**key 一律保留** —— 「這次沒寫入,但意圖沒變」,
+ * 沿用同一把重送是安全的(這正是文案敢寫「不會建立重複交易」的前提)。
+ * 唯一例外(丟棄 key)由 U-04 的處置表決定,見 04-11 Task 2。
+ */
+function handleSubmitFailure(error: unknown) {
+  const described: SubmitError = error instanceof ApiClientError
+    ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
+    // 前端合成的診斷碼:後端不會回這個值,所以它與「後端回了未知 code」可明確區分。
+    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+
+  submitError.value = described;
+  // 欄位級錯誤必須讓使用者看得到出錯的欄位,review 步驟沒有輸入框(§7 版位表)。
+  if (described.fields) step.value = 'ticket';
 }
 </script>
 
@@ -1132,6 +1251,14 @@ async function submitTrade() {
   background: rgba(220,38,38,0.10); color: var(--dn);
   font-size: 12px; font-weight: 600;
 }
+/* 底部錯誤區:ticket body 內、footer 之上,全寬(§Layout Contract) */
+.submit-error { margin: 0 24px 16px; }
+.submit-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 8px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px; font-weight: 400;
+}
+/* 320px 下 code 與 traceId 必須換行完整顯示,且可被選取複製(U-07:不做複製按鈕) */
+.submit-error .details span { overflow-wrap: anywhere; user-select: text; }
 
 /* Review */
 .review { padding: 32px; text-align: center; }
