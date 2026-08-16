@@ -1,5 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
+
+// 走勢圖只斷言「傳進 LineChart 的 data prop」,**不斷言 SVG path** —— 後者是脆弱測試,
+// 且 `LineChart.vue:32,37-38` 的 min/max 線性映射本來就有自己的責任範圍。
+// 這個 stub 把 prop 原樣記下來,讓 Pitfall 8(string 當 number 用)可被鎖住。
+const chartProbe = vi.hoisted(() => ({ data: null as unknown, renders: 0 }));
+vi.mock('./LineChart.vue', async () => {
+  const { defineComponent, h } = await import('vue');
+  return {
+    default: defineComponent({
+      name: 'LineChartStub',
+      props: { data: { type: Array, required: true } },
+      setup(props: { data: unknown }) {
+        return () => {
+          chartProbe.data = props.data;
+          chartProbe.renders += 1;
+          return h('div', { 'data-testid': 'ticket-quote-chart' });
+        };
+      },
+    }),
+  };
+});
+
 import OrderTicket from './OrderTicket.vue';
 // 原始碼字面(Vite `?raw`):用來斷言「這段程式碼不存在」——行為測試抓不到的東西。
 // mock mode 下畫面看起來一樣正常,所以「元件直接讀 mock store」「用 Math.random 生成成交價」
@@ -56,6 +78,10 @@ function assetPage(items: AssetDto[]) {
 function routedFetch(items: AssetDto[] = [APPLE]) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    // 走勢圖(04-10 Task 2)也會發請求;骨架契約的測試不關心它,一律回空序列。
+    if (url.includes('/klines')) {
+      return jsonResponse({ success: true, data: [], error: null, meta: { traceId: 'trace-ok' } });
+    }
     if (url.includes('/assets')) return assetPage(items);
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -613,5 +639,202 @@ describe('OrderTicket typeahead — 七態(04-10 / D-01 / UI-SPEC §Interaction 
     // 不得靜默留空,也不得回退 data.ts。
     expect(symbolInput().disabled).toBe(false);
     expect(symbolInput().readOnly).toBe(false);
+  });
+});
+
+// =====================================================================================
+// Phase 4 Plan 10 Task 2 —— 報價卡真實數字 + 走勢圖三態(D-01 / UI-SPEC §Interaction Contract 3)。
+//
+// 報價卡的六格全部來自**同一份** AssetDto,不需要第二個請求;走勢圖來自
+// `GET /api/v1/market/{symbol}/klines`,且它的任何失敗態都不得阻擋送出(U-11)。
+// =====================================================================================
+
+/**
+ * **刻意矛盾的 fixture**:high(999)/ low(1)彼此與 latestPrice(190.20)、
+ * changePercent(-1.60)都不自洽。只要前端偷偷重算任何一格,斷言就會紅(judgment §7)。
+ *
+ * 欄位形狀對應後端 `AssetDto.java:9-24`;其 BigDecimal **沒有**掛
+ * `@JsonSerialize(using = ToStringSerializer.class)`,所以在 JSON 是 number。
+ */
+const CONTRADICTORY: AssetDto = {
+  uuid: 'asset-aapl',
+  symbol: 'AAPL',
+  name: 'Apple Inc.',
+  assetType: 'STOCK',
+  market: 'US',
+  currency: 'USD',
+  sector: 'Tech',
+  tradeable: true,
+  latestPrice: 190.2,
+  change: -3.1,
+  changePercent: -1.6,
+  volumeText: 'X-VOL',
+  high: 999,
+  low: 1,
+};
+
+/**
+ * 後端 `KlineDto.java:23-30` 的五個 OHLCV 欄位掛
+ * `@JsonSerialize(using = ToStringSerializer.class)`,序列化為 **JSON 字串**
+ * (與 `AssetDto` 相反)。fixture 必須同形,否則 Pitfall 8 抓不到。
+ */
+const KLINES_AS_STRINGS = [
+  { bucket: '2026-08-15T00:00:00Z', open: '217.00000000', high: '219.00000000', low: '216.50000000', close: '218.40000000', volume: '1000.00000000' },
+  { bucket: '2026-08-15T01:00:00Z', open: '218.40000000', high: '220.00000000', low: '218.00000000', close: '219.75000000', volume: '1100.00000000' },
+];
+
+function klineResponse(klines: unknown[]): Response {
+  return jsonResponse({ success: true, data: klines, error: null, meta: { traceId: 'trace-ok' } });
+}
+
+interface MarketRoutes {
+  assets?: (query: string) => Response | Promise<Response>;
+  klines?: (symbol: string) => Response | Promise<Response>;
+}
+
+function marketFetch(routes: MarketRoutes = {}) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/klines')) {
+      const symbol = decodeURIComponent(url.split('/market/')[1].split('/')[0]);
+      return routes.klines ? routes.klines(symbol) : klineResponse([]);
+    }
+    if (url.includes('/assets')) {
+      const query = new URL(url, 'http://localhost').searchParams.get('query') ?? '';
+      return routes.assets ? routes.assets(query) : assetPageResponse([CONTRADICTORY]);
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
+function fetchedUrls(fetchImpl: ReturnType<typeof vi.fn>): string[] {
+  return fetchImpl.mock.calls.map(call => String(call[0]));
+}
+
+describe('OrderTicket 報價卡與走勢圖(04-10 / D-01 / UI-SPEC §Interaction Contract 3)', () => {
+  it('Test 13(零前端計算):報價卡六格逐字等於 AssetDto,即使欄位彼此不自洽', async () => {
+    await mountApiTicket(marketFetch(), { sym: 'AAPL' });
+
+    expect(requireTestid('ticket-quote-last').textContent).toContain('190.20');
+    expect(requireTestid('ticket-quote-change').textContent).toContain('-3.10');
+    expect(requireTestid('ticket-quote-change-pct').textContent).toContain('-1.60%');
+    const range = requireTestid('ticket-quote-range').textContent ?? '';
+    expect(range).toContain('1.00');
+    expect(range).toContain('999.00');
+    expect(requireTestid('ticket-quote-volume').textContent).toContain('X-VOL');
+  });
+
+  it('Test 14(null 處理):null 欄位顯示 — 而不是 NaN 或 null', async () => {
+    const nulled: AssetDto = {
+      ...CONTRADICTORY,
+      latestPrice: null,
+      change: null,
+      changePercent: null,
+      high: null,
+      low: null,
+    };
+    await mountApiTicket(marketFetch({ assets: () => assetPageResponse([nulled]) }), { sym: 'AAPL' });
+
+    expect(requireTestid('ticket-quote-last').textContent?.trim()).toBe('—');
+    expect(requireTestid('ticket-quote-change').textContent?.trim()).toBe('—');
+    expect(requireTestid('ticket-quote-change-pct').textContent?.trim()).toBe('—');
+    expect(requireTestid('ticket-quote-range').textContent).not.toContain('NaN');
+    expect(bodyText()).not.toContain('NaN');
+    expect(bodyText()).not.toContain('null');
+  });
+
+  it('Test 15:報價卡不發第二個請求(同一份 AssetDto 已含全部欄位)', async () => {
+    const fetchImpl = marketFetch();
+    await mountApiTicket(fetchImpl, { sym: 'AAPL' });
+
+    const latestCalls = fetchedUrls(fetchImpl).filter(url => url.includes('/latest'));
+    expect(latestCalls, '報價卡不得另外呼叫 /market/{symbol}/latest').toEqual([]);
+  });
+
+  it('Test 16(Pitfall 8):傳給 LineChart 的 data prop 是 number[],不是字串', async () => {
+    chartProbe.data = null;
+    await mountApiTicket(
+      marketFetch({ klines: () => klineResponse(KLINES_AS_STRINGS) }),
+      { sym: 'AAPL' },
+    );
+
+    const data = chartProbe.data as unknown[];
+    expect(Array.isArray(data), 'LineChart 應收到陣列').toBe(true);
+    expect(data).toHaveLength(2);
+    expect(typeof data[0], 'OHLCV 的字串必須先經 closeSeries 轉成 number').toBe('number');
+    expect(data[0]).toBe(218.4);
+    expect(data[1]).toBe(219.75);
+  });
+
+  it('Test 17(走勢圖 loading):骨架與可讀文字並存,且報價卡數字已經顯示', async () => {
+    const pending = deferred<Response>();
+    await mountApiTicket(marketFetch({ klines: () => pending.promise }), { sym: 'AAPL' });
+
+    const loading = requireTestid('ticket-quote-chart-loading');
+    expect(loading.querySelectorAll('.skeleton-row').length).toBeGreaterThan(0);
+    expect(loading.textContent).toContain(t('en', 'loading'));
+    // 兩者來源不同端點:走勢圖未回來不得拖垮報價卡。
+    expect(requireTestid('ticket-quote-last').textContent).toContain('190.20');
+  });
+
+  it('Test 18(走勢圖 empty):無 K 線才顯示空狀態,有資料時必須消失', async () => {
+    // dev/demo 環境的 market_prices 未必 backfill 過,所以 empty 很可能發生。
+    await mountApiTicket(marketFetch({ klines: () => klineResponse([]) }), { sym: 'AAPL' });
+    expect(requireTestid('ticket-quote-chart-empty').textContent).toContain(t('en', 'quoteChartEmpty'));
+
+    cleanupMounted();
+
+    // 有資料時就不得再宣稱「無走勢資料」—— 這條讓寫死的空狀態佔位無法蒙混過關。
+    await mountApiTicket(marketFetch({ klines: () => klineResponse(KLINES_AS_STRINGS) }), { sym: 'AAPL' });
+    expect(testid('ticket-quote-chart-empty')).toBeNull();
+    expect(testid('ticket-quote-chart'), '有資料時應真的畫出走勢圖').toBeTruthy();
+  });
+
+  it('Test 19(走勢圖 error):顯示 code / traceId / 重試', async () => {
+    let fail = true;
+    const fetchImpl = marketFetch({
+      klines: () => (fail
+        ? failureResponse('KLINE_INTERVAL_INVALID', 'trace-kline', 400)
+        : klineResponse(KLINES_AS_STRINGS)),
+    });
+    await mountApiTicket(fetchImpl, { sym: 'AAPL' });
+
+    const errorBlock = requireTestid('ticket-quote-chart-error');
+    expect(errorBlock.textContent).toContain(t('en', 'quoteChartError'));
+    expect(errorBlock.textContent).toContain('KLINE_INTERVAL_INVALID');
+    expect(errorBlock.textContent).toContain('trace-kline');
+
+    fail = false;
+    const before = fetchedUrls(fetchImpl).filter(url => url.includes('/klines')).length;
+    await click(requireTestid('ticket-quote-chart-retry'));
+    await flushAsync();
+    expect(fetchedUrls(fetchImpl).filter(url => url.includes('/klines')).length).toBe(before + 1);
+    expect(testid('ticket-quote-chart-error')).toBeNull();
+  });
+
+  it('Test 20(U-11 硬規則):走勢圖 loading / empty / error 都不得阻擋送出', async () => {
+    const cases: Array<{ name: string; klines: () => Response | Promise<Response> }> = [
+      { name: 'loading', klines: () => deferred<Response>().promise },
+      { name: 'empty', klines: () => klineResponse([]) },
+      { name: 'error', klines: () => failureResponse('KLINE_INTERVAL_INVALID', 'trace-kline', 400) },
+    ];
+
+    for (const scenario of cases) {
+      await mountApiTicket(marketFetch({ klines: scenario.klines }), { sym: 'AAPL' });
+
+      const advanceBtn = requireTestid('ticket-review-advance') as HTMLButtonElement;
+      expect(advanceBtn.disabled, `走勢圖 ${scenario.name} 態不得阻擋送出`).toBe(false);
+
+      cleanupMounted();
+    }
+  });
+
+  it('Test 21(價格預填):價格等於 AssetDto.latestPrice 且可編輯', async () => {
+    await mountApiTicket(marketFetch(), { sym: 'AAPL' });
+
+    const price = requireInput('ticket-price');
+    expect(price.value).toBe('190.2');
+    expect(price.readOnly).toBe(false);
+    expect(price.disabled).toBe(false);
   });
 });
