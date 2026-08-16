@@ -43,12 +43,24 @@
                 aria-controls="trade-symbol-options"
                 :aria-expanded="symPopoverOpen ? 'true' : 'false'"
                 :aria-activedescendant="activeOptionId"
+                :aria-invalid="invalidAttr('symbol')"
+                :aria-describedby="describedBy('symbol')"
                 :placeholder="t(lang, 'selectSymbol')"
                 :disabled="submitting"
                 @focus="onSymFocus"
                 @input="onSymInput"
                 @keydown="onSymKeydown"
               />
+              <!--
+                欄位級錯誤節點**不加 `role="alert"`**:六個欄位同時出錯會連續朗讀六次。
+                語意由 `aria-describedby` 在聚焦時承擔(§Accessibility Contract)。
+              -->
+              <p
+                v-if="fieldErrorText('symbol')"
+                :id="fieldErrorId('symbol')"
+                class="field-error"
+                data-testid="ticket-field-error-symbol"
+              >{{ fieldErrorText('symbol') }}</p>
               <div v-if="selected" class="sym-meta">
                 <span class="sym-tag">{{ selected.assetType }}</span>
                 <span class="sym-name">{{ selected.name }}</span>
@@ -137,6 +149,7 @@
               <button
                 id="trade-side-buy"
                 type="button"
+                data-testid="ticket-side-buy"
                 :class="['side-btn', 'buy', { active: side === 'BUY' }]"
                 :disabled="submitting"
                 @click="side = 'BUY'"
@@ -145,6 +158,7 @@
               </button>
               <button
                 type="button"
+                data-testid="ticket-side-sell"
                 :class="['side-btn', 'sell', { active: side === 'SELL' }]"
                 :disabled="submitting"
                 @click="side = 'SELL'"
@@ -152,6 +166,12 @@
                 <span aria-hidden="true">↘</span> {{ t(lang, 'sell') }}
               </button>
             </div>
+            <p
+              v-if="fieldErrorText('type')"
+              :id="fieldErrorId('type')"
+              class="field-error"
+              data-testid="ticket-field-error-type"
+            >{{ fieldErrorText('type') }}</p>
 
             <!-- D-04:訂單類型後端沒有對應概念,只在 mock mode 渲染(不留空版位) -->
             <template v-if="live">
@@ -183,8 +203,37 @@
                   data-testid="ticket-qty"
                   min="0"
                   :step="qtyStep"
+                  :aria-invalid="invalidAttr('quantity')"
+                  :aria-describedby="describedBy('quantity')"
                   :disabled="submitting"
                 />
+                <p
+                  v-if="fieldErrorText('quantity')"
+                  :id="fieldErrorId('quantity')"
+                  class="field-error"
+                  data-testid="ticket-field-error-quantity"
+                >{{ fieldErrorText('quantity') }}</p>
+                <!--
+                  D-15:可賣數量三態。失敗**不阻擋送出** —— 後端仍是權威。
+                  只讀 `symbol` 與 `totalQuantity`,不碰任何損益欄位(Phase 3 D-04)。
+                -->
+                <template v-if="side === 'SELL'">
+                  <p
+                    v-if="holdingsLoading"
+                    class="hint"
+                    data-testid="ticket-sellable-loading"
+                  >{{ t(lang, 'sellableQtyLoading') }}</p>
+                  <p
+                    v-else-if="holdingsFailed"
+                    class="hint"
+                    data-testid="ticket-sellable-failed"
+                  >{{ t(lang, 'sellableQtyFailed') }}</p>
+                  <p
+                    v-else-if="sellableQty !== null"
+                    class="hint num"
+                    data-testid="ticket-sellable-qty"
+                  >{{ sellableQtyText }}</p>
+                </template>
               </div>
               <div>
                 <!-- D-04 連帶效果:MKT 鎖價機制移除,價格一律預填 latestPrice 但可編輯 -->
@@ -198,8 +247,16 @@
                   data-testid="ticket-price"
                   min="0"
                   step="0.01"
+                  :aria-invalid="invalidAttr('price')"
+                  :aria-describedby="describedBy('price')"
                   :disabled="submitting"
                 />
+                <p
+                  v-if="fieldErrorText('price')"
+                  :id="fieldErrorId('price')"
+                  class="field-error"
+                  data-testid="ticket-field-error-price"
+                >{{ fieldErrorText('price') }}</p>
               </div>
             </div>
 
@@ -217,10 +274,17 @@
                   data-testid="ticket-fee"
                   min="0"
                   step="0.01"
-                  aria-describedby="trade-fee-hint"
+                  :aria-invalid="invalidAttr('fee')"
+                  :aria-describedby="describedBy('fee', 'trade-fee-hint')"
                   :disabled="submitting"
                 />
                 <p id="trade-fee-hint" class="hint">{{ t(lang, 'tradeFeeHint') }}</p>
+                <p
+                  v-if="fieldErrorText('fee')"
+                  :id="fieldErrorId('fee')"
+                  class="field-error"
+                  data-testid="ticket-field-error-fee"
+                >{{ fieldErrorText('fee') }}</p>
               </div>
               <div>
                 <!-- D-03:成交時間預設現在、不可晚於現在;送出時轉為帶 offset 的 ISO 字串 -->
@@ -232,10 +296,21 @@
                   class="inp"
                   data-testid="ticket-executed-at"
                   :max="maxExecutedAt"
-                  aria-describedby="trade-executed-at-hint"
+                  :aria-invalid="invalidAttr('executedAt')"
+                  :aria-describedby="describedBy('executedAt', 'trade-executed-at-hint')"
                   :disabled="submitting"
                 />
                 <p id="trade-executed-at-hint" class="hint">{{ t(lang, 'tradeExecutedAtHint') }}</p>
+                <!--
+                  executedAt 在後端沒有任何 Bean Validation 註解,所以**不會**出現在
+                  `fields` 裡;這個節點承接的是前端自檢(未來時間)之外的意外情況。
+                -->
+                <p
+                  v-if="fieldErrorText('executedAt')"
+                  :id="fieldErrorId('executedAt')"
+                  class="field-error"
+                  data-testid="ticket-field-error-executedAt"
+                >{{ fieldErrorText('executedAt') }}</p>
               </div>
             </div>
 
@@ -247,8 +322,16 @@
               class="inp"
               data-testid="ticket-note"
               maxlength="500"
+              :aria-invalid="invalidAttr('note')"
+              :aria-describedby="describedBy('note')"
               :disabled="submitting"
             />
+            <p
+              v-if="fieldErrorText('note')"
+              :id="fieldErrorId('note')"
+              class="field-error"
+              data-testid="ticket-field-error-note"
+            >{{ fieldErrorText('note') }}</p>
 
             <!-- D-04:TIF 後端沒有對應概念,只在 mock mode 渲染 -->
             <template v-if="live">
@@ -492,7 +575,12 @@
             >{{ submitting ? t(lang, 'recordingTrade') : t(lang, 'recordTrade') }}</button>
           </template>
           <template v-else>
-            <button type="button" class="btn-ghost" @click="recordAnother">{{ t(lang, 'recordAnother') }}</button>
+            <button
+              type="button"
+              class="btn-ghost"
+              data-testid="ticket-record-another"
+              @click="recordAnother"
+            >{{ t(lang, 'recordAnother') }}</button>
             <button type="button" class="btn-accent" @click="goPositions">{{ t(lang, 'viewPositions') }} →</button>
           </template>
         </div>
@@ -513,9 +601,9 @@ import { ApiClientError } from '../services/apiClient';
 // 不得在本檔自己寫 Number() —— 那正是 vue-tsc 在模板內抓不到的 Pitfall 8。
 import { closeSeries } from '../services/marketApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { notifyTradeCreated } from '../services/portfolioRevision';
+import { notifyTradeCreated, portfolioRevision } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import type { AssetDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
+import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
@@ -816,10 +904,84 @@ const selectedMatchesQuery = computed(() =>
   !!selected.value && symQuery.value.trim().toUpperCase() === selected.value.symbol.toUpperCase()
 );
 
+// =================== D-15:SELL 預檢(可賣數量) ===================
+// **預檢只是 UX,不是防護**(judgment §5)。後端 409 `TRADE_INSUFFICIENT_HOLDING`
+// 永遠是最終權威 —— 另一個分頁剛賣掉的併發情境,前端不可能知道。
+//
+// **只讀 `symbol` 與 `totalQuantity` 兩個欄位。** `HoldingDto` 其餘的成本、市值、
+// 已實現/未實現損益與報酬率欄位**一律不得使用** —— 用它們算「賣出後的損益預估」
+// 會踩 Phase 3 D-04 與 judgment §7(前端絕不重算成本或損益)。
+//
+// 本段刻意不寫出那些欄位的**字面名稱**,好讓「沒有引用」可被 `?raw` 機械驗證
+// (04-07 Deviation #2 的教訓:註解會被字面檢查與編譯器一併讀到)。
+
+type HoldingsState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded'; data: HoldingDto[] }
+  | { status: 'error' };
+
+const holdingsState = ref<HoldingsState>({ status: 'idle' });
+let holdingsSeq = 0;
+
+async function loadSellableHoldings() {
+  const seq = ++holdingsSeq;
+  holdingsState.value = { status: 'loading' };
+  try {
+    const holdings = await apiClients().portfolio.listHoldings();
+    if (seq !== holdingsSeq) return;
+    holdingsState.value = { status: 'loaded', data: holdings };
+  } catch {
+    // 讀不到持倉**不阻擋送出** —— 後端仍會檢查(§Interaction Contract 4)。
+    if (seq !== holdingsSeq) return;
+    holdingsState.value = { status: 'error' };
+  }
+}
+
+// Q9.2 的取捨:只有 SELL 需要;一次拿全部,之後換 symbol 不必再打
+// (`HoldingDto[]` 對單一使用者是小陣列)。
+watch(side, (value) => {
+  if (value !== 'SELL') return;
+  if (holdingsState.value.status !== 'idle') return;
+  void loadSellableHoldings();
+});
+
+// 交易成功會改變持倉,快取必須跟著失效(§Interaction Contract 4 末段)。
+// 只設回 idle 不主動重讀 —— 使用者可能已經在 result 畫面,那時發請求沒有消費者。
+watch(portfolioRevision, () => {
+  holdingsSeq += 1;
+  holdingsState.value = { status: 'idle' };
+});
+
+const holdingsLoading = computed(() => holdingsState.value.status === 'loading');
+const holdingsFailed = computed(() => holdingsState.value.status === 'error');
+
+/** `null` = 還不知道(未載入 / 失敗 / 未選標的);`0` = 確定可賣 0。 */
+const sellableQty = computed<number | null>(() => {
+  const state = holdingsState.value;
+  if (state.status !== 'loaded' || !selected.value) return null;
+  const match = state.data.find(item => item.symbol === selected.value!.symbol);
+  return match ? match.totalQuantity : 0;
+});
+
 /**
- * D-15 的最小預檢:只在 mock mode 生效(mock adapter 的 reactive 視窗是同步的)。
- * API mode 的持倉預檢(含「可賣數量」顯示與載入/失敗態)是 04-11 的範圍;
- * 後端 409 `TRADE_INSUFFICIENT_HOLDING` 在兩個 mode 都是最終權威(judgment §5)。
+ * 零持倉一律顯示「可賣數量:0」,**不得**寫成「您未持有此標的」——
+ * 後端 SQL 有 `total_quantity > 0` 過濾(`JdbcTradingRepository.java:210`),
+ * 「從未持有」與「已全數賣出」在回應裡根本不可分,宣稱前者是在編造事實。
+ */
+const sellableQtyText = computed(() => {
+  const separator = props.lang === 'zh' ? ':' : ': ';
+  return `${t(props.lang, 'sellableQty')}${separator}${sellableQty.value ?? 0}`;
+});
+
+const oversellError = computed(() => {
+  if (side.value !== 'SELL' || sellableQty.value === null || qty.value <= 0) return '';
+  return qty.value > sellableQty.value ? t(props.lang, 'tradeErrOversell') : '';
+});
+
+/**
+ * mock mode 專屬的同步預檢(mock adapter 的 reactive 視窗)。API mode 走上方的
+ * `oversellError`;後端 409 `TRADE_INSUFFICIENT_HOLDING` 在兩個 mode 都是最終權威。
  */
 const sellPrecheckError = computed(() => {
   const positions = clients.value?.portfolio.live?.positions;
@@ -840,20 +1002,86 @@ const executedAtError = computed(() => {
 const feeError = computed(() => (fee.value < 0 || !Number.isFinite(fee.value) ? t(props.lang, 'tradeErrFee') : ''));
 
 const validationError = computed(() =>
-  orderError.value || sellPrecheckError.value || executedAtError.value || feeError.value
+  orderError.value || sellPrecheckError.value || oversellError.value
+  || executedAtError.value || feeError.value
 );
 
+// =================== D-16:錯誤分派 ===================
+
 /**
- * 底部錯誤的文案。**依 `error.code` 分派,絕不假設錯誤出現的順序**
- * (PR #15 會把「type 打錯 + symbol 不存在」的優先序從 `ASSET_NOT_FOUND`
- * 改回 `TRADE_UNSUPPORTED_TYPE`,任何依賴順序的實作都會在那天壞掉)。
- * 完整對照表在 04-11 Task 2;此處先保底,讓失敗一定有可讀說明。
+ * 底部錯誤的文案對照表(`04-UI-SPEC.md` §Copywriting Contract 是權威來源)。
+ *
+ * **依 `error.code` 分派,絕不假設錯誤出現的順序。** PR #15 會把「type 打錯 +
+ * symbol 不存在」的優先序從 `ASSET_NOT_FOUND` 改回 `TRADE_UNSUPPORTED_TYPE`;
+ * 任何「第一個錯誤一定是 X」的假設都會在那天靜默壞掉。
+ *
+ * `NETWORK_ERROR` 是前端合成的診斷碼(後端不會回這個值),讓「連不上伺服器」
+ * 與「後端回了一個我不認識的 code」可以明確區分 —— 前者的文案是唯一
+ * 敢說「結果未知但重試不會建立重複交易」的那一條。
  */
+const SUBMIT_ERROR_COPY: Record<string, string> = {
+  TRADE_INSUFFICIENT_HOLDING: 'tradeErrOversell',
+  ASSET_NOT_FOUND: 'tradeErrAssetNotFound',
+  TRADE_UNSUPPORTED_TYPE: 'tradeErrValidation',
+  TRADE_INVALID_QUANTITY: 'tradeErrValidation',
+  TRADE_INVALID_PRICE: 'tradeErrValidation',
+  VALIDATION_FAILED: 'tradeErrValidation',
+  TRADE_CONFLICT: 'tradeErrConflict',
+  TRADE_IDEMPOTENCY_KEY_REUSED: 'tradeErrKeyReused',
+  // U-08(刻意覆寫 `02-UI-SPEC.md:144`):app 啟動時的 CSRF bootstrap 失敗 → 全域 banner;
+  // 單一 unsafe 請求被 CSRF 拒絕 → 該請求的發起處,也就是這裡。
+  AUTH_CSRF_TOKEN_INVALID: 'tradeErrCsrf',
+  AUTH_CSRF_TOKEN_MISSING: 'tradeErrCsrf',
+  ACCESS_DENIED: 'tradeErrForbidden',
+  FORBIDDEN: 'tradeErrForbidden',
+  NETWORK_ERROR: 'tradeErrNetwork',
+};
+
 const submitErrorMessage = computed(() => {
   const error = submitError.value;
   if (!error) return '';
-  return t(props.lang, error.code === 'NETWORK_ERROR' ? 'tradeErrNetwork' : 'tradeErrUnknown');
+  const key = SUBMIT_ERROR_COPY[error.code]
+    ?? (error.status === 403 ? 'tradeErrForbidden' : 'tradeErrUnknown');
+  return t(props.lang, key);
 });
+
+/**
+ * `fields` 的 key → 前端自己的 i18n 文案。
+ * **只用 key 判斷「哪個欄位錯了」** —— value 是 Bean Validation 的英文預設訊息,
+ * 既是使用者看不懂的內部細節,也會隨後端版本漂移(D-16 明文禁止直接顯示)。
+ */
+const FIELD_ERROR_COPY: Record<string, string> = {
+  symbol: 'tradeErrSymbol',
+  type: 'tradeErrType',
+  quantity: 'tradeErrQuantity',
+  price: 'tradeErrPrice',
+  fee: 'tradeErrFee',
+  note: 'tradeErrNote',
+  executedAt: 'tradeErrExecutedAt',
+};
+
+const fieldErrorKeys = computed(() => Object.keys(submitError.value?.fields ?? {}));
+
+function fieldErrorId(field: string): string {
+  return `trade-${field}-error`;
+}
+
+function fieldErrorText(field: string): string {
+  if (!fieldErrorKeys.value.includes(field)) return '';
+  const key = FIELD_ERROR_COPY[field];
+  return key ? t(props.lang, key) : '';
+}
+
+/** 多個 id 以空白分隔;沒有任何關聯節點時回 undefined(不渲染空屬性)。 */
+function describedBy(field: string, ...hintIds: string[]): string | undefined {
+  const ids = [...hintIds];
+  if (fieldErrorText(field)) ids.push(fieldErrorId(field));
+  return ids.length ? ids.join(' ') : undefined;
+}
+
+function invalidAttr(field: string): 'true' | undefined {
+  return fieldErrorText(field) ? 'true' : undefined;
+}
 
 /**
  * **U-11 硬規則:這個 computed 不得引用 klines / 走勢圖的任何狀態。**
@@ -1076,9 +1304,15 @@ async function submitTrade() {
 }
 
 /**
- * 送出失敗的統一落點。**key 一律保留** —— 「這次沒寫入,但意圖沒變」,
- * 沿用同一把重送是安全的(這正是文案敢寫「不會建立重複交易」的前提)。
- * 唯一例外(丟棄 key)由 U-04 的處置表決定,見 04-11 Task 2。
+ * 送出失敗的統一落點。
+ *
+ * **key 的處置(U-04 對照表):預設一律保留** —— 「這次沒寫入,但意圖沒變」,
+ * 沿用同一把重送是安全且正確的(這正是文案敢寫「不會建立重複交易」的前提)。
+ * `TRADE_CONFLICT`、5xx、網路失敗、`fields` 類、oversell、CSRF/403 全部走這條。
+ *
+ * **唯一例外是 `TRADE_IDEMPOTENCY_KEY_REUSED`:必須丟棄 key。**
+ * 否則使用者照文案「確認欄位後重新送出」會用同一把 key 再吃一次 409,
+ * 形成無出路的迴圈 —— 他甚至不會知道要關掉整張 ticket 才能繼續。
  */
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
@@ -1086,7 +1320,13 @@ function handleSubmitFailure(error: unknown) {
     // 前端合成的診斷碼:後端不會回這個值,所以它與「後端回了未知 code」可明確區分。
     : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
 
+  // 401 / refresh 失敗**不在 ticket 顯示**,走全域 SessionBanner
+  // (Phase 3 D-13 / Phase 2 D-14;`apiClient.ts:315,323` 已負責升級)。
+  // key 保留:登入回來後重送的是同一個意圖。
+  if (described.status === 401) return;
+
   submitError.value = described;
+  if (described.code === 'TRADE_IDEMPOTENCY_KEY_REUSED') currentKey.value = null;
   // 欄位級錯誤必須讓使用者看得到出錯的欄位,review 步驟沒有輸入框(§7 版位表)。
   if (described.fields) step.value = 'ticket';
 }
@@ -1250,6 +1490,11 @@ function handleSubmitFailure(error: unknown) {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
   background: rgba(220,38,38,0.10); color: var(--dn);
   font-size: 12px; font-weight: 600;
+}
+/* 欄位級錯誤:輸入框下方 12px --dn 文字(§7 版位表) */
+.field-error {
+  margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
+  color: var(--dn); overflow-wrap: anywhere;
 }
 /* 底部錯誤區:ticket body 內、footer 之上,全寬(§Layout Contract) */
 .submit-error { margin: 0 24px 16px; }
