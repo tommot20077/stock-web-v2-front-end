@@ -282,10 +282,18 @@
             v-for="p in sortedPositions"
             :key="p.sym"
             data-testid="positions-row"
-            :class="{ fresh: mockLastFill && p.sym === mockLastFill.sym, scrubbed: scrubDays > 0 }"
+            :class="{ fresh: effectiveLastFill && p.sym === effectiveLastFill.sym, scrubbed: scrubDays > 0 }"
             @click="$emit('order', { sym: p.sym })"
           >
-            <td style="font-weight:600;padding-left:16px">{{ p.sym }}</td>
+            <td style="font-weight:600;padding-left:16px">
+              {{ p.sym }}
+              <!-- U-12:不只靠顏色與動畫 —— 色盲 / 高對比 / 動畫播完的使用者都要看得出是哪一列 -->
+              <span
+                v-if="effectiveLastFill && p.sym === effectiveLastFill.sym"
+                class="fresh-badge"
+                data-testid="positions-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td style="color:var(--fg-dim)">{{ p.name }}</td>
             <td class="num" style="text-align:right">{{ p.qty }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(p.avg) }}</td>
@@ -311,16 +319,25 @@
         <!--
           API 路徑:每一格都是後端欄位(D-04)。唯一的前端衍生是 weight,
           且分母是 summary.totalMarketValue 而非 qty×price 的自行加總(D-04 例外條款)。
-          lastFill 在 API mode 無成交事件來源,故不綁 fresh class(Phase 4 引入 post-trade refetch 時再接)。
+          D-13:fresh 的來源是 effectiveLastFill(API mode 由 post-trade refetch 提供)。
         -->
         <tbody v-else>
           <tr
             v-for="h in sortedHoldings"
             :key="h.assetId"
             data-testid="positions-row"
+            :class="{ fresh: effectiveLastFill && h.symbol === effectiveLastFill.sym }"
             @click="$emit('order', { sym: h.symbol })"
           >
-            <td style="font-weight:600;padding-left:16px">{{ h.symbol }}</td>
+            <td style="font-weight:600;padding-left:16px">
+              {{ h.symbol }}
+              <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
+              <span
+                v-if="effectiveLastFill && h.symbol === effectiveLastFill.sym"
+                class="fresh-badge"
+                data-testid="positions-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
             <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(h.avgCost) }}</td>
@@ -355,7 +372,7 @@ import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { HoldingDto, PortfolioSummaryDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { portfolioRevision } from '../services/portfolioRevision';
+import { apiLastFill, portfolioRevision } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
@@ -368,7 +385,12 @@ const live = api.live;
 
 // live 的 getter 每次存取才解析 store,故必須在 computed / render 內取用才有 reactivity。
 const mockPositions = computed<Position[]>(() => (live ? live.positions : []));
-const mockLastFill = computed(() => (live ? live.lastFill : null));
+
+/**
+ * D-13:fresh 高亮的來源切換。mock mode 有 Pinia 的成交事件,API mode 由 `apiLastFill` 補上。
+ * 兩者形狀逐字相同(04-07 的刻意設計),所以**綁定表達式一個字都不用改,只是來源換了**。
+ */
+const effectiveLastFill = computed(() => (live ? live.lastFill : apiLastFill.value));
 
 // =============== API mode 區塊狀態機(D-11:兩區塊各自載入、各自重試) ===============
 interface BlockError {
@@ -982,6 +1004,24 @@ tr.scrubbed:hover { background: color-mix(in oklch, #a855f7 8%, transparent); }
 }
 .refresh-stale .details span { overflow-wrap: anywhere; }
 .block-refreshing { opacity: .72; transition: opacity .15s; }
+
+/* U-12:剛成交列的非顏色線索。inline pill,不改列高(形狀沿用 Trades 的 .pill) */
+.fresh-badge {
+  display: inline-block; margin-left: 8px;
+  padding: 2px 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600;
+  background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg);
+}
+
+/*
+ * U-12 / a11y:動畫關掉,標記照常顯示 —— 這正是「不只靠動畫」的價值所在。
+ * 高亮的壽命由 App.vue 的 v-if 切頁卸載界定,**不用計時器**(計時器會讓測試時間相依而 flaky)。
+ */
+@media (prefers-reduced-motion: reduce) {
+  tbody tr.fresh { animation: none; }
+  .skeleton-row { animation: none; }
+  .block-refreshing { transition: none; }
+}
 
 /* Q5:骨架列固定筆數,載入呈現不隨資料量變動 */
 .skeleton-row {

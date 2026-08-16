@@ -59,6 +59,13 @@
           {{ t(lang, 'authRetry') }}
         </button>
       </div>
+      <!--
+        D-11:補登的交易(D-03)不保證落在第 0 頁,甚至可能不符當前篩選。
+        「已記錄,但不在目前的檢視範圍」比讓使用者以為沒記錄成功好。這不是錯誤,故不用錯誤色。
+      -->
+      <div v-if="notInCurrentView" class="view-hint" data-testid="trades-not-in-current-view">
+        {{ t(lang, 'tradeNotInCurrentView') }}
+      </div>
       <div v-if="!live && tradesLoading" class="block-state" data-testid="trades-loading">
         {{ t(lang, 'loading') }}
       </div>
@@ -112,11 +119,19 @@
             v-for="(tr, i) in filteredTrades"
             :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note"
             data-testid="trades-row"
-            :class="{ fresh: i === 0 && mockLastFill && tr.sym === mockLastFill.sym }"
+            :class="{ fresh: i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym }"
           >
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tr.d }}</td>
             <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
-            <td style="font-weight:500">{{ tr.sym }}</td>
+            <td style="font-weight:500">
+              {{ tr.sym }}
+              <!-- U-12:不只靠顏色與動畫 —— 色盲 / 高對比 / 動畫播完的使用者都要看得出是哪一列 -->
+              <span
+                v-if="i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym"
+                class="pill fresh-badge"
+                data-testid="trades-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td class="num" style="text-align:right">{{ tr.qty }}</td>
             <td class="num" style="text-align:right">${{ fmtNum(tr.px) }}</td>
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.qty * tr.px, 0) }}</td>
@@ -127,13 +142,26 @@
         <!--
           API 路徑:整份列表就是後端當前頁的回應,前端不再做任何本地篩選或排序(T-03-15)。
           :key 用 TradeDto.id(uuid),取代原本的多欄拼接 key —— 同內容不同筆的交易才不會撞 key。
-          lastFill 在 API mode 無成交事件來源,故不綁 fresh(Phase 4 接 post-trade refetch)。
+          D-13:fresh 的來源是 effectiveLastFill(API mode 由 post-trade refetch 提供)。
         -->
         <tbody v-else>
-          <tr v-for="tr in apiTrades" :key="tr.id" data-testid="trades-row">
+          <tr
+            v-for="(tr, i) in apiTrades"
+            :key="tr.id"
+            data-testid="trades-row"
+            :class="{ fresh: i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym }"
+          >
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tradeDate(tr) }}</td>
             <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
-            <td style="font-weight:500">{{ tr.symbol }}</td>
+            <td style="font-weight:500">
+              {{ tr.symbol }}
+              <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
+              <span
+                v-if="i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym"
+                class="pill fresh-badge"
+                data-testid="trades-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td class="num" style="text-align:right">{{ tr.quantity }}</td>
             <td class="num" style="text-align:right">${{ fmtNum(tr.price) }}</td>
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.quantity * tr.price, 0) }}</td>
@@ -168,7 +196,12 @@ import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { TradeListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { portfolioRevision } from '../services/portfolioRevision';
+import {
+  apiLastFill,
+  clearLastCreatedTrade,
+  lastCreatedTradeId,
+  portfolioRevision,
+} from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
 
@@ -182,7 +215,12 @@ const live = api.live;
 
 // live 的 getter 每次存取才解析 store,故必須在 computed / render 內取用才有 reactivity。
 const mockTrades = computed<Trade[]>(() => (live ? live.trades : []));
-const mockLastFill = computed(() => (live ? live.lastFill : null));
+
+/**
+ * D-13:fresh 高亮的來源切換。mock mode 有 Pinia 的成交事件,API mode 由 `apiLastFill` 補上。
+ * 兩者形狀逐字相同(04-07 的刻意設計),所以**綁定表達式一個字都不用改,只是來源換了**。
+ */
+const effectiveLastFill = computed(() => (live ? live.lastFill : apiLastFill.value));
 
 // D-05:mock 保留寫死的 '2026';API mode 一律動態當年度(2027 年不會突然壞掉)。
 const CURRENT_YEAR = new Date().getFullYear();
@@ -222,6 +260,19 @@ const tradesError = computed(() => (tradesState.value.status === 'error' ? trade
 const tradesPage = computed(() => (tradesState.value.status === 'loaded' ? tradesState.value.data : null));
 const apiTrades = computed<TradeDto[]>(() => tradesPage.value?.items ?? []);
 const totalPages = computed(() => tradesPage.value?.totalPages ?? 0);
+
+/**
+ * D-11:剛建立的那筆交易是否落在目前這一頁的結果集內。
+ *
+ * **判定只比 id。** 篩選與排序都在後端執行;前端重算「這筆符不符合目前的條件」等於
+ * 複製一份後端邏輯,而第一個邊界情況(半開區間、時區)就會分歧
+ * (Phase 3 D-04 / judgment §7)。沒有剛建立的交易時一律視為「在範圍內」,不顯示提示。
+ */
+const inResultSet = computed(() => {
+  const created = lastCreatedTradeId.value;
+  if (created === null) return true;
+  return apiTrades.value.some(row => row.id === created);
+});
 
 const exporting = ref(false);
 const exportError = ref<BlockError | null>(null);
@@ -263,6 +314,9 @@ function queryParams(): TradeListParams {
  */
 const tradesRefreshing = ref(false);
 const tradesRefreshError = ref<BlockError | null>(null);
+
+/** D-11 提示的顯示條件。重讀還沒落地前不下結論 —— 否則提示會在重讀期間先閃一下再消失。 */
+const notInCurrentView = computed(() => !live && !tradesRefreshing.value && !inResultSet.value);
 
 interface LoadTradesOptions {
   /** true = 保留舊列的重讀(U-05);false / 省略 = 會清空列表的一般載入。 */
@@ -327,6 +381,9 @@ function retryRefresh() {
 function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
   mutate();
   pageNo.value = 0;
+  // D-11:使用者自己改了條件就代表他不再需要那條提示。
+  // 成交後的重讀**不清**(那是提示的產生來源,清掉就永遠比不到)。
+  if (options.refresh !== true) clearLastCreatedTrade();
   void loadTrades(options);
 }
 
@@ -353,11 +410,12 @@ function toggleSort(key: SortKey) {
   });
 }
 
-/** 換頁不是篩選/排序變更,不套 D-15 重置。 */
+/** 換頁不是篩選/排序變更,不套 D-15 重置(但一樣是「使用者改了檢視」,D-11 提示要清掉)。 */
 function goToPage(delta: number) {
   const next = pageNo.value + delta;
   if (next < 0 || next >= totalPages.value) return;
   pageNo.value = next;
+  clearLastCreatedTrade();
   void loadTrades();
 }
 
@@ -529,6 +587,20 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
+/* U-12:剛成交列的非顏色線索。inline pill,不改列高 */
+.fresh-badge {
+  margin-left: 8px; font-size: 12px; font-weight: 600;
+  background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg);
+}
+
+/*
+ * U-12 / a11y:動畫關掉,標記照常顯示 —— 這正是「不只靠動畫」的價值所在。
+ * 高亮的壽命由 App.vue 的 v-if 切頁卸載界定,**不用計時器**(計時器會讓測試時間相依而 flaky)。
+ */
+@media (prefers-reduced-motion: reduce) {
+  tbody tr.fresh { animation: none; }
+  .block-refreshing { transition: none; }
+}
 
 /* 區塊級狀態(D-11/D-12):沿用 Overview / Positions 的 code/traceId 呈現慣例 */
 .block-state { padding: 18px 20px; font-size: 13px; color: var(--fg-dim); }
@@ -553,6 +625,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 }
 .refresh-stale .details span { overflow-wrap: anywhere; }
 .block-refreshing { opacity: .72; transition: opacity .15s; }
+/* D-11:說明列,不是錯誤 —— 用 --fg-dim 而不是錯誤色 */
+.view-hint { padding: 8px 20px; font-size: 12px; color: var(--fg-dim); }
 
 /* D-08:換頁按鈕 + 頁碼指示器 */
 .pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
