@@ -343,8 +343,15 @@
                 </div>
                 <div>
                   <div class="qm-l">{{ t(lang, 'volume') }}</div>
-                  <!-- volumeText 後端就是已格式化的 String,前端不得重算 -->
-                  <div class="num qm-v" data-testid="ticket-quote-volume">{{ selected.volumeText }}</div>
+                  <!--
+                    volumeText 後端就是已格式化的 String,前端不得重算。
+                    `AssetRepository:29` 是 `left join asset_latest_prices` ——
+                    沒有行情列時 `rs.getString("volume_text")` 會是 null(型別宣告為 string
+                    只是還沒對齊),所以這裡與其他五格一樣要落到 `—` 而不是空白。
+                  -->
+                  <div class="num qm-v" data-testid="ticket-quote-volume">
+                    {{ selected.volumeText || '—' }}
+                  </div>
                 </div>
               </div>
             </div>
