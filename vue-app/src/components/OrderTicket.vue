@@ -41,46 +41,94 @@
                 role="combobox"
                 aria-autocomplete="list"
                 aria-controls="trade-symbol-options"
-                :aria-expanded="symOpen && options.length > 0"
+                :aria-expanded="symPopoverOpen ? 'true' : 'false'"
+                :aria-activedescendant="activeOptionId"
                 :placeholder="t(lang, 'selectSymbol')"
                 :disabled="submitting"
-                @focus="symOpen = true"
+                @focus="onSymFocus"
                 @input="onSymInput"
+                @keydown="onSymKeydown"
               />
               <div v-if="selected" class="sym-meta">
                 <span class="sym-tag">{{ selected.assetType }}</span>
                 <span class="sym-name">{{ selected.name }}</span>
               </div>
-              <div
-                v-if="symOpen && options.length"
-                id="trade-symbol-options"
-                class="sym-pop"
-                role="listbox"
-                data-testid="ticket-symbol-options"
-              >
-                <div
-                  v-for="asset in options"
-                  :key="asset.uuid"
-                  class="sym-row"
-                  role="option"
-                  :aria-selected="asset.symbol === selected?.symbol"
-                  :data-testid="`ticket-symbol-option-${asset.symbol}`"
-                  @mousedown.prevent="pickAsset(asset)"
-                >
-                  <div>
-                    <div class="sym-opt-sym">{{ asset.symbol }}</div>
-                    <div class="sym-opt-name">{{ asset.name }}</div>
+
+              <!--
+                七態下拉(§Interaction Contract 2)。狀態機形狀複製 Positions.vue:336-368
+                的 per-block 四態,模板不做型別窄化 —— 一律先投影成 computed。
+                **這一區的任何狀態都不得阻擋 ticket 的其他欄位**(錯誤只屬於這個區塊)。
+              -->
+              <div v-if="symPopoverOpen" class="sym-pop">
+                <div v-if="symbolLoading" class="block-state" data-testid="ticket-symbol-loading">
+                  <!-- Loading 一律有可讀文字,不得只有 spinner(§Interaction Contract 2) -->
+                  <div>{{ t(lang, 'loading') }}</div>
+                  <div v-for="i in 3" :key="i" class="skeleton-row" />
+                </div>
+                <div v-else-if="symbolError" class="block-error" data-testid="ticket-symbol-error">
+                  <div>{{ t(lang, 'symbolSearchFailed') }}</div>
+                  <!-- T-04-09:只露 code 與 traceId,不顯示後端 message -->
+                  <div class="details">
+                    <span data-testid="ticket-symbol-error-code">{{ symbolError.code }}</span>
+                    <span v-if="symbolError.traceId" data-testid="ticket-symbol-trace-id">
+                      {{ t(lang, 'authRequestId') }} {{ symbolError.traceId }}
+                    </span>
                   </div>
-                  <div class="num sym-opt-right">
-                    <div class="sym-opt-px">{{ fmtNum(asset.latestPrice ?? Number.NaN) }}</div>
+                  <button
+                    type="button"
+                    class="block-retry"
+                    data-testid="ticket-symbol-retry"
+                    @click="retrySymbolSearch"
+                  >{{ t(lang, 'authRetry') }}</button>
+                </div>
+                <template v-else>
+                  <div
+                    v-if="visibleOptions.length"
+                    id="trade-symbol-options"
+                    class="sym-list"
+                    role="listbox"
+                    data-testid="ticket-symbol-options"
+                  >
                     <div
-                      class="sym-opt-chg"
-                      :style="{ color: (asset.changePercent ?? 0) >= 0 ? 'var(--up)' : 'var(--dn)' }"
+                      v-for="(asset, index) in visibleOptions"
+                      :id="`trade-symbol-option-${index}`"
+                      :key="asset.uuid"
+                      :class="['sym-row', { active: index === activeIndex }]"
+                      role="option"
+                      :aria-selected="asset.symbol === selected?.symbol ? 'true' : 'false'"
+                      :data-testid="`ticket-symbol-option-${asset.symbol}`"
+                      @mousedown.prevent="pickAsset(asset)"
                     >
-                      {{ fmtPct(asset.changePercent ?? 0) }}
+                      <div>
+                        <div class="sym-opt-sym">{{ asset.symbol }}</div>
+                        <div class="sym-opt-name">{{ asset.name }}</div>
+                      </div>
+                      <div class="num sym-opt-right">
+                        <div class="sym-opt-px">{{ numOrDash(asset.latestPrice) }}</div>
+                        <div class="sym-opt-chg" :style="{ color: changeColor(asset.changePercent) }">
+                          {{ pctOrDash(asset.changePercent) }}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                  <!-- U-10:有結果但全部不可交易,必須與「查無結果」分開,否則使用者以為打錯字 -->
+                  <div
+                    v-else-if="symbolNoTradable"
+                    class="block-state"
+                    data-testid="ticket-symbol-no-tradable"
+                  >{{ t(lang, 'symbolNoTradable') }}</div>
+                  <div
+                    v-else
+                    class="block-state"
+                    data-testid="ticket-symbol-empty"
+                  >{{ t(lang, 'symbolNoResults') }}</div>
+                  <!-- U-09:不做分頁/無限捲動,只提示縮小關鍵字 -->
+                  <div
+                    v-if="symbolTruncated"
+                    class="sym-truncated"
+                    data-testid="ticket-symbol-truncated"
+                  >{{ t(lang, 'symbolMoreResults') }}</div>
+                </template>
               </div>
             </div>
 
@@ -381,15 +429,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { t } from '../i18n';
-// 只取格式化純函式;標的資料一律經 market adapter,本檔不再讀 data.ts 的假資料集
-// (SYMBOLS / CRYPTO / FX / genSeries 全部移除)。
+// 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
+// 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
 import { fmtNum, fmtPct } from '../data';
+import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyTradeCreated } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import type { AssetDto, TradeDto } from '../services/apiTypes';
+import type { AssetDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
@@ -429,7 +478,6 @@ const symInput = ref<HTMLInputElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 const symQuery = ref('');
 const symOpen = ref(false);
-const options = ref<AssetDto[]>([]);
 const selected = ref<AssetDto | null>(null);
 
 const side = ref<'BUY' | 'SELL'>('BUY');
@@ -448,19 +496,150 @@ const submitting = ref(false);
 const orderError = ref('');
 const recorded = ref<TradeDto | null>(null);
 
-/** typeahead 下拉最多 10 筆(§2);debounce / AbortController / 七態是 04-10 的範圍。 */
-const SEARCH_SIZE = 10;
+// =================== symbol typeahead 的 per-block 狀態機(D-01 / UI-SPEC §2) ===================
+// 形狀複製 `Positions.vue:336-368`(Phase 3 D-11 的 per-block 四態),多一個 `idle`:
+// ticket 尚未查過任何一次時下拉不該存在。
 
-async function searchAssets(query: string): Promise<AssetDto[]> {
-  try {
-    const page = await apiClients().market.searchAssets({ query: query.trim(), size: SEARCH_SIZE });
-    // D-01:只有後端確認存在且 tradeable 的標的可以被選取。
-    return page.items.filter(asset => asset.tradeable);
-  } catch {
-    // 下拉的 error 態(診斷列 + 重試)是 04-10;骨架階段不阻擋 ticket 的其他欄位。
-    return [];
+/** T-04-09:診斷只露 code 與 traceId,絕不顯示後端 message。 */
+interface BlockError {
+  code: string;
+  traceId: string | null;
+}
+
+type BlockState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded'; data: T }
+  | { status: 'error'; error: BlockError };
+
+/** typeahead 下拉最多 10 筆(§2:後端 `size` 上限 100)。 */
+const SEARCH_SIZE = 10;
+/** idle(聚焦未輸入)只列前 6 筆 —— 對齊既有慣例,且不宣稱任何排序語意。 */
+const IDLE_LIMIT = 6;
+/** §Interaction Contract 2 明定 250ms。自行以 setTimeout/clearTimeout 實作,不引入任何套件。 */
+const SEARCH_DEBOUNCE_MS = 250;
+
+const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+/** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
+const activeQuery = ref('');
+const activeIndex = ref(-1);
+
+function describeError(error: unknown): BlockError {
+  if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
+  return { code: 'UNKNOWN_ERROR', traceId: null };
+}
+
+// 模板不做型別窄化(vue-tsc 對模板內 union 窄化支援不穩),一律先投影成 computed。
+const symbolLoading = computed(() => symbolState.value.status === 'loading');
+const symbolError = computed(() => (symbolState.value.status === 'error' ? symbolState.value.error : null));
+const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbolState.value.data : null));
+
+// D-01:唯一允許的本地過濾 —— 只列可交易標的。**不得**再做任何關鍵字過濾:
+// 後端已依 query 篩選,前端重做等於複製後端邏輯。
+const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const visibleOptions = computed(() => (
+  activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
+));
+
+/** loaded 的兩個推導子態。 */
+const symbolNoTradable = computed(() => (
+  !!symbolPage.value && symbolPage.value.items.length > 0 && options.value.length === 0
+));
+const symbolTruncated = computed(() => (
+  !!symbolPage.value
+  && activeQuery.value !== ''
+  && symbolPage.value.totalElements > symbolPage.value.items.length
+));
+
+const symPopoverOpen = computed(() => symOpen.value && symbolState.value.status !== 'idle');
+const activeOptionId = computed(() => (
+  activeIndex.value >= 0 && activeIndex.value < visibleOptions.value.length
+    ? `trade-symbol-option-${activeIndex.value}`
+    : undefined
+));
+
+/** `AssetDto` 的價格欄位可為 null;顯示 `—` 而不是 NaN,也不得被當成 0。 */
+function numOrDash(value: number | null | undefined): string {
+  return value == null ? '—' : fmtNum(value);
+}
+
+function pctOrDash(value: number | null | undefined): string {
+  return value == null ? '—' : fmtPct(value);
+}
+
+function changeColor(value: number | null | undefined): string {
+  if (value == null) return 'var(--fg-mute)';
+  return value >= 0 ? 'var(--up)' : 'var(--dn)';
+}
+
+// ---- debounce + 「只採最後一次結果」(DP-12 / T-04-11) ----
+// 兩件事都必須做:debounce 壓請求量,遞增 request id 壓亂序返回。
+// 慢網路下 `AAP` 的回應覆蓋 `AAPL` 的是使用者可見的正確性錯誤,單靠 debounce 擋不住。
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let searchSeq = 0;
+let searchController: AbortController | null = null;
+
+function cancelPendingSearch() {
+  if (searchTimer !== null) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
   }
 }
+
+/**
+ * @param closeOnExact 只有 preset 解析會帶 true(解析成功即關閉下拉);
+ *                     使用者打字時的精準命中**不關閉**下拉,否則他還沒看清楚候選就被收走。
+ */
+async function runSymbolSearch(query: string, closeOnExact = false) {
+  cancelPendingSearch();
+  const seq = ++searchSeq;
+  activeQuery.value = query;
+  activeIndex.value = -1;
+  symbolState.value = { status: 'loading' };
+  // 取消上一個仍在飛的請求(T-04-11:對公開端點的好公民行為)。
+  searchController?.abort();
+  const controller = new AbortController();
+  searchController = controller;
+  try {
+    const page = await apiClients().market.searchAssets(
+      { query, page: 0, size: SEARCH_SIZE },
+      controller.signal,
+    );
+    // 不是最後一次請求就整包丟棄。
+    if (seq !== searchSeq) return;
+    symbolState.value = { status: 'loaded', data: page };
+    const exact = page.items.find(
+      asset => asset.tradeable && asset.symbol.toUpperCase() === query.toUpperCase(),
+    );
+    if (exact) pickAsset(exact, { close: closeOnExact });
+  } catch (error) {
+    // 已被新查詢取代的請求一律不寫回狀態 —— 這同時吃掉 AbortController 造成的
+    // `DOMException`(abort 讓 fetch reject,但那是「已取消」不是「錯誤」,不得顯示錯誤態)。
+    if (seq !== searchSeq) return;
+    symbolState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+function scheduleSymbolSearch(query: string) {
+  cancelPendingSearch();
+  activeQuery.value = query;
+  activeIndex.value = -1;
+  // 舊查詢字串的結果不得留在畫面上冒充目前查詢的結果。
+  symbolState.value = { status: 'loading' };
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void runSymbolSearch(query);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function retrySymbolSearch() {
+  void runSymbolSearch(activeQuery.value);
+}
+
+onBeforeUnmount(() => {
+  cancelPendingSearch();
+  searchController?.abort();
+});
 
 const qtyStep = computed(() => (selected.value?.assetType === 'CRYPTO' ? 0.01 : 1));
 const estTotal = computed(() => qty.value * px.value);
@@ -508,11 +687,15 @@ const canSubmit = computed(() =>
   && !validationError.value
 );
 
-function pickAsset(asset: AssetDto) {
+function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
   orderError.value = '';
   selected.value = asset;
   symQuery.value = asset.symbol;
-  symOpen.value = false;
+  if (close) {
+    symOpen.value = false;
+    activeIndex.value = -1;
+    cancelPendingSearch();
+  }
   // 價格預填後端 latestPrice,但保持可編輯(D-04 連帶效果:這正是「手動記錄已成交價格」的語意)。
   px.value = asset.latestPrice ?? 0;
   if (qty.value === 0) qty.value = asset.assetType === 'CRYPTO' ? 0.05 : 10;
@@ -540,8 +723,18 @@ function resetTicket() {
   const now = new Date();
   maxExecutedAt.value = toLocalInputValue(now);
   executedAt.value = maxExecutedAt.value;
-  options.value = [];
+  cancelPendingSearch();
+  searchController?.abort();
+  symbolState.value = { status: 'idle' };
+  activeQuery.value = '';
+  activeIndex.value = -1;
   clearSelection();
+}
+
+function onSymFocus() {
+  symOpen.value = true;
+  // 關掉下拉之後又回到欄位時補一次查詢,讓 idle 列表重新出現。
+  if (symbolState.value.status === 'idle') void runSymbolSearch(symQuery.value.trim());
 }
 
 function onSymInput() {
@@ -552,41 +745,44 @@ function onSymInput() {
     clearSelection(true);
     symOpen.value = true;
   }
-  // 先清空舊結果:上一個查詢字串的結果不得留在畫面上冒充目前查詢的結果。
-  // (下拉的 loading 骨架列是 04-10;骨架階段就是短暫的空下拉。)
-  options.value = [];
-  void searchAssets(query).then((assets) => {
-    // 只採用「查詢字串仍然一致」的回應。完整的競態處理(AbortController / 遞增 request id)
-    // 與 250ms debounce 是 04-10 的範圍。
-    if (symQuery.value.trim().toUpperCase() !== query.toUpperCase()) return;
-    options.value = assets;
-    const exact = assets.find(asset => asset.symbol.toUpperCase() === query.toUpperCase());
-    if (exact && selected.value?.symbol !== exact.symbol) pickAsset(exact);
-  });
+  scheduleSymbolSearch(query);
+}
+
+/** §Accessibility Contract:combobox 必須可完全用鍵盤操作 —— 現況只綁 @mousedown。 */
+function onSymKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    symOpen.value = false;
+    activeIndex.value = -1;
+    return;
+  }
+  const rows = visibleOptions.value;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    symOpen.value = true;
+    if (!rows.length) return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    activeIndex.value = activeIndex.value < 0
+      ? (delta > 0 ? 0 : rows.length - 1)
+      : (activeIndex.value + delta + rows.length) % rows.length;
+    return;
+  }
+  if (event.key === 'Enter') {
+    const asset = rows[activeIndex.value];
+    if (!asset) return;
+    event.preventDefault();
+    pickAsset(asset);
+  }
 }
 
 watch(() => props.open, async (open) => {
   if (!open) return;
-  const api = apiClients();
+  apiClients();
   resetTicket();
   const preset = props.preset;
   if (preset?.side) side.value = preset.side;
-  // 這裡刻意直接 await adapter(不經 searchAssets 包一層):開啟 ticket 是使用者等待中的路徑,
-  // 多包一層 async 就多一輪 microtask,preset 解析會晚一個 tick 才出現在畫面上。
-  let assets: AssetDto[] = [];
-  try {
-    const page = await api.market.searchAssets({ query: preset?.sym ?? '', size: SEARCH_SIZE });
-    assets = page.items.filter(asset => asset.tradeable);
-  } catch {
-    assets = [];
-  }
-  if (!props.open) return;
-  options.value = assets;
-  if (preset) {
-    const exact = assets.find(asset => asset.symbol.toUpperCase() === preset.sym.toUpperCase());
-    // 解析不到就維持清空狀態,**不回退本地假資料**。
-    if (exact) pickAsset(exact);
-  }
+  // 先開下拉再送查詢:preset 解析中必須看得到 loading 態,不得靜默留空(§2)。
+  symOpen.value = true;
+  void runSymbolSearch(preset?.sym ?? '', true);
   await nextTick();
   // 焦點落在 step 1 的唯一 Display 元素(§Accessibility:焦點必須進入對話框且落在動作起點)。
   symInput.value?.focus();
@@ -604,7 +800,8 @@ function onClose() {
 
 async function recordAnother() {
   resetTicket();
-  options.value = await searchAssets('');
+  symOpen.value = true;
+  void runSymbolSearch('');
   await nextTick();
   symInput.value?.focus();
 }
@@ -722,13 +919,40 @@ async function submitTrade() {
 .sym-pop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0,0,0,0.12); z-index: 10; max-height: 280px; overflow: auto;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.12); z-index: 10;
 }
+.sym-list { max-height: 280px; overflow: auto; }
 .sym-row {
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 400;
 }
-.sym-row:hover { background: var(--surface2); }
+.sym-row:hover, .sym-row.active { background: var(--surface2); }
+.sym-truncated {
+  padding: 8px 16px; border-top: 1px solid var(--border);
+  color: var(--fg-mute); font-size: 12px; font-weight: 400; line-height: 1.35;
+}
+
+/* 區塊級狀態:形狀沿用 Positions.vue:856-873(Phase 3 D-11/D-12 的診斷呈現慣例) */
+.block-state { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
+.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--dn); }
+.block-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 8px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.block-error .details span { overflow-wrap: anywhere; }
+.block-retry {
+  margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--dn); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.block-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 骨架列固定筆數,載入呈現不隨資料量變動(Positions.vue:868-873) */
+.skeleton-row {
+  height: 16px; margin: 8px 0; border-radius: 4px;
+  background: var(--surface2);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .sym-row + .sym-row { border-top: 1px solid var(--border); }
 .sym-opt-sym { font-weight: 600; }
 .sym-opt-name { font-size: 12px; font-weight: 400; color: var(--fg-dim); }
