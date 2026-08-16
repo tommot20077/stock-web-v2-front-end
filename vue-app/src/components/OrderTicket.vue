@@ -568,7 +568,7 @@
             >← {{ t(lang, 'backToEdit') }}</button>
             <button
               type="button"
-              :class="['btn-accent', side.toLowerCase()]"
+              :class="['btn-accent', 'btn-submit', side.toLowerCase()]"
               data-testid="ticket-submit"
               :disabled="submitting"
               @click="submitTrade"
@@ -1556,6 +1556,14 @@ function handleSubmitFailure(error: unknown) {
   background: var(--accent); color: #fff; border: 0; padding: 8px 24px; min-height: 44px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
 }
+/*
+  §5 / §Responsive:`記錄交易` ↔ `記錄中…`、`Record trade` ↔ `Recording…` 的標籤切換
+  不得讓按鈕縮放而造成版位跳動,所以由**最寬的那個標籤**決定下限。
+  136px = 13px/600 下 `Record trade`(最寬者)約 88px + `.btn-accent` 的 48px 水平內距。
+  320px 時 footer 可用寬度為 320 − 48(內距) = 272px,ghost 鈕約 118px + 12px gap
+  + 136px = 266px,仍不換行。
+*/
+.btn-submit { min-width: 136px; }
 .btn-accent:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
 .btn-accent:disabled { opacity: .4; cursor: not-allowed; }
 .btn-accent.buy { background: var(--up); }

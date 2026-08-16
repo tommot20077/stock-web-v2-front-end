@@ -1043,6 +1043,11 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     // **明確的 guard**,不是「按鈕從 DOM 消失」的副作用(Q6.2)。
     expect(submitButton().disabled, '送出中必須有明確的 :disabled').toBe(true);
     expect(submitButton().textContent?.trim()).toBe(t('en', 'recordingTrade'));
+
+    // §5:標籤變化不得造成版位跳動。jsdom 不套用 scoped CSS 也算不出寬度,
+    // 所以用原始碼斷言 —— 送出鈕必須帶一個有 min-width 的專屬 class。
+    expect(sourceTagOf('ticket-submit'), '送出鈕缺少固定寬度的 class').toContain('btn-submit');
+    expect(orderTicketSource, '.btn-submit 必須宣告 min-width').toMatch(/\.btn-submit\s*\{[^}]*min-width:/);
   });
 
   it('Test 23(TRAD-04):連按送出兩次只呼叫一次 createTrade', async () => {
