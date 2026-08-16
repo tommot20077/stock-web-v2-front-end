@@ -587,9 +587,14 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
-/* U-12:剛成交列的非顏色線索。inline pill,不改列高 */
+/*
+ * U-12:剛成交列的非顏色線索。覆寫 .pill 的內距為**只有水平**:
+ * 12px × line-height 1.2 = 14.4px,小於同列 type pill 撐出的行高,
+ * 因此完整落在既有 line box 內 —— §Layout Contract 的「不改列高」是這樣達成的。
+ */
 .fresh-badge {
-  margin-left: 8px; font-size: 12px; font-weight: 600;
+  margin-left: 8px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
   background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg);
 }
 

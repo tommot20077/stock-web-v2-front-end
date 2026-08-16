@@ -1063,6 +1063,12 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
     const badge = requireTestid('trades-fresh-badge');
     expect(badge.textContent?.trim()).toBe(t('en', 'freshBadge'));
     expect(rows()[0].contains(badge)).toBe(true);
+
+    // §Layout Contract:「新」標記**不得改變列高**。jsdom 不套用 scoped CSS 也算不出高度,
+    // 所以用原始碼斷言(沿用 04-11 送出鈕 min-width 的手法):
+    // 標記只能有水平內距,並自帶小於本列文字行高的 line-height。
+    expect(tradesSource).toMatch(/\.fresh-badge\s*\{[^}]*padding:\s*0 8px/);
+    expect(tradesSource).toMatch(/\.fresh-badge\s*\{[^}]*line-height:\s*1\.2/);
   });
 
   it('Test 20(來源切換):mock mode 的 fresh 只認 live.lastFill,不看 apiLastFill', async () => {

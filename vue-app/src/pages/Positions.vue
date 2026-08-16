@@ -1005,11 +1005,15 @@ tr.scrubbed:hover { background: color-mix(in oklch, #a855f7 8%, transparent); }
 .refresh-stale .details span { overflow-wrap: anywhere; }
 .block-refreshing { opacity: .72; transition: opacity .15s; }
 
-/* U-12:剛成交列的非顏色線索。inline pill,不改列高(形狀沿用 Trades 的 .pill) */
+/*
+ * U-12:剛成交列的非顏色線索。形狀沿用 Trades 的 .pill,但**只有水平內距**:
+ * 12px × line-height 1.2 = 14.4px,小於本列 13px 文字的行高,因此 inline-block
+ * 完整落在既有 line box 內 —— §Layout Contract 的「不改列高」是這樣達成的。
+ */
 .fresh-badge {
   display: inline-block; margin-left: 8px;
-  padding: 2px 8px; border-radius: 99px;
-  font-size: 12px; font-weight: 600;
+  padding: 0 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
   background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg);
 }
 
