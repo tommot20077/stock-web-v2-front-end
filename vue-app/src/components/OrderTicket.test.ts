@@ -29,8 +29,14 @@ import OrderTicket from './OrderTicket.vue';
 import orderTicketSource from './OrderTicket.vue?raw';
 import { t } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
-import { resetPortfolioRevisionForTests } from '../services/portfolioRevision';
-import type { AssetDto } from '../services/apiTypes';
+import {
+  apiLastFill,
+  lastCreatedTradeId,
+  portfolioRevision,
+  resetPortfolioRevisionForTests,
+} from '../services/portfolioRevision';
+import { configureApiClientSessionHandlers } from '../services/apiClient';
+import type { AssetDto, HoldingDto, TradeDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -838,5 +844,482 @@ describe('OrderTicket 報價卡與走勢圖(04-10 / D-01 / UI-SPEC §Interaction
     expect(price.value).toBe('190.2');
     expect(price.readOnly).toBe(false);
     expect(price.disabled).toBe(false);
+  });
+});
+
+// =====================================================================================
+// Phase 4 Plan 11 Task 1 —— 送出路徑:重複送出阻擋(TRAD-04)、idempotency key 生命週期
+// (D-14)、只渲染後端 TradeDto 的成功畫面(D-09)。
+//
+// 本段一律在 **API mode** 走真實 transport(stub 的是 `fetch`,不是 adapter):
+// key 的斷言直接讀 `Idempotency-Key` **header**,證明它真的抵達傳輸層,而不只是被
+// 傳進某個函式。04-07 的 `tradingApi.test.ts` 已鎖住 adapter 自己的行為,
+// 本檔要鎖的是「元件 → header」這條完整路徑。
+// =====================================================================================
+
+/**
+ * 後端回傳的 `TradeDto`。**刻意與表單輸入矛盾**:表單會送 10 股 @ 190.20
+ * (preset AAPL 的 latestPrice),這裡回 7 股 @ 188.88。
+ * 成功畫面只要有任何一格改用表單值渲染,Test 30 立刻紅(D-09 / judgment §1)。
+ */
+const RECORDED_TRADE: TradeDto = {
+  id: '6f1c2b7e-1a2b-4c3d-8e9f-0123456789ab',
+  symbol: 'AAPL',
+  type: 'BUY',
+  quantity: 7,
+  price: 188.88,
+  fee: 1.5,
+  note: null,
+  executedAt: '2026-08-15T10:30:00+08:00',
+  createdAt: '2026-08-15T10:30:05+08:00',
+};
+
+function tradeResponse(trade: TradeDto = RECORDED_TRADE): Response {
+  return jsonResponse({ success: true, data: trade, error: null, meta: { traceId: 'trace-ok' } });
+}
+
+/**
+ * 後端錯誤信封。`fields` 預設 **null** —— 這是後端的真實形狀:
+ * `apiClient.fieldsFrom` 在空 map 時回 `null` 而不是 `{}`(Pitfall 10)。
+ * `message` 一律放一句「絕不得進入 DOM」的字串,讓 T-04-09 的違規一眼可見。
+ */
+function tradeFailure(
+  code: string,
+  options: { status?: number; traceId?: string; fields?: Record<string, string> | null } = {},
+): Response {
+  return jsonResponse(
+    {
+      success: false,
+      data: null,
+      error: { code, message: 'BackendMessageMustNotReachTheDom', fields: options.fields ?? null },
+      meta: { traceId: options.traceId ?? 'trace-trade' },
+    },
+    options.status ?? 400,
+  );
+}
+
+interface TicketRoutes extends MarketRoutes {
+  trades?: (init: RequestInit | undefined) => Response | Promise<Response>;
+  holdings?: () => Response | Promise<Response>;
+  refresh?: () => Response | Promise<Response>;
+}
+
+function ticketFetch(routes: TicketRoutes = {}) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes('/auth/refresh')) {
+      return routes.refresh ? routes.refresh() : jsonResponse({ success: true, data: {}, error: null, meta: {} });
+    }
+    if (url.includes('/portfolio/holdings')) {
+      return routes.holdings ? routes.holdings() : holdingsResponse([]);
+    }
+    if (url.includes('/trades')) {
+      return routes.trades ? routes.trades(init) : tradeResponse();
+    }
+    if (url.includes('/klines')) {
+      const symbol = decodeURIComponent(url.split('/market/')[1].split('/')[0]);
+      return routes.klines ? routes.klines(symbol) : klineResponse([]);
+    }
+    if (url.includes('/assets')) {
+      const query = new URL(url, 'http://localhost').searchParams.get('query') ?? '';
+      return routes.assets ? routes.assets(query) : assetPageResponse([CONTRADICTORY]);
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
+function tradeCalls(fetchImpl: ReturnType<typeof vi.fn>): Array<[string, RequestInit | undefined]> {
+  return fetchImpl.mock.calls
+    .map(call => [String(call[0]), call[1] as RequestInit | undefined] as [string, RequestInit | undefined])
+    .filter(([url]) => url.includes('/trades'));
+}
+
+/** 直接讀 `Idempotency-Key` header —— key 生命週期的唯一權威證據。 */
+function idempotencyKeys(fetchImpl: ReturnType<typeof vi.fn>): string[] {
+  return tradeCalls(fetchImpl).map(([, init]) => new Headers(init?.headers).get('Idempotency-Key') ?? '');
+}
+
+function tradeBodies(fetchImpl: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+  return tradeCalls(fetchImpl).map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
+function holdingsCallCount(fetchImpl: ReturnType<typeof vi.fn>): number {
+  return fetchedUrls(fetchImpl).filter(url => url.includes('/portfolio/holdings')).length;
+}
+
+/**
+ * 可預測的 key 產生器。**必須連 `getRandomValues` 一起代理** —— 整包換掉 `crypto`
+ * 會讓同一個測試檔內其他依賴 Web Crypto 的程式碼壞掉。
+ * `cleanupMounted()` 的 `vi.unstubAllGlobals()` 會還原。
+ */
+function stubUuids() {
+  let n = 0;
+  const randomUUID = vi.fn(() => `key-${++n}`);
+  const real = globalThis.crypto;
+  vi.stubGlobal('crypto', {
+    randomUUID,
+    getRandomValues: (array: ArrayBufferView) => (real as Crypto).getRandomValues(array as never),
+    subtle: (real as Crypto).subtle,
+  });
+  return randomUUID;
+}
+
+function holding(symbol: string, totalQuantity: number): HoldingDto {
+  return {
+    assetId: `asset-${symbol.toLowerCase()}`,
+    symbol,
+    assetName: `${symbol} Corp.`,
+    totalQuantity,
+    // 以下七欄是 D-15 **明文禁止**元件讀取的(Phase 3 D-04 / judgment §7);
+    // 刻意給荒謬值,任何前端損益重算都會產生一眼可辨的數字。
+    avgCost: -999,
+    costBasis: -999,
+    marketPrice: -999,
+    marketValue: -999,
+    realizedPnl: -999,
+    unrealizedPnl: -999,
+    roi: -999,
+    priceTime: null,
+    lastUpdated: null,
+  };
+}
+
+function holdingsResponse(items: HoldingDto[]): Response {
+  return jsonResponse({ success: true, data: items, error: null, meta: { traceId: 'trace-holdings' } });
+}
+
+/** 送出鏈比查詢鏈更長(CSRF → POST → readJson → notifyTradeCreated → nextTick)。 */
+async function clickDeep(el: HTMLElement) {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await flushAsync(16);
+}
+
+async function mountSubmitTicket(fetchImpl: ReturnType<typeof vi.fn>) {
+  // apiClient 對 unsafe method 會注入 X-XSRF-TOKEN;cookie 不存在時會先打 bootstrap,
+  // 那會讓本段的 fetch 呼叫序失去可讀性(tradingApi.test.ts:100-102 的同一手法)。
+  document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
+  await mountApiTicket(fetchImpl, { sym: 'AAPL' });
+}
+
+async function gotoReview() {
+  await clickDeep(requireTestid('ticket-review-advance'));
+}
+
+async function submitTrade() {
+  await clickDeep(requireTestid('ticket-submit'));
+}
+
+async function backToEdit() {
+  await clickDeep(requireTestid('ticket-back-to-edit'));
+}
+
+function submitButton(): HTMLButtonElement {
+  return requireTestid('ticket-submit') as HTMLButtonElement;
+}
+
+function advanceButton(): HTMLButtonElement {
+  return requireTestid('ticket-review-advance') as HTMLButtonElement;
+}
+
+/** 從 `?raw` 原始碼裡切出某個 `data-testid` 所屬的那一個標籤。 */
+function sourceTagOf(id: string): string {
+  const anchor = orderTicketSource.indexOf(`data-testid="${id}"`);
+  expect(anchor, `原始碼找不到 data-testid="${id}"`).toBeGreaterThan(-1);
+  const start = orderTicketSource.lastIndexOf('<', anchor);
+  const end = orderTicketSource.indexOf('>', anchor);
+  return orderTicketSource.slice(start, end + 1);
+}
+
+describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04-11 / TRAD-04 / D-14)', () => {
+  it('Test 22(TRAD-04):送出中送出鈕明確 disabled,標籤換成「記錄中…」', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    await mountSubmitTicket(ticketFetch({ trades: () => pending.promise }));
+    await gotoReview();
+    await submitTrade();
+
+    // **明確的 guard**,不是「按鈕從 DOM 消失」的副作用(Q6.2)。
+    expect(submitButton().disabled, '送出中必須有明確的 :disabled').toBe(true);
+    expect(submitButton().textContent?.trim()).toBe(t('en', 'recordingTrade'));
+  });
+
+  it('Test 23(TRAD-04):連按送出兩次只呼叫一次 createTrade', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const fetchImpl = ticketFetch({ trades: () => pending.promise });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+
+    await submitTrade();
+    await submitTrade();
+
+    expect(tradeCalls(fetchImpl), '連點兩次只得送出一次').toHaveLength(1);
+  });
+
+  it('Test 24(§5 凍結清單):送出中整張 ticket 凍結且有可讀的狀態播報', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const closes = vi.fn();
+    document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', ticketFetch({ trades: () => pending.promise }));
+    resetRuntimeApiClientsForTests();
+    mountWithPinia(OrderTicket, {
+      open: true,
+      lang: 'en',
+      preset: { sym: 'AAPL' },
+      onClose: closes,
+      onNavigate: () => {},
+      onToast: () => {},
+    });
+    await flushAsync(16);
+    await gotoReview();
+    await submitTrade();
+
+    expect((requireTestid('ticket-back-to-edit') as HTMLButtonElement).disabled).toBe(true);
+
+    // 遮罩與 ✕ 都不得關閉 ticket(in-flight 的寫入不可被中途丟棄)。
+    const mask = document.body.querySelector<HTMLElement>('.mask');
+    expect(mask).toBeTruthy();
+    await clickDeep(mask!);
+    await clickDeep(requireTestid('ticket-close'));
+    expect(closes, '送出中不得關閉 ticket').not.toHaveBeenCalled();
+
+    expect(document.body.querySelector('[role="dialog"]')?.getAttribute('aria-busy')).toBe('true');
+
+    const status = requireTestid('ticket-submitting-status');
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    // 不得只有 spinner —— 必須有可讀文字。
+    expect(status.textContent?.trim()).toBe(t('en', 'recordingTrade'));
+
+    // step 1 的輸入在 review 步驟不在 DOM(v-if),無法用 DOM 斷言;
+    // 改以原始碼鎖住綁定 —— 回退到 ticket 步驟後也不得可編輯。
+    for (const id of ['ticket-symbol-input', 'ticket-qty', 'ticket-price', 'ticket-fee', 'ticket-executed-at', 'ticket-note']) {
+      expect(sourceTagOf(id), `${id} 缺少 :disabled="submitting"`).toContain(':disabled="submitting"');
+    }
+  });
+
+  it('Test 25(D-14 規則 1):開啟 ticket 不產生 key,按下送出才產生一把', async () => {
+    const randomUUID = stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    expect(randomUUID, '開啟 ticket 不得預先產生 key').not.toHaveBeenCalled();
+
+    await gotoReview();
+    await submitTrade();
+
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('Test 26(D-14 規則 1):網路失敗後不改欄位直接重試,沿用同一把 key', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('NetworkErrorRawDetail');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    fail = false;
+    await submitTrade();
+
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys).toHaveLength(2);
+    expect(keys[1], '同一次嘗試的重試必須沿用同一把 key').toBe(keys[0]);
+  });
+
+  it('Test 27(D-14 規則 2):失敗後改過數量,下次送出換新 key', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('NetworkErrorRawDetail');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    await backToEdit();
+    await setInput(requireInput('ticket-qty'), '3');
+    fail = false;
+    await gotoReview();
+    await submitTrade();
+
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys).toHaveLength(2);
+    expect(keys[1], '改過欄位是新意圖,必須換新 key').not.toBe(keys[0]);
+  });
+
+  it('Test 28(D-14／D-07 互鎖):400 → 改數量 → 再送,成功建立而不是 409', async () => {
+    stubUuids();
+    let attempt = 0;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return tradeFailure('VALIDATION_FAILED', {
+            status: 400,
+            fields: { quantity: 'must be greater than or equal to 0.00000001' },
+          });
+        }
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    // 欄位級錯誤自動退回 ticket 步驟,否則使用者在 review 看不到出錯的欄位。
+    await setInput(requireInput('ticket-qty'), '3');
+    await gotoReview();
+    await submitTrade();
+
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys[1], '改過欄位換新 key —— 這正是避開 409 KEY_REUSED 的機制').not.toBe(keys[0]);
+    expect(testid('ticket-result'), '第二次應真的建立成功').toBeTruthy();
+    expect(bodyText()).not.toContain('TRADE_IDEMPOTENCY_KEY_REUSED');
+  });
+
+  it('Test 29(DP-11):改了又改回原值,仍視為「我動過了」而換新 key', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('NetworkErrorRawDetail');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    await backToEdit();
+    const qtyInput = requireInput('ticket-qty');
+    const original = qtyInput.value;
+    await setInput(qtyInput, '11');
+    await setInput(qtyInput, original);
+
+    fail = false;
+    await gotoReview();
+    await submitTrade();
+
+    const keys = idempotencyKeys(fetchImpl);
+    // 不做 form 物件深比較 —— 使用者的心智模型是「我動過了」,他期待新 key。
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it('Test 30(D-09):成功畫面只渲染後端 TradeDto,即使它與表單輸入矛盾', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    // 表單實際送出的是 10 股 @ 190.20(preset AAPL 的 latestPrice)。
+    expect(requireInput('ticket-qty').value).toBe('10');
+    expect(requireInput('ticket-price').value).toBe('190.2');
+
+    await gotoReview();
+    await submitTrade();
+
+    // 後端回的是 7 股 @ 188.88 —— 畫面必須跟後端走。
+    expect(requireTestid('ticket-result-price').textContent).toContain('188.88');
+    expect(requireTestid('ticket-result-price').textContent).not.toContain('190.20');
+    expect(requireTestid('ticket-result-qty').textContent?.trim()).toBe('7');
+  });
+
+  it('Test 31(D-09):交易編號完整顯示,且畫面沒有任何撮合語意', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-result-trade-id').textContent?.trim()).toBe(RECORDED_TRADE.id);
+    expect(requireTestid('ticket-result-executed-at').textContent).toContain(RECORDED_TRADE.executedAt);
+
+    for (const term of ['Avg fill', 'Order ID', '成交均價', '訂單號']) {
+      expect(bodyText(), `成功畫面出現禁用語:${term}`).not.toContain(term);
+    }
+  });
+
+  it('Test 32(U-03 冪等命中):同一把 key 重送拿到既有交易,畫面與首次建立完全相同', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('NetworkErrorRawDetail');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    fail = false;
+    await submitTrade();
+
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys[1], 'replay 必須沿用同一把 key').toBe(keys[0]);
+
+    // 目前的 API 契約沒有任何 replay 訊號,所以**不做**「這筆已存在」的變體。
+    expect(requireTestid('ticket-result-trade-id').textContent?.trim()).toBe(RECORDED_TRADE.id);
+    expect(requireTestid('ticket-result-price').textContent).toContain('188.88');
+    for (const term of ['already', 'Already', '已存在', 'duplicate', 'Duplicate']) {
+      expect(bodyText(), `冪等命中不得出現變體文案:${term}`).not.toContain(term);
+    }
+  });
+
+  it('Test 33(U-03 連帶契約):replay 也必須呼叫 notifyTradeCreated', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('NetworkErrorRawDetail');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+    await gotoReview();
+    await submitTrade();
+
+    // 網路失敗那一次什麼都不該廣播。
+    expect(portfolioRevision.value).toBe(0);
+
+    fail = false;
+    await submitTrade();
+
+    // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新。
+    expect(portfolioRevision.value).toBeGreaterThan(0);
+    expect(lastCreatedTradeId.value).toBe(RECORDED_TRADE.id);
+    expect(apiLastFill.value).toEqual({
+      sym: RECORDED_TRADE.symbol,
+      type: RECORDED_TRADE.type,
+      qty: RECORDED_TRADE.quantity,
+      px: RECORDED_TRADE.price,
+    });
+  });
+
+  it('Test 34(TRAD-02):payload 恰為七個合約欄位,executedAt 帶 offset', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch();
+    await mountSubmitTicket(fetchImpl);
+
+    await setInput(requireInput('ticket-fee'), '3');
+    await gotoReview();
+    await submitTrade();
+
+    const body = tradeBodies(fetchImpl)[0];
+    expect(Object.keys(body).sort()).toEqual(
+      ['executedAt', 'fee', 'note', 'price', 'quantity', 'symbol', 'type'],
+    );
+    expect(body.fee, '手續費是使用者輸入值(D-02)').toBe(3);
+    expect(String(body.executedAt), 'executedAt 必須帶 offset(後端是 OffsetDateTime)')
+      .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+    expect(body.symbol).toBe('AAPL');
+    expect(body.type).toBe('BUY');
   });
 });
