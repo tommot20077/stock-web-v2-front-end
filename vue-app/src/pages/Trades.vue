@@ -37,7 +37,28 @@
       >{{ c }}</button>
     </div>
 
-    <div class="card">
+    <div class="card" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
+      <!-- U-05 / U-06:重讀期間保留整張表格,只在區塊頂端加一條指示列 -->
+      <div v-if="!live && tradesRefreshing" class="refresh-note" data-testid="trades-refreshing">
+        {{ t(lang, 'portfolioRefreshing') }}
+      </div>
+      <div
+        v-else-if="!live && tradesRefreshError"
+        class="refresh-stale"
+        role="status"
+        data-testid="trades-refresh-error"
+      >
+        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div class="details">
+          <span data-testid="trades-refresh-error-code">{{ tradesRefreshError.code }}</span>
+          <span v-if="tradesRefreshError.traceId" data-testid="trades-refresh-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ tradesRefreshError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="trades-refresh-retry" @click="retryRefresh">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
       <div v-if="!live && tradesLoading" class="block-state" data-testid="trades-loading">
         {{ t(lang, 'loading') }}
       </div>
@@ -140,13 +161,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h as createElement, onMounted, ref } from 'vue';
+import { computed, h as createElement, onMounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { fmtNum } from '../data';
 import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { TradeListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
+import { portfolioRevision } from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
 
@@ -232,14 +254,39 @@ function queryParams(): TradeListParams {
   return { ...filterParams(), sort: sortKey.value, direction: sortDir.value };
 }
 
+// =============== U-05 / U-06:成交後重讀的並存狀態(不取代 status 三態) ===============
+/*
+ * Phase 3 的 `status: 'loading'` 會把表格換成 loading 區塊。交易剛成功卻讓列表消失再長回來,
+ * 是「看起來像出錯了」的典型誤導 —— 正是 D-12 要避免的「以為交易沒成功 → 再送一次」。
+ * 因此重讀走一組**與 status 並存**的旗標:舊列留在畫面上,只多一條「更新中…」;
+ * 失敗時也不進 `status: 'error'`(那會清掉舊列),改用 stale 提示明示「可能不是最新」。
+ */
+const tradesRefreshing = ref(false);
+const tradesRefreshError = ref<BlockError | null>(null);
+
+interface LoadTradesOptions {
+  /** true = 保留舊列的重讀(U-05);false / 省略 = 會清空列表的一般載入。 */
+  refresh?: boolean;
+  /** D-15 防迴圈:回退後的那一次請求關掉它,自動重試因此至多一次。 */
+  allowOverflowFallback?: boolean;
+}
+
 /**
  * D-15 溢出回退:請求頁碼 ≥ totalPages 且回空時,以 `totalPages - 1` 重新請求一次,
  * 避免「其實有資料卻顯示空列表」。
- * **防迴圈**:回退後的那次請求以 `allowOverflowFallback = false` 發出,因此自動重試至多一次;
+ * **防迴圈**:回退後的那次請求以 `allowOverflowFallback: false` 發出,因此自動重試至多一次;
  * 即使伺服端總頁數連續縮水,也只會多打一個請求就停在已載入狀態。
  */
-async function loadTrades(allowOverflowFallback = true): Promise<void> {
-  tradesState.value = { status: 'loading' };
+async function loadTrades(options: LoadTradesOptions = {}): Promise<void> {
+  // 沒有已載入的舊列就沒有 U-05 要保護的東西 → 退回一般載入路徑。
+  const refresh = options.refresh === true && tradesState.value.status === 'loaded';
+  const allowOverflowFallback = options.allowOverflowFallback !== false;
+  if (refresh) {
+    tradesRefreshing.value = true;
+    tradesRefreshError.value = null;
+  } else {
+    tradesState.value = { status: 'loading' };
+  }
   const requestedPage = pageNo.value;
   try {
     const result = await api.listTrades({ ...queryParams(), page: requestedPage, size: PAGE_SIZE });
@@ -250,12 +297,15 @@ async function loadTrades(allowOverflowFallback = true): Promise<void> {
       && requestedPage >= result.totalPages
     ) {
       pageNo.value = result.totalPages - 1;
-      await loadTrades(false);
+      await loadTrades({ refresh, allowOverflowFallback: false });
       return;
     }
     tradesState.value = { status: 'loaded', data: result };
   } catch (error) {
-    tradesState.value = { status: 'error', error: describeError(error) };
+    if (refresh) tradesRefreshError.value = describeError(error);
+    else tradesState.value = { status: 'error', error: describeError(error) };
+  } finally {
+    if (refresh) tradesRefreshing.value = false;
   }
 }
 
@@ -264,11 +314,20 @@ function reloadTrades() {
   void loadTrades();
 }
 
-/** D-15:任何篩選或排序變更都經此入口,頁碼一律重置為 0 後再請求。 */
-function applyQueryChange(mutate: () => void) {
+/** stale 提示的重試鈕:同樣保留舊列,失敗只更新 stale 提示(U-06)。 */
+function retryRefresh() {
+  void loadTrades({ refresh: true });
+}
+
+/**
+ * D-15:任何篩選或排序變更都經此入口,頁碼一律重置為 0 後再請求。
+ * D-11 的成交後重讀也走這裡(`options.refresh`),因此「保留篩選 + 保留排序 + 頁碼歸零」
+ * 這三件事只有這一份實作 —— 不會有第二條重置邏輯漂移。
+ */
+function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
   mutate();
   pageNo.value = 0;
-  void loadTrades();
+  void loadTrades(options);
 }
 
 function selectChip(chip: string) {
@@ -306,6 +365,18 @@ onMounted(() => {
   // mock mode 完全走 live 委派,不打任何網路。
   if (live) return;
   void loadTrades();
+});
+
+/*
+ * D-10 / D-11:成交後由**已掛載**的頁自己重讀。
+ * 這裡刻意傳一個**空的** mutate 給 `applyQueryChange` —— 重用既有的單一重置入口,
+ * 而不是另寫一份「頁碼歸零 + 重新請求」。D-11 要的三件事(保留篩選、保留排序、頁碼歸零)
+ * 正好就是那個入口的既有語意。
+ */
+watch(portfolioRevision, () => {
+  // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 與 onMounted 同一條規則。
+  if (live) return;
+  applyQueryChange(() => {}, { refresh: true });
 });
 
 const SortArrow = (p: { k: string; sk: string; sd: 'asc' | 'desc' }) =>
@@ -472,6 +543,16 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   border: 1px solid var(--border); background: var(--surface2);
   color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
 }
+
+/* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
+.refresh-note { padding: 8px 20px; font-size: 12px; color: var(--fg-dim); }
+.refresh-stale { padding: 14px 20px; font-size: 13px; }
+.refresh-stale .details {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.refresh-stale .details span { overflow-wrap: anywhere; }
+.block-refreshing { opacity: .72; transition: opacity .15s; }
 
 /* D-08:換頁按鈕 + 頁碼指示器 */
 .pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
