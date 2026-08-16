@@ -6,6 +6,7 @@ import Trades from './Trades.vue';
 import tradesSource from './Trades.vue?raw';
 import { t } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { bumpPortfolioRevision, resetPortfolioRevisionForTests } from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
@@ -220,6 +221,9 @@ const restorers: Array<() => void> = [];
 afterEach(() => {
   while (restorers.length) restorers.pop()!();
   cleanupMounted();
+  // 04-07 硬規則:模組級 singleton 的 reset 必須在**各測試檔自己**的 afterEach 呼叫,
+  // 絕不得加進 testSetup.ts(那會搶在 vi.mock 之前綁定真實實作)。
+  resetPortfolioRevisionForTests();
 });
 
 describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)', () => {
@@ -793,5 +797,118 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+});
+
+// =====================================================================================
+// 04-12(D-10 / D-11 / D-12 / U-05 / U-06):成交後的重讀。
+// =====================================================================================
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+/** 從任一列往上找到列表所屬的 `.card` —— 區塊級 aria-busy 的斷言對象,不新增 testid。 */
+function tradesCard(): HTMLElement {
+  const row = rows()[0];
+  expect(row, '至少要有一列交易才能定位列表區塊').toBeTruthy();
+  return row.closest('.card') as HTMLElement;
+}
+
+describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
+  it('Test 3(D-10):revision 變動後列表重讀一次', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'a', symbol: 'AAA' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+    expect(urls(fetchMock)).toHaveLength(1);
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    expect(urls(fetchMock)).toHaveLength(2);
+  });
+
+  it('Test 4(Pitfall 12):mock mode 下 revision 變動不得發出任何網路請求', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('Test 6/7(U-05):重讀期間保留舊列並顯示「更新中…」,成功後才換成新值', async () => {
+    let gate: ReturnType<typeof deferred<Response>> | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes('/trades')) throw new Error(`unexpected fetch: ${url}`);
+      if (gate) return gate.promise;
+      return success(page({ items: [trade({ id: 'old', symbol: 'OLD' })], totalElements: 1, totalPages: 1 }));
+    });
+    await mountApiTrades(fetchMock);
+    expect(rows()[0].textContent).toContain('OLD');
+
+    gate = deferred<Response>();
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM。
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('OLD');
+    expect(testid('trades-loading')).toBeNull();
+
+    const note = requireTestid('trades-refreshing');
+    expect(note.textContent).toContain(t('en', 'portfolioRefreshing'));
+    expect(tradesCard().getAttribute('aria-busy')).toBe('true');
+
+    gate.resolve(success(page({ items: [trade({ id: 'new', symbol: 'NEWSYM' })], totalElements: 1, totalPages: 1 })));
+    gate = null;
+    await flushAsync();
+
+    expect(testid('trades-refreshing')).toBeNull();
+    expect(tradesCard().getAttribute('aria-busy')).toBe('false');
+    expect(rows()[0].textContent).toContain('NEWSYM');
+    expect(document.body.textContent).not.toContain('OLD');
+  });
+
+  it('Test 8(U-06 / D-12):重讀失敗時舊資料留存並明示可能過期,重試可再送', async () => {
+    let failRefetch = false;
+    const fetchMock = scriptedFetch(() => (failRefetch
+      ? failure('TRADES_UNAVAILABLE', 'trace-refetch-down')
+      : success(page({ items: [trade({ id: 'old', symbol: 'OLD' })], totalElements: 1, totalPages: 1 }))));
+    await mountApiTrades(fetchMock);
+
+    failRefetch = true;
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // 舊資料仍在畫面上,且**不進** status:'error'
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('OLD');
+    expect(testid('trades-error')).toBeNull();
+    expect(testid('trades-refreshing')).toBeNull();
+
+    const stale = requireTestid('trades-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+    expect(stale.getAttribute('role')).toBe('status');
+    expect(requireTestid('trades-refresh-error-code').textContent).toContain('TRADES_UNAVAILABLE');
+    expect(requireTestid('trades-refresh-trace-id').textContent).toContain('trace-refetch-down');
+    expect(stale.textContent).not.toContain('backend said no');
+
+    failRefetch = false;
+    click(requireTestid('trades-refresh-retry'));
+    await flushAsync();
+
+    expect(urls(fetchMock)).toHaveLength(3);
+    expect(testid('trades-refresh-error')).toBeNull();
+    expect(rows()[0].textContent).toContain('OLD');
   });
 });

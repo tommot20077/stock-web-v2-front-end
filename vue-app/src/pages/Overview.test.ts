@@ -8,6 +8,7 @@ import { fmtNum, fmtPct } from '../data';
 import { t } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { bumpPortfolioRevision, resetPortfolioRevisionForTests } from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import type { Trade } from '../types';
@@ -120,6 +121,9 @@ function click(el: HTMLElement) {
 afterEach(() => {
   cleanupMounted();
   configureApiClientSessionHandlers({});
+  // 04-07 硬規則:模組級 singleton 的 reset 必須在**各測試檔自己**的 afterEach 呼叫,
+  // 絕不得加進 testSetup.ts(那會搶在 vi.mock 之前綁定真實實作)。
+  resetPortfolioRevisionForTests();
 });
 
 describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () => {
@@ -401,5 +405,120 @@ describe('Overview — mock mode 回歸鎖定', () => {
     await flushAsync();
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================================
+// 04-12(D-10 / D-12 / U-05 / U-06):成交後的重讀。
+// Overview 有**兩個各自獨立**的資料源(summary、近期交易),一個失敗不影響另一個。
+// =====================================================================================
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+const REFRESHED_TRADES: TradeDto[] = [
+  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null, executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
+];
+
+describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
+  it('Test 1(D-10):revision 變動後 summary 與近期交易各自重讀一次', async () => {
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+    expect(callsMatching(fetchMock, '/trades')).toHaveLength(1);
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+    expect(callsMatching(fetchMock, '/trades')).toHaveLength(2);
+  });
+
+  it('Test 4(Pitfall 12):mock mode 下 revision 變動不得發出任何網路請求', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // mock mode 走 Pinia reactivity:executeOrder 直接改 store,不需要也不應該觸發 refetch。
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('Test 6/7(U-05):重讀期間保留舊列並顯示「更新中…」,成功後才換成新值', async () => {
+    let gate: ReturnType<typeof deferred<Response>> | null = null;
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => (gate ? gate.promise : tradePage(API_TRADES)),
+    });
+    await mountApiOverview(fetchMock);
+    expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
+
+    gate = deferred<Response>();
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM,不被骨架/空狀態取代。
+    expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
+    expect(recentTradesCard().textContent).toContain('ZZA');
+    expect(testid('overview-trades-loading')).toBeNull();
+
+    const note = requireTestid('overview-refreshing');
+    expect(note.textContent).toContain(t('en', 'portfolioRefreshing'));
+    expect(recentTradesCard().getAttribute('aria-busy')).toBe('true');
+
+    gate.resolve(tradePage(REFRESHED_TRADES));
+    gate = null;
+    await flushAsync();
+
+    expect(testid('overview-refreshing')).toBeNull();
+    expect(recentTradesCard().getAttribute('aria-busy')).toBe('false');
+    expect(allTestids('overview-trade-row')).toHaveLength(1);
+    expect(recentTradesCard().textContent).toContain('ZNEW');
+    expect(recentTradesCard().textContent).not.toContain('ZZA');
+  });
+
+  it('Test 8(U-06 / D-12):重讀失敗時舊資料留存並明示可能過期,重試可再送', async () => {
+    let failRefetch = false;
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => (failRefetch ? failure('TRADE_LIST_UNAVAILABLE', 'trace-refetch-down') : tradePage(API_TRADES)),
+    });
+    await mountApiOverview(fetchMock);
+
+    failRefetch = true;
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // 舊資料仍在畫面上,且**不進** status:'error'(那會清掉舊資料)
+    expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
+    expect(testid('overview-trades-error')).toBeNull();
+    expect(testid('overview-refreshing')).toBeNull();
+
+    const stale = requireTestid('overview-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+    // 交易已成功,這不是需要打斷的錯誤 → role="status" 而不是 alert
+    expect(stale.getAttribute('role')).toBe('status');
+    expect(requireTestid('overview-refresh-error-code').textContent).toContain('TRADE_LIST_UNAVAILABLE');
+    expect(requireTestid('overview-refresh-trace-id').textContent).toContain('trace-refetch-down');
+    // 只露 code / traceId,後端 message 不外洩(T-04-09)
+    expect(stale.textContent).not.toContain('backend said no');
+
+    failRefetch = false;
+    click(requireTestid('overview-refresh-retry'));
+    await flushAsync();
+
+    expect(callsMatching(fetchMock, '/trades')).toHaveLength(3);
+    expect(testid('overview-refresh-error')).toBeNull();
+    expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
   });
 });
