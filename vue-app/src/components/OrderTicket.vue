@@ -1,121 +1,262 @@
 <template>
   <Teleport to="body">
     <div v-if="open" class="mask" @click="onMaskClick">
-      <div class="ticket" @click.stop>
+      <div
+        class="ticket"
+        role="dialog"
+        aria-modal="true"
+        :aria-busy="submitting ? 'true' : 'false'"
+        @click.stop
+      >
         <div class="hd">
           <div class="hd-l">
-            <div class="step-dots">
-              <span v-for="(_, i) in 4" :key="i" :class="['dot', { on: i <= stepIdx, done: i < stepIdx }]" />
+            <!-- 裝飾性進度指示:步驟語意由標題文字承擔,整組 aria-hidden(§Accessibility) -->
+            <div class="step-dots" data-testid="ticket-step-dots" aria-hidden="true">
+              <span v-for="(_, i) in 3" :key="i" :class="['dot', { on: i <= stepIdx, done: i < stepIdx }]" />
             </div>
             <div class="hd-ttl">{{ stepTitle }}</div>
           </div>
-          <button class="x" @click="onClose">✕</button>
+          <button
+            type="button"
+            class="x"
+            data-testid="ticket-close"
+            :aria-label="t(lang, 'closeTicket')"
+            @click="onClose"
+          >
+            <span aria-hidden="true">✕</span>
+          </button>
         </div>
 
         <!-- STEP 1: Ticket -->
         <div v-if="step === 'ticket'" class="body two-col">
           <div class="left">
-            <label class="lab">{{ t(lang, 'symbol') }}</label>
+            <label class="lab" for="trade-symbol">{{ t(lang, 'symbol') }}</label>
             <div class="sym-wrap">
               <input
+                id="trade-symbol"
                 ref="symInput"
                 v-model="symQuery"
                 class="inp big"
+                data-testid="ticket-symbol-input"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="trade-symbol-options"
+                :aria-expanded="symOpen && options.length > 0"
                 :placeholder="t(lang, 'selectSymbol')"
+                :disabled="submitting"
                 @focus="symOpen = true"
                 @input="onSymInput"
               />
               <div v-if="selected" class="sym-meta">
-                <span class="sym-tag">{{ selected.cat.toUpperCase() }}</span>
-                <span style="color:var(--fg-dim)">{{ selected.name }}</span>
+                <span class="sym-tag">{{ selected.assetType }}</span>
+                <span class="sym-name">{{ selected.name }}</span>
               </div>
-              <div v-if="symOpen && filtered.length" class="sym-pop">
+              <div
+                v-if="symOpen && options.length"
+                id="trade-symbol-options"
+                class="sym-pop"
+                role="listbox"
+                data-testid="ticket-symbol-options"
+              >
                 <div
-                  v-for="s in filtered"
-                  :key="s.sym"
+                  v-for="asset in options"
+                  :key="asset.uuid"
                   class="sym-row"
-                  @mousedown.prevent="pickSym(s)"
+                  role="option"
+                  :aria-selected="asset.symbol === selected?.symbol"
+                  :data-testid="`ticket-symbol-option-${asset.symbol}`"
+                  @mousedown.prevent="pickAsset(asset)"
                 >
                   <div>
-                    <div style="font-weight:600">{{ s.sym }}</div>
-                    <div style="font-size:11px;color:var(--fg-dim)">{{ s.name }}</div>
+                    <div class="sym-opt-sym">{{ asset.symbol }}</div>
+                    <div class="sym-opt-name">{{ asset.name }}</div>
                   </div>
-                  <div class="num" style="text-align:right">
-                    <div style="font-weight:500">{{ fmtNum(s.price) }}</div>
-                    <div style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
-                      {{ fmtPct(s.chgPct) }}
+                  <div class="num sym-opt-right">
+                    <div class="sym-opt-px">{{ fmtNum(asset.latestPrice ?? Number.NaN) }}</div>
+                    <div
+                      class="sym-opt-chg"
+                      :style="{ color: (asset.changePercent ?? 0) >= 0 ? 'var(--up)' : 'var(--dn)' }"
+                    >
+                      {{ fmtPct(asset.changePercent ?? 0) }}
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <label class="lab">{{ t(lang, 'side') }}</label>
+            <label class="lab" for="trade-side-buy">{{ t(lang, 'side') }}</label>
             <div class="side-toggle">
-              <button :class="['side-btn', 'buy', { active: side === 'BUY' }]" @click="side = 'BUY'">
-                ↗ {{ t(lang, 'buy') }}
+              <button
+                id="trade-side-buy"
+                type="button"
+                :class="['side-btn', 'buy', { active: side === 'BUY' }]"
+                :disabled="submitting"
+                @click="side = 'BUY'"
+              >
+                <span aria-hidden="true">↗</span> {{ t(lang, 'buy') }}
               </button>
-              <button :class="['side-btn', 'sell', { active: side === 'SELL' }]" @click="side = 'SELL'">
-                ↘ {{ t(lang, 'sell') }}
+              <button
+                type="button"
+                :class="['side-btn', 'sell', { active: side === 'SELL' }]"
+                :disabled="submitting"
+                @click="side = 'SELL'"
+              >
+                <span aria-hidden="true">↘</span> {{ t(lang, 'sell') }}
               </button>
             </div>
 
-            <label class="lab">{{ t(lang, 'orderType') }}</label>
-            <div class="seg">
-              <button :class="['seg-btn', { active: ordType === 'MKT' }]" @click="ordType = 'MKT'">{{ t(lang, 'market') }}</button>
-              <button :class="['seg-btn', { active: ordType === 'LMT' }]" @click="ordType = 'LMT'">{{ t(lang, 'limit') }}</button>
-            </div>
+            <!-- D-04:訂單類型後端沒有對應概念,只在 mock mode 渲染(不留空版位) -->
+            <template v-if="live">
+              <label class="lab" for="trade-ord-type-mkt">{{ t(lang, 'orderType') }}</label>
+              <div class="seg">
+                <button
+                  id="trade-ord-type-mkt"
+                  type="button"
+                  :class="['seg-btn', { active: ordType === 'MKT' }]"
+                  @click="ordType = 'MKT'"
+                >{{ t(lang, 'market') }}</button>
+                <button
+                  type="button"
+                  :class="['seg-btn', { active: ordType === 'LMT' }]"
+                  @click="ordType = 'LMT'"
+                >{{ t(lang, 'limit') }}</button>
+              </div>
+            </template>
 
             <div class="row2">
               <div>
-                <label class="lab">{{ t(lang, 'qty') }}</label>
-                <input v-model.number="qty" type="number" class="inp" min="0" :step="qtyStep" />
+                <label class="lab" for="trade-qty">{{ t(lang, 'qty') }}</label>
+                <input
+                  id="trade-qty"
+                  v-model.number="qty"
+                  type="number"
+                  inputmode="decimal"
+                  class="inp"
+                  data-testid="ticket-qty"
+                  min="0"
+                  :step="qtyStep"
+                  :disabled="submitting"
+                />
               </div>
               <div>
-                <label class="lab">{{ t(lang, 'price') }}</label>
+                <!-- D-04 連帶效果:MKT 鎖價機制移除,價格一律預填 latestPrice 但可編輯 -->
+                <label class="lab" for="trade-price">{{ t(lang, 'price') }}</label>
                 <input
+                  id="trade-price"
                   v-model.number="px"
                   type="number"
+                  inputmode="decimal"
                   class="inp"
-                  :disabled="ordType === 'MKT'"
+                  data-testid="ticket-price"
+                  min="0"
                   step="0.01"
+                  :disabled="submitting"
                 />
               </div>
             </div>
 
-            <label class="lab">{{ t(lang, 'tif') }}</label>
-            <div class="seg">
-              <button :class="['seg-btn', { active: tif === 'DAY' }]" @click="tif = 'DAY'">{{ t(lang, 'day') }}</button>
-              <button :class="['seg-btn', { active: tif === 'GTC' }]" @click="tif = 'GTC'">{{ t(lang, 'gtc') }}</button>
+            <div class="row2">
+              <div>
+                <!-- D-02:手續費由使用者輸入,預設 0。前端不發明費率 —— fee 會進 avg_cost
+                     與 realized_pnl,而 transactions 是 append-only,寫錯永久留存。 -->
+                <label class="lab" for="trade-fee">{{ t(lang, 'fee') }}</label>
+                <input
+                  id="trade-fee"
+                  v-model.number="fee"
+                  type="number"
+                  inputmode="decimal"
+                  class="inp"
+                  data-testid="ticket-fee"
+                  min="0"
+                  step="0.01"
+                  aria-describedby="trade-fee-hint"
+                  :disabled="submitting"
+                />
+                <p id="trade-fee-hint" class="hint">{{ t(lang, 'tradeFeeHint') }}</p>
+              </div>
+              <div>
+                <!-- D-03:成交時間預設現在、不可晚於現在;送出時轉為帶 offset 的 ISO 字串 -->
+                <label class="lab" for="trade-executed-at">{{ t(lang, 'tradeExecutedAt') }}</label>
+                <input
+                  id="trade-executed-at"
+                  v-model="executedAt"
+                  type="datetime-local"
+                  class="inp"
+                  data-testid="ticket-executed-at"
+                  :max="maxExecutedAt"
+                  aria-describedby="trade-executed-at-hint"
+                  :disabled="submitting"
+                />
+                <p id="trade-executed-at-hint" class="hint">{{ t(lang, 'tradeExecutedAtHint') }}</p>
+              </div>
             </div>
-            <div v-if="validationError" class="form-error">{{ validationError }}</div>
+
+            <label class="lab" for="trade-note">{{ t(lang, 'notes') }}</label>
+            <input
+              id="trade-note"
+              v-model="note"
+              type="text"
+              class="inp"
+              data-testid="ticket-note"
+              maxlength="500"
+              :disabled="submitting"
+            />
+
+            <!-- D-04:TIF 後端沒有對應概念,只在 mock mode 渲染 -->
+            <template v-if="live">
+              <label class="lab" for="trade-tif-day">{{ t(lang, 'tif') }}</label>
+              <div class="seg">
+                <button
+                  id="trade-tif-day"
+                  type="button"
+                  :class="['seg-btn', { active: tif === 'DAY' }]"
+                  @click="tif = 'DAY'"
+                >{{ t(lang, 'day') }}</button>
+                <button
+                  type="button"
+                  :class="['seg-btn', { active: tif === 'GTC' }]"
+                  @click="tif = 'GTC'"
+                >{{ t(lang, 'gtc') }}</button>
+              </div>
+            </template>
+
+            <div v-if="validationError" class="form-error" role="alert">{{ validationError }}</div>
           </div>
 
           <div class="right">
             <div v-if="selected" class="quote-card">
               <div class="row-between">
                 <div>
-                  <div style="font-size:11px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:.4px">{{ t(lang, 'last') }}</div>
-                  <div class="num" style="font-size:24px;font-weight:600;margin-top:2px">{{ fmtNum(selected.price) }}</div>
+                  <div class="quote-lab">{{ t(lang, 'last') }}</div>
+                  <div class="num quote-last">{{ fmtNum(selected.latestPrice ?? Number.NaN) }}</div>
                 </div>
-                <div class="num" style="text-align:right" :style="{ color: selected.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
-                  <div style="font-weight:500">{{ selected.chgPct >= 0 ? '+' : '' }}{{ fmtNum(selected.chg) }}</div>
-                  <div style="font-size:12px">{{ fmtPct(selected.chgPct) }}</div>
+                <div
+                  class="num quote-chg-wrap"
+                  :style="{ color: (selected.changePercent ?? 0) >= 0 ? 'var(--up)' : 'var(--dn)' }"
+                >
+                  <div class="quote-chg">
+                    {{ (selected.changePercent ?? 0) >= 0 ? '+' : '' }}{{ fmtNum(selected.change ?? Number.NaN) }}
+                  </div>
+                  <div class="quote-chg-pct">{{ fmtPct(selected.changePercent ?? 0) }}</div>
                 </div>
               </div>
 
-              <div style="height:90px;color:var(--accent);margin:14px 0 10px">
-                <LineChart :data="quoteSeries" fill="var(--accent)" />
+              <!-- 走勢圖接 GET /market/{symbol}/klines 是 04-10 的範圍。骨架階段誠實顯示
+                   「無走勢資料」,不用 genSeries() 生成看起來像真的假序列(D-16)。 -->
+              <div class="quote-chart" data-testid="ticket-quote-chart-empty">
+                {{ t(lang, 'quoteChartEmpty') }}
               </div>
 
               <div class="quote-meta">
                 <div>
                   <div class="qm-l">{{ t(lang, 'dayRange') }}</div>
-                  <div class="num qm-v">{{ fmtNum(selected.low) }} – {{ fmtNum(selected.high) }}</div>
+                  <div class="num qm-v">
+                    {{ fmtNum(selected.low ?? Number.NaN) }} – {{ fmtNum(selected.high ?? Number.NaN) }}
+                  </div>
                 </div>
                 <div>
                   <div class="qm-l">{{ t(lang, 'volume') }}</div>
-                  <div class="num qm-v">{{ selected.vol }}</div>
+                  <div class="num qm-v">{{ selected.volumeText }}</div>
                 </div>
               </div>
             </div>
@@ -126,67 +267,112 @@
             <div class="summary">
               <div class="sum-row">
                 <span>{{ t(lang, 'estTotal') }}</span>
-                <span class="num" style="font-weight:600">${{ fmtNum(estTotal, 2) }}</span>
+                <span class="num sum-strong">${{ fmtNum(estTotal, 2) }}</span>
               </div>
-              <div class="sum-row dim">
-                <span>{{ t(lang, 'estFee') }}</span>
-                <span class="num">${{ fmtNum(estFee, 2) }}</span>
+              <!-- D-04:交易後現金全 repo 無後端來源,只在 mock mode 渲染 -->
+              <div v-if="live" class="sum-row dim">
+                <span>{{ t(lang, 'cashAfter') }}</span>
+                <span class="num">${{ fmtNum(cashAfter, 0) }}</span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- STEP 2: Review -->
+        <!-- STEP 2: Review(DP-9:append-only 帳本的不可撤銷寫入需要一個確認關卡) -->
         <div v-else-if="step === 'review'" class="body review">
           <div class="big-side" :class="side.toLowerCase()">
-            {{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qty }} {{ selected?.sym }}
+            {{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qty }} {{ selected?.symbol }}
           </div>
           <div class="rev-grid">
-            <div><span>{{ t(lang, 'orderType') }}</span><b>{{ ordType === 'MKT' ? t(lang, 'market') : t(lang, 'limit') }} · {{ tif }}</b></div>
+            <div v-if="live">
+              <span>{{ t(lang, 'orderType') }}</span>
+              <b>{{ ordType === 'MKT' ? t(lang, 'market') : t(lang, 'limit') }} · {{ tif }}</b>
+            </div>
             <div><span>{{ t(lang, 'price') }}</span><b class="num">${{ fmtNum(px) }}</b></div>
             <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ qty }}</b></div>
-            <div><span>{{ t(lang, 'estFee') }}</span><b class="num">${{ fmtNum(estFee, 2) }}</b></div>
-            <div class="span-2 highlight"><span>{{ t(lang, 'estTotal') }}</span><b class="num">${{ fmtNum(estTotal, 2) }}</b></div>
-            <div class="span-2 dim"><span>{{ t(lang, 'cashAfter') }}</span><b class="num">${{ fmtNum(cashAfter, 0) }}</b></div>
-          </div>
-        </div>
-
-        <!-- STEP 3: Placing -->
-        <div v-else-if="step === 'placing'" class="body placing">
-          <div class="spinner" />
-          <div class="placing-steps">
-            <div v-for="(s, i) in placeSteps" :key="i" :class="['p-step', { done: placeStage > i, active: placeStage === i }]">
-              <span class="p-mark">{{ placeStage > i ? '✓' : placeStage === i ? '·' : '' }}</span>
-              <span>{{ s }}</span>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">${{ fmtNum(fee) }}</b></div>
+            <div class="span-2">
+              <span>{{ t(lang, 'tradeExecutedAt') }}</span>
+              <b class="num">{{ executedAt.replace('T', ' ') }}</b>
+            </div>
+            <div class="span-2 highlight">
+              <span>{{ t(lang, 'estTotal') }}</span><b class="num">${{ fmtNum(estTotal, 2) }}</b>
+            </div>
+            <div v-if="live" class="span-2 dim">
+              <span>{{ t(lang, 'cashAfter') }}</span><b class="num">${{ fmtNum(cashAfter, 0) }}</b>
             </div>
           </div>
+          <p class="irreversible">{{ t(lang, 'tradeIrreversibleNote') }}</p>
+          <p
+            v-if="submitting"
+            class="submitting-note"
+            role="status"
+            aria-live="polite"
+            data-testid="ticket-submitting-status"
+          >{{ t(lang, 'recordingTrade') }}</p>
         </div>
 
-        <!-- STEP 4: Filled -->
-        <div v-else-if="step === 'filled'" class="body filled">
-          <div class="check">✓</div>
-          <div class="filled-ttl">{{ t(lang, 'filled') }}</div>
-          <div class="filled-sub">{{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qty }} {{ selected?.sym }} @ ${{ fmtNum(fillPx) }}</div>
-          <div class="rev-grid" style="margin-top:18px">
-            <div><span>{{ t(lang, 'avgFillPx') }}</span><b class="num">${{ fmtNum(fillPx) }}</b></div>
-            <div><span>{{ t(lang, 'orderId') }}</span><b class="num">#{{ orderId }}</b></div>
-            <div class="span-2"><span>{{ t(lang, 'estTotal') }}</span><b class="num">${{ fmtNum(qty * fillPx, 2) }}</b></div>
+        <!-- STEP 3: Result(只渲染回傳的 TradeDto,不顯示表單值 —— D-09) -->
+        <div v-else class="body result" data-testid="ticket-result">
+          <div class="check" aria-hidden="true">✓</div>
+          <h2 ref="resultTitle" class="result-ttl" tabindex="-1">{{ t(lang, 'tradeRecorded') }}</h2>
+          <div class="result-sub">
+            {{ recorded?.type === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }}
+            {{ recorded?.quantity }} {{ recorded?.symbol }} @ ${{ fmtNum(recorded?.price ?? Number.NaN) }}
+          </div>
+          <div class="rev-grid">
+            <div class="span-2">
+              <span>{{ t(lang, 'tradeId') }}</span>
+              <b class="trade-id" data-testid="ticket-result-trade-id">{{ recorded?.id }}</b>
+            </div>
+            <div>
+              <span>{{ t(lang, 'price') }}</span>
+              <b class="num" data-testid="ticket-result-price">${{ fmtNum(recorded?.price ?? Number.NaN) }}</b>
+            </div>
+            <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ recorded?.quantity }}</b></div>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">${{ fmtNum(recorded?.fee ?? Number.NaN) }}</b></div>
+            <div>
+              <span>{{ t(lang, 'tradeExecutedAt') }}</span>
+              <b class="num trade-id" data-testid="ticket-result-executed-at">{{ recorded?.executedAt }}</b>
+            </div>
+            <div class="span-2 highlight">
+              <span>{{ t(lang, 'estTotal') }}</span>
+              <b class="num">${{ fmtNum((recorded?.quantity ?? 0) * (recorded?.price ?? 0), 2) }}</b>
+            </div>
           </div>
         </div>
 
         <!-- Footer -->
         <div class="ft">
           <template v-if="step === 'ticket'">
-            <button class="btn-ghost" @click="onClose">{{ t(lang, 'cancel') }}</button>
-            <button class="btn-accent" :disabled="!canSubmit" @click="step = 'review'">{{ t(lang, 'review') }} →</button>
+            <button type="button" class="btn-ghost" @click="onClose">{{ t(lang, 'cancel') }}</button>
+            <button
+              type="button"
+              class="btn-accent"
+              data-testid="ticket-review-advance"
+              :disabled="!canSubmit"
+              @click="step = 'review'"
+            >{{ t(lang, 'reviewTrade') }} →</button>
           </template>
           <template v-else-if="step === 'review'">
-            <button class="btn-ghost" @click="step = 'ticket'">← {{ t(lang, 'cancel') }}</button>
-            <button :class="['btn-accent', side.toLowerCase()]" @click="placeOrder">{{ t(lang, 'placeOrder') }}</button>
+            <button
+              type="button"
+              class="btn-ghost"
+              data-testid="ticket-back-to-edit"
+              :disabled="submitting"
+              @click="step = 'ticket'"
+            >← {{ t(lang, 'backToEdit') }}</button>
+            <button
+              type="button"
+              :class="['btn-accent', side.toLowerCase()]"
+              data-testid="ticket-submit"
+              :disabled="submitting"
+              @click="submitTrade"
+            >{{ submitting ? t(lang, 'recordingTrade') : t(lang, 'recordTrade') }}</button>
           </template>
-          <template v-else-if="step === 'filled'">
-            <button class="btn-ghost" @click="resetAndClose">{{ t(lang, 'newOrder') }}</button>
-            <button class="btn-accent" @click="goPositions">{{ t(lang, 'viewPositions') }} →</button>
+          <template v-else>
+            <button type="button" class="btn-ghost" @click="recordAnother">{{ t(lang, 'recordAnother') }}</button>
+            <button type="button" class="btn-accent" @click="goPositions">{{ t(lang, 'viewPositions') }} →</button>
           </template>
         </div>
       </div>
@@ -195,94 +381,141 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
 import { t } from '../i18n';
-import { SYMBOLS, CRYPTO, FX, fmtNum, fmtPct, genSeries } from '../data';
-import { useMockNotificationsStore } from '../stores/mockNotifications';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { Lang, Symbol as Sym } from '../types';
-import LineChart from './LineChart.vue';
+// 只取格式化純函式;標的資料一律經 market adapter,本檔不再讀 data.ts 的假資料集
+// (SYMBOLS / CRYPTO / FX / genSeries 全部移除)。
+import { fmtNum, fmtPct } from '../data';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import { notifyTradeCreated } from '../services/portfolioRevision';
+import { toLocalInputValue, toLocalIso } from '../services/localTime';
+import type { AssetDto, TradeDto } from '../services/apiTypes';
+import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'navigate', p: 'positions'): void; (e: 'toast', m: string): void }>();
 
-const ALL: Sym[] = [...SYMBOLS, ...CRYPTO, ...FX];
-const portfolio = useMockPortfolioStore();
-const notifications = useMockNotificationsStore();
-type Step = 'ticket' | 'review' | 'placing' | 'filled';
+// judgment §3:元件只認 domain service,永不 import mock store。
+// 分支條件是「mock 專屬 reactive 視窗是否存在」,不是 mode 字串(portfolioApi.ts:42-45)。
+//
+// **刻意延遲到 ticket 開啟才解析 adapter**:OrderTicket 是全域 overlay(`App.vue:52`),
+// 不受 `showMainContent` 的 v-if 保護而永遠掛載。若在 setup 就呼叫 getRuntimeApiClients(),
+// `VITE_DATA_MODE` 無效時會在 App 顯示設定錯誤畫面之前先丟 RuntimeDataModeError。
+type RuntimeClients = ReturnType<typeof getRuntimeApiClients>;
+const clients = shallowRef<RuntimeClients | null>(null);
+
+function apiClients(): RuntimeClients {
+  if (!clients.value) clients.value = getRuntimeApiClients();
+  return clients.value;
+}
+
+const live = computed(() => clients.value?.trading.live);
+
+// U-01 / U-16:三步驟。送出中**不切換步驟**(停在 review),只切 submitting。
+type Step = 'ticket' | 'review' | 'result';
+const STEPS: Step[] = ['ticket', 'review', 'result'];
 
 const step = ref<Step>('ticket');
-const stepIdx = computed(() => ['ticket', 'review', 'placing', 'filled'].indexOf(step.value));
+const stepIdx = computed(() => STEPS.indexOf(step.value));
 const stepTitle = computed(() => {
-  const lang = props.lang;
   switch (step.value) {
-    case 'ticket': return t(lang, 'newOrder');
-    case 'review': return t(lang, 'review');
-    case 'placing': return t(lang, 'placing') + '…';
-    case 'filled': return t(lang, 'filled');
+    case 'ticket': return t(props.lang, 'recordTrade');
+    case 'review': return t(props.lang, 'reviewTrade');
+    default: return t(props.lang, 'tradeRecorded');
   }
 });
 
 const symInput = ref<HTMLInputElement | null>(null);
+const resultTitle = ref<HTMLElement | null>(null);
 const symQuery = ref('');
 const symOpen = ref(false);
-const selected = ref<Sym | null>(null);
+const options = ref<AssetDto[]>([]);
+const selected = ref<AssetDto | null>(null);
 
 const side = ref<'BUY' | 'SELL'>('BUY');
+// D-04:ordType / tif 只在 mock mode 渲染;後端 CreateTradeRequest 沒有這兩個欄位,
+// 因此它們永遠不會進入 payload(judgment §1 明文點名的反例)。
 const ordType = ref<'MKT' | 'LMT'>('MKT');
 const tif = ref<'DAY' | 'GTC'>('DAY');
 const qty = ref<number>(0);
 const px = ref<number>(0);
+const fee = ref<number>(0);
+const note = ref('');
+const executedAt = ref('');
+const maxExecutedAt = ref('');
 
-const orderId = ref('');
-const fillPx = ref(0);
-const placeStage = ref(0);
-const placing = ref(false);
+const submitting = ref(false);
 const orderError = ref('');
-const placeSteps = computed(() => [t(props.lang, 'placing'), t(props.lang, 'routingMatch'), t(props.lang, 'filled')]);
+const recorded = ref<TradeDto | null>(null);
 
-const filtered = computed(() => {
-  const q = symQuery.value.trim().toLowerCase();
-  if (!q) return ALL.slice(0, 6);
-  return ALL.filter(s => s.sym.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)).slice(0, 6);
-});
+/** typeahead 下拉最多 10 筆(§2);debounce / AbortController / 七態是 04-10 的範圍。 */
+const SEARCH_SIZE = 10;
 
-const qtyStep = computed(() => selected.value?.cat === 'crypto' ? 0.01 : 1);
+async function searchAssets(query: string): Promise<AssetDto[]> {
+  try {
+    const page = await apiClients().market.searchAssets({ query: query.trim(), size: SEARCH_SIZE });
+    // D-01:只有後端確認存在且 tradeable 的標的可以被選取。
+    return page.items.filter(asset => asset.tradeable);
+  } catch {
+    // 下拉的 error 態(診斷列 + 重試)是 04-10;骨架階段不阻擋 ticket 的其他欄位。
+    return [];
+  }
+}
 
+const qtyStep = computed(() => (selected.value?.assetType === 'CRYPTO' ? 0.01 : 1));
 const estTotal = computed(() => qty.value * px.value);
-const estFee = computed(() => Math.max(1, estTotal.value * 0.001));
-const cashAfter = computed(() => 124_580 - (side.value === 'BUY' ? estTotal.value + estFee.value : -(estTotal.value - estFee.value)));
-
-const quoteSeries = computed(() =>
-  selected.value ? genSeries(40, selected.value.price * 0.985, 0.012, selected.value.sym.charCodeAt(0)) : []
-);
+// mock mode 專屬的展示值(D-04:API mode 不渲染,後端沒有帳戶餘額模型)。
+const cashAfter = computed(() => 124_580 - (side.value === 'BUY'
+  ? estTotal.value + fee.value
+  : -(estTotal.value - fee.value)));
 
 const selectedMatchesQuery = computed(() =>
-  !!selected.value && symQuery.value.trim().toUpperCase() === selected.value.sym.toUpperCase()
+  !!selected.value && symQuery.value.trim().toUpperCase() === selected.value.symbol.toUpperCase()
 );
-const sellValidationError = computed(() => {
-  if (side.value !== 'SELL' || !selected.value || qty.value <= 0) return '';
-  const holding = portfolio.positions.find(p => p.sym === selected.value!.sym);
+
+/**
+ * D-15 的最小預檢:只在 mock mode 生效(mock adapter 的 reactive 視窗是同步的)。
+ * API mode 的持倉預檢(含「可賣數量」顯示與載入/失敗態)是 04-11 的範圍;
+ * 後端 409 `TRADE_INSUFFICIENT_HOLDING` 在兩個 mode 都是最終權威(judgment §5)。
+ */
+const sellPrecheckError = computed(() => {
+  const positions = clients.value?.portfolio.live?.positions;
+  if (!positions || side.value !== 'SELL' || !selected.value || qty.value <= 0) return '';
+  const holding = positions.find(position => position.sym === selected.value!.symbol);
   if (!holding || holding.qty <= 0) return 'No holdings available to sell';
   if (qty.value > holding.qty) return 'Sell quantity exceeds current holding';
   return '';
 });
-const validationError = computed(() => orderError.value || sellValidationError.value);
-const canSubmit = computed(() =>
-  !!selected.value &&
-  selectedMatchesQuery.value &&
-  qty.value > 0 &&
-  (ordType.value === 'MKT' || px.value > 0) &&
-  !validationError.value
+
+/** 前端自檢(Q8.4 的 (ii)):擋未來時間。**這是 UX,不是後端驗證的替代品**。 */
+const executedAtError = computed(() => {
+  const parsed = executedAt.value ? new Date(executedAt.value) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) return t(props.lang, 'tradeErrExecutedAt');
+  return parsed.getTime() > Date.now() ? t(props.lang, 'tradeErrExecutedAt') : '';
+});
+
+const feeError = computed(() => (fee.value < 0 || !Number.isFinite(fee.value) ? t(props.lang, 'tradeErrFee') : ''));
+
+const validationError = computed(() =>
+  orderError.value || sellPrecheckError.value || executedAtError.value || feeError.value
 );
 
-function pickSym(s: Sym) {
+const canSubmit = computed(() =>
+  !!selected.value
+  && selectedMatchesQuery.value
+  && qty.value > 0
+  && px.value > 0
+  && !validationError.value
+);
+
+function pickAsset(asset: AssetDto) {
   orderError.value = '';
-  selected.value = s;
-  symQuery.value = s.sym;
+  selected.value = asset;
+  symQuery.value = asset.symbol;
   symOpen.value = false;
-  px.value = +s.price.toFixed(2);
-  if (qty.value === 0) qty.value = s.cat === 'crypto' ? 0.05 : 10;
+  // 價格預填後端 latestPrice,但保持可編輯(D-04 連帶效果:這正是「手動記錄已成交價格」的語意)。
+  px.value = asset.latestPrice ?? 0;
+  if (qty.value === 0) qty.value = asset.assetType === 'CRYPTO' ? 0.05 : 10;
 }
 
 function clearSelection(preserveQuery = false) {
@@ -294,122 +527,136 @@ function clearSelection(preserveQuery = false) {
   px.value = 0;
 }
 
-function resetIntent() {
+function resetTicket() {
+  step.value = 'ticket';
+  submitting.value = false;
+  recorded.value = null;
   side.value = 'BUY';
   ordType.value = 'MKT';
   tif.value = 'DAY';
+  fee.value = 0;
+  note.value = '';
   orderError.value = '';
+  const now = new Date();
+  maxExecutedAt.value = toLocalInputValue(now);
+  executedAt.value = maxExecutedAt.value;
+  options.value = [];
+  clearSelection();
 }
 
 function onSymInput() {
   symOpen.value = true;
   orderError.value = '';
-  const q = symQuery.value.trim();
-  const exact = ALL.find(s => s.sym.toUpperCase() === q.toUpperCase());
-  if (exact) {
-    pickSym(exact);
-    return;
-  }
-  if (!selected.value || q.toUpperCase() !== selected.value.sym.toUpperCase()) {
+  const query = symQuery.value.trim();
+  if (!selected.value || query.toUpperCase() !== selected.value.symbol.toUpperCase()) {
     clearSelection(true);
     symOpen.value = true;
   }
+  // 先清空舊結果:上一個查詢字串的結果不得留在畫面上冒充目前查詢的結果。
+  // (下拉的 loading 骨架列是 04-10;骨架階段就是短暫的空下拉。)
+  options.value = [];
+  void searchAssets(query).then((assets) => {
+    // 只採用「查詢字串仍然一致」的回應。完整的競態處理(AbortController / 遞增 request id)
+    // 與 250ms debounce 是 04-10 的範圍。
+    if (symQuery.value.trim().toUpperCase() !== query.toUpperCase()) return;
+    options.value = assets;
+    const exact = assets.find(asset => asset.symbol.toUpperCase() === query.toUpperCase());
+    if (exact && selected.value?.symbol !== exact.symbol) pickAsset(exact);
+  });
 }
 
-watch(() => props.open, async (o) => {
-  if (o) {
-    step.value = 'ticket';
-    placing.value = false;
-    orderId.value = '';
-    fillPx.value = 0;
-    placeStage.value = 0;
-    resetIntent();
-    clearSelection();
-    if (props.preset) {
-      const found = ALL.find(s => s.sym === props.preset!.sym);
-      if (found) pickSym(found);
-      else clearSelection();
-      if (props.preset.side) side.value = props.preset.side;
-    }
-    await nextTick();
-    symInput.value?.focus();
+watch(() => props.open, async (open) => {
+  if (!open) return;
+  const api = apiClients();
+  resetTicket();
+  const preset = props.preset;
+  if (preset?.side) side.value = preset.side;
+  // 這裡刻意直接 await adapter(不經 searchAssets 包一層):開啟 ticket 是使用者等待中的路徑,
+  // 多包一層 async 就多一輪 microtask,preset 解析會晚一個 tick 才出現在畫面上。
+  let assets: AssetDto[] = [];
+  try {
+    const page = await api.market.searchAssets({ query: preset?.sym ?? '', size: SEARCH_SIZE });
+    assets = page.items.filter(asset => asset.tradeable);
+  } catch {
+    assets = [];
   }
-});
-
-watch(ordType, (v) => {
-  if (v === 'MKT' && selected.value) px.value = +selected.value.price.toFixed(2);
-});
+  if (!props.open) return;
+  options.value = assets;
+  if (preset) {
+    const exact = assets.find(asset => asset.symbol.toUpperCase() === preset.sym.toUpperCase());
+    // 解析不到就維持清空狀態,**不回退本地假資料**。
+    if (exact) pickAsset(exact);
+  }
+  await nextTick();
+  // 焦點落在 step 1 的唯一 Display 元素(§Accessibility:焦點必須進入對話框且落在動作起點)。
+  symInput.value?.focus();
+}, { immediate: true });
 
 function onMaskClick() {
-  if (step.value === 'placing') return;
+  if (submitting.value) return;
   onClose();
 }
+
 function onClose() {
-  if (step.value === 'placing') return;
+  if (submitting.value) return;
   emit('close');
 }
-function resetAndClose() {
-  resetIntent();
-  clearSelection();
-  step.value = 'ticket';
-}
 
-async function placeOrder() {
-  if (placing.value || step.value === 'placing') return;
-  if (!selected.value || !canSubmit.value) return;
-  placing.value = true;
-  step.value = 'placing';
-  placeStage.value = 0;
-  await wait(420);
-  placeStage.value = 1;
-  await wait(640);
-  placeStage.value = 2;
-  await wait(380);
-
-  if (!selected.value) {
-    placing.value = false;
-    return;
-  }
-  const slip = (Math.random() - 0.5) * 0.002;
-  fillPx.value = +(px.value * (1 + slip)).toFixed(2);
-  orderId.value = String(Math.floor(Math.random() * 90_000_000) + 10_000_000);
-
-  const filled = portfolio.executeOrder({
-    sym: selected.value.sym,
-    name: selected.value.name,
-    side: side.value,
-    qty: qty.value,
-    px: fillPx.value,
-    fee: +estFee.value.toFixed(2),
-    sector: selected.value.sector ?? selected.value.cat.toUpperCase(),
-    note: tif.value === 'GTC' ? 'GTC' : '',
-  });
-  if (!filled) {
-    step.value = 'ticket';
-    orderError.value = sellValidationError.value || 'Order rejected';
-    placing.value = false;
-    return;
-  }
-  notifications.pushNotification({
-    kind: 'order',
-    sym: selected.value.sym,
-    text: `${side.value} ${qty.value} ${selected.value.sym} @ ${fmtNum(fillPx.value)} filled`,
-    time: 'now',
-    unread: true,
-  });
-
-  step.value = 'filled';
-  placing.value = false;
-  emit('toast', `${side.value} ${qty.value} ${selected.value.sym} @ ${fmtNum(fillPx.value)}`);
+async function recordAnother() {
+  resetTicket();
+  options.value = await searchAssets('');
+  await nextTick();
+  symInput.value?.focus();
 }
 
 function goPositions() {
   emit('navigate', 'positions');
-  resetAndClose();
+  resetTicket();
   emit('close');
 }
 
-function wait(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
+/**
+ * D-14 / T-04-10:key 在「按下送出」時產生,且必須是 CSPRNG ——
+ * 非密碼學的偽亂數(例如 `crypto` 以外的隨機來源)會有碰撞風險,
+ * 而碰撞會讓別人的交易被當成你的重試回傳。
+ * key 的完整生命週期(重試沿用、改欄位換新)是 04-11 的範圍。
+ */
+function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
+async function submitTrade() {
+  if (submitting.value) return;
+  if (!selected.value || !canSubmit.value) return;
+  submitting.value = true;
+  orderError.value = '';
+  try {
+    const trade = await apiClients().trading.createTrade({
+      symbol: selected.value.symbol,
+      type: side.value,
+      quantity: qty.value,
+      price: px.value,
+      fee: fee.value,
+      note: note.value ? note.value : null,
+      // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
+      executedAt: toLocalIso(new Date(executedAt.value)),
+    }, newIdempotencyKey());
+    recorded.value = trade;
+    // D-10 / D-13:成功後的唯一訊號來源。消費端(三頁重讀與 fresh 高亮)在 04-12 接上。
+    notifyTradeCreated(trade);
+    step.value = 'result';
+    emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${trade.quantity} ${trade.symbol} @ ${fmtNum(trade.price)}`);
+    await nextTick();
+    resultTitle.value?.focus();
+  } catch {
+    // 依 error.code 分派文案、欄位級錯誤綁定與診斷列是 04-11 的範圍;
+    // 骨架階段沿用既有的表單層提示,不新增任何診斷顯示(T-04-09)。
+    step.value = 'ticket';
+    orderError.value = sellPrecheckError.value || 'Order rejected';
+  } finally {
+    submitting.value = false;
+  }
+}
 </script>
 
 <style scoped>
@@ -427,129 +674,181 @@ function wait(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
 @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes rise { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
 
-.hd { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--border); }
-.hd-l { display: flex; align-items: center; gap: 14px; }
-.hd-ttl { font-size: 15px; font-weight: 600; }
+.hd { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--border); }
+.hd-l { display: flex; align-items: center; gap: 12px; }
+.hd-ttl { font-size: 16px; font-weight: 600; line-height: 1.35; }
 .step-dots { display: flex; gap: 6px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--surface2); transition: all .25s; }
 .dot.on { background: var(--accent); width: 20px; border-radius: 3px; }
 .dot.done { background: var(--accent); opacity: .55; }
-.x { background: transparent; border: 0; color: var(--fg-dim); font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.x {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px;
+  background: transparent; border: 0; color: var(--fg-dim); font-size: 16px; font-weight: 400;
+  cursor: pointer; border-radius: 8px;
+}
 .x:hover { background: var(--surface2); color: var(--fg); }
+.x:focus-visible, .side-btn:focus-visible, .seg-btn:focus-visible,
+.btn-accent:focus-visible, .btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.body { padding: 22px; }
+.body { padding: 24px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 
-.lab { display: block; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .5px; margin: 14px 0 6px; font-weight: 500; }
+.lab {
+  display: block; font-size: 12px; font-weight: 600; line-height: 1.35;
+  color: var(--fg-dim); letter-spacing: 0; margin: 16px 0 8px;
+}
 .lab:first-child { margin-top: 0; }
+.hint { font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); margin: 4px 0 0; }
 
 .inp {
   width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
-  padding: 9px 12px; font-size: 13px; color: var(--fg); outline: none; font-family: inherit;
-  transition: border .15s;
+  padding: 8px 12px; min-height: 36px; font-size: 13px; font-weight: 400; line-height: 1.45;
+  color: var(--fg); outline: none; font-family: inherit; transition: border .15s;
 }
 .inp:focus { border-color: var(--accent); }
-.inp.big { font-size: 15px; padding: 11px 14px; font-weight: 500; }
+/* U-18:step 1 的唯一 Display 級元素 */
+.inp.big { font-size: 20px; font-weight: 600; line-height: 1.25; padding: 12px 16px; min-height: 44px; }
 .inp:disabled { opacity: .5; cursor: not-allowed; }
 
 .sym-wrap { position: relative; }
-.sym-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; }
-.sym-tag { background: var(--accent); color: #fff; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .4px; }
+.sym-meta { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; font-weight: 400; }
+.sym-name { color: var(--fg-dim); }
+.sym-tag {
+  /* §Spacing 的「規則優先於下表」:遷移表寫 2px 8px,但 2px 既非 4 的倍數也不屬 5 類 Exceptions */
+  background: var(--accent); color: #fff; padding: 4px 8px; border-radius: 4px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0;
+}
 .sym-pop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 12px 32px rgba(0,0,0,0.12); z-index: 10; max-height: 280px; overflow: auto;
 }
-.sym-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; cursor: pointer; font-size: 13px; }
+.sym-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 400;
+}
 .sym-row:hover { background: var(--surface2); }
 .sym-row + .sym-row { border-top: 1px solid var(--border); }
+.sym-opt-sym { font-weight: 600; }
+.sym-opt-name { font-size: 12px; font-weight: 400; color: var(--fg-dim); }
+.sym-opt-right { text-align: right; }
+.sym-opt-px { font-weight: 600; }
+.sym-opt-chg { font-size: 12px; }
 
-.side-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.side-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .side-btn {
-  padding: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; min-height: 44px; background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 8px;
   font-size: 13px; font-weight: 600; color: var(--fg-dim); cursor: pointer; transition: all .15s;
 }
 .side-btn.buy.active { background: rgba(22,163,74,0.12); color: var(--up); border-color: var(--up); }
 .side-btn.sell.active { background: rgba(220,38,38,0.10); color: var(--dn); border-color: var(--dn); }
 
-.seg { display: inline-flex; background: var(--surface2); border-radius: 8px; padding: 3px; gap: 2px; }
+.seg { display: inline-flex; background: var(--surface2); border-radius: 8px; padding: 4px; gap: 4px; }
 .seg-btn {
-  flex: 1; padding: 7px 14px; background: transparent; border: 0; border-radius: 6px;
-  font-size: 12px; font-weight: 500; color: var(--fg-dim); cursor: pointer; transition: all .15s;
+  flex: 1; padding: 8px 12px; min-height: 36px; background: transparent; border: 0; border-radius: 8px;
+  font-size: 12px; font-weight: 600; color: var(--fg-dim); cursor: pointer; transition: all .15s;
 }
 .seg-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
-.quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
-.quote-empty { background: var(--surface2); border: 1px dashed var(--border); border-radius: 10px; padding: 40px 16px; text-align: center; color: var(--fg-mute); font-size: 13px; }
+.quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.quote-empty {
+  background: var(--surface2); border: 1px dashed var(--border); border-radius: 10px;
+  padding: 40px 16px; text-align: center; color: var(--fg-mute); font-size: 13px; font-weight: 400;
+}
 .row-between { display: flex; justify-content: space-between; align-items: flex-start; }
+.quote-lab, .qm-l { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); }
+/* U-18:報價卡最新價降為 Heading,不與 step 1 的 Display 焦點競爭 */
+.quote-last { font-size: 16px; font-weight: 600; line-height: 1.35; margin-top: 4px; }
+.quote-chg-wrap { text-align: right; }
+.quote-chg { font-weight: 600; }
+.quote-chg-pct { font-size: 12px; }
+.quote-chart {
+  height: 96px; margin: 16px 0 8px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border); border-radius: 8px;
+  color: var(--fg-mute); font-size: 12px; font-weight: 400;
+}
 .quote-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.qm-l { font-size: 10px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: .4px; }
-.qm-v { font-size: 12px; margin-top: 2px; }
+.qm-v { font-size: 12px; margin-top: 4px; }
 
-.summary { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
-.sum-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+.summary { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.sum-row { display: flex; justify-content: space-between; font-size: 13px; font-weight: 400; padding: 4px 0; }
 .sum-row.dim { color: var(--fg-dim); font-size: 12px; }
+.sum-strong { font-weight: 600; }
 .form-error {
-  margin-top: 12px; padding: 8px 10px; border-radius: 8px;
+  margin-top: 12px; padding: 8px 12px; border-radius: 8px;
   background: rgba(220,38,38,0.10); color: var(--dn);
-  font-size: 12px; font-weight: 500;
+  font-size: 12px; font-weight: 600;
 }
 
 /* Review */
 .review { padding: 32px; text-align: center; }
-.big-side { font-size: 28px; font-weight: 600; letter-spacing: -0.6px; margin-bottom: 22px; }
+.big-side { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; margin-bottom: 24px; }
 .big-side.buy { color: var(--up); }
 .big-side.sell { color: var(--dn); }
-.rev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left; }
-.rev-grid > div { display: flex; justify-content: space-between; padding: 13px 16px; font-size: 13px; background: var(--surface); }
+.rev-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-align: left;
+}
+.rev-grid > div {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; font-size: 13px; font-weight: 400; background: var(--surface);
+}
 .rev-grid > div span { color: var(--fg-dim); }
 .rev-grid > div b { font-weight: 600; }
 .rev-grid > div.span-2 { grid-column: span 2; }
-.rev-grid > div.highlight { background: var(--surface2); font-size: 14px; }
+.rev-grid > div.highlight { background: var(--surface2); font-size: 13px; }
 .rev-grid > div.highlight b { font-size: 16px; }
 .rev-grid > div.dim { color: var(--fg-dim); }
 .rev-grid > div + div { border-top: 1px solid var(--border); }
-.rev-grid > div:nth-child(odd):not(.span-2) + div:not(.span-2) { border-left: 1px solid var(--border); border-top: 1px solid var(--border); }
-.rev-grid > div:nth-child(1), .rev-grid > div:nth-child(2) { border-top: 0; }
-
-/* Placing */
-.placing { padding: 56px 32px; text-align: center; }
-.spinner {
-  width: 44px; height: 44px; margin: 0 auto 24px; border-radius: 50%;
-  border: 3px solid var(--surface2); border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
+.irreversible {
+  margin: 16px 0 0; font-size: 12px; font-weight: 400; line-height: 1.35;
+  color: var(--fg-dim); text-align: left;
 }
-@keyframes spin { to { transform: rotate(360deg) } }
-.placing-steps { display: inline-flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-.p-step { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--fg-mute); transition: color .25s; }
-.p-step.active { color: var(--fg); font-weight: 500; }
-.p-step.done { color: var(--fg-dim); }
-.p-mark { width: 18px; height: 18px; border-radius: 50%; background: var(--surface2); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
-.p-step.done .p-mark { background: var(--accent); color: #fff; }
-.p-step.active .p-mark { background: var(--accent); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.2) } }
+.submitting-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 
-/* Filled */
-.filled { padding: 48px 32px; text-align: center; }
+/* Result */
+.result { padding: 48px 32px; text-align: center; }
 .check {
-  width: 64px; height: 64px; border-radius: 50%; background: var(--up); color: #fff;
-  font-size: 30px; display: inline-flex; align-items: center; justify-content: center;
-  margin-bottom: 18px;
+  width: 48px; height: 48px; border-radius: 50%; background: var(--up); color: #fff;
+  font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
+  margin-bottom: 16px;
   animation: pop .45s cubic-bezier(.2,1.4,.4,1);
 }
 @keyframes pop { 0% { transform: scale(0) } 100% { transform: scale(1) } }
-.filled-ttl { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
-.filled-sub { color: var(--fg-dim); font-size: 13px; margin-top: 6px; }
+.result-ttl { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; margin: 0; }
+.result-ttl:focus { outline: none; }
+.result-sub { color: var(--fg-dim); font-size: 13px; font-weight: 400; margin-top: 8px; }
+.result .rev-grid { margin-top: 16px; }
+/* 交易編號 / 時間戳是除錯回報用途:一律完整顯示,不截斷(§Typography) */
+.trade-id { font-weight: 600; overflow-wrap: anywhere; }
 
 /* Footer */
-.ft { display: flex; justify-content: space-between; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--border); background: var(--surface2); }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 10px 22px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.ft {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
+}
+.btn-accent {
+  background: var(--accent); color: #fff; border: 0; padding: 8px 24px; min-height: 44px;
+  border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
+}
 .btn-accent:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
 .btn-accent:disabled { opacity: .4; cursor: not-allowed; }
 .btn-accent.buy { background: var(--up); }
 .btn-accent.sell { background: var(--dn); }
-.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--fg); padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
-.btn-ghost:hover { background: var(--surface); }
+.btn-ghost {
+  background: transparent; border: 1px solid var(--border); color: var(--fg);
+  padding: 8px 16px; min-height: 36px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface); }
+.btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mask, .ticket, .check { animation: none; }
+}
 </style>

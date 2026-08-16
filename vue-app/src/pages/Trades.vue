@@ -147,6 +147,7 @@ import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { TradeListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
+import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
 
 defineProps<{ lang: Lang }>();
@@ -208,21 +209,6 @@ const exportError = ref<BlockError | null>(null);
 function describeError(error: unknown): BlockError {
   if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
   return { code: 'UNKNOWN_ERROR', traceId: null };
-}
-
-/**
- * 本地時區的 ISO-8601(含 offset)。
- * **不要用 `toISOString()`** —— 它固定輸出 UTC,`new Date(2026, 0, 1)` 在 UTC+8 會變成
- * `2025-12-31T16:00:00Z`,送到後端就是「去年 12/31 起算」的錯誤年界(D-05)。
- */
-function toLocalIso(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const abs = Math.abs(offsetMinutes);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-    + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-    + `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
 /**
