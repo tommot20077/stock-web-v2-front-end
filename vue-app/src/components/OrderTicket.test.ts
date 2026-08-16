@@ -155,6 +155,8 @@ async function click(el: HTMLElement) {
 afterEach(() => {
   cleanupMounted();
   resetPortfolioRevisionForTests();
+  // session handler 是模組級單例;不清會讓上一條測試的 spy 活到下一條(04-11 Test 43)。
+  configureApiClientSessionHandlers({});
 });
 
 describe('OrderTicket 骨架契約 — 原始碼字面(judgment §3 / U-16)', () => {
@@ -1321,5 +1323,342 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
       .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
     expect(body.symbol).toBe('AAPL');
     expect(body.type).toBe('BUY');
+  });
+});
+
+// =====================================================================================
+// Phase 4 Plan 11 Task 2 —— D-16 錯誤分派 + D-15 SELL 預檢。
+//
+// 兩條貫穿全段的硬規則:
+//   1. **分派依 `error.code`,絕不假設錯誤出現的順序**(Q0/PR #15 明文警告:
+//      PR #15 會把「type 打錯 + symbol 不存在」的優先序從 `ASSET_NOT_FOUND`
+//      改回 `TRADE_UNSUPPORTED_TYPE`)。
+//   2. **後端的 `fields` value 與 `message` 一律不得進入 DOM**(T-04-09)。
+// =====================================================================================
+
+const MSFT: AssetDto = { ...CONTRADICTORY, uuid: 'asset-msft', symbol: 'MSFT', name: 'Microsoft Corp.' };
+
+async function pickOption(symbol: string) {
+  symbolInput().dispatchEvent(new FocusEvent('focus'));
+  await flushAsync();
+  requireTestid(`ticket-symbol-option-${symbol}`)
+    .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  await flushAsync(16);
+}
+
+async function switchToSell() {
+  await clickDeep(requireTestid('ticket-side-sell'));
+}
+
+describe('OrderTicket 送出路徑 — D-16 錯誤分派(04-11)', () => {
+  it('Test 35(欄位級):fields 的 key 綁到對應輸入框,並自動退回 ticket 步驟', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { quantity: 'must be greater than or equal to 0.00000001' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    // 在 review 步驟看不到出錯的欄位 —— 必須退回 ticket(§7 版位表)。
+    const node = requireTestid('ticket-field-error-quantity');
+    expect(node.textContent?.trim()).toBe(t('en', 'tradeErrQuantity'));
+
+    const qtyInput = requireInput('ticket-qty');
+    expect(qtyInput.getAttribute('aria-invalid')).toBe('true');
+    expect((qtyInput.getAttribute('aria-describedby') ?? '').split(/\s+/))
+      .toContain(node.id);
+    expect(node.id, '節點 id 為 trade-{field}-error').toBe('trade-quantity-error');
+    // 六個欄位同時觸發會連續朗讀六次,所以欄位級錯誤**不加** role="alert"。
+    expect(node.getAttribute('role')).toBeNull();
+  });
+
+  it('Test 36(D-16 最重要的 negative test):fields 的英文 value 絕不進入 DOM', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { quantity: 'must be greater than or equal to 0.00000001' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(bodyText(), 'Bean Validation 的英文預設訊息不得成為使用者可見輸出')
+      .not.toContain('must be greater than or equal to');
+    expect(bodyText(), '後端 error.message 同樣不得外洩')
+      .not.toContain('BackendMessageMustNotReachTheDom');
+  });
+
+  it('Test 37(多欄位):兩個欄位各自出現自己的錯誤節點', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { quantity: 'must be greater than 0', price: 'must be greater than 0' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-field-error-quantity').textContent?.trim()).toBe(t('en', 'tradeErrQuantity'));
+    expect(requireTestid('ticket-field-error-price').textContent?.trim()).toBe(t('en', 'tradeErrPrice'));
+    expect(requireInput('ticket-price').getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('Test 38(Pitfall 10):409 且 fields 為 null 時顯示底部錯誤,不 crash', async () => {
+    stubUuids();
+    // 後端 `fieldsFrom` 在空 map 時回 **null** 而不是 `{}`;把 null 當物件展開就會炸。
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('TRADE_CONFLICT', { status: 409, fields: null }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-error').textContent).toContain(t('en', 'tradeErrConflict'));
+    expect(document.body.querySelector('[data-testid^="ticket-field-error-"]')).toBeNull();
+  });
+
+  it('Test 39(依 code 分派,不依賴錯誤出現順序):11 種 code 各自的文案 / code / traceId', async () => {
+    const cases: Array<{ code: string; status: number; copy: string }> = [
+      { code: 'TRADE_INSUFFICIENT_HOLDING', status: 409, copy: 'tradeErrOversell' },
+      { code: 'ASSET_NOT_FOUND', status: 404, copy: 'tradeErrAssetNotFound' },
+      { code: 'TRADE_CONFLICT', status: 409, copy: 'tradeErrConflict' },
+      { code: 'TRADE_IDEMPOTENCY_KEY_REUSED', status: 409, copy: 'tradeErrKeyReused' },
+      { code: 'TRADE_UNSUPPORTED_TYPE', status: 400, copy: 'tradeErrValidation' },
+      { code: 'TRADE_INVALID_QUANTITY', status: 400, copy: 'tradeErrValidation' },
+      { code: 'TRADE_INVALID_PRICE', status: 400, copy: 'tradeErrValidation' },
+      // `fields` 為 null 的 VALIDATION_FAILED 沒有欄位可綁,只能落到底部。
+      { code: 'VALIDATION_FAILED', status: 400, copy: 'tradeErrValidation' },
+      // U-08:單一 unsafe 請求被 CSRF 拒絕 → 顯示在**發起處**,不是全域 banner。
+      { code: 'AUTH_CSRF_TOKEN_INVALID', status: 403, copy: 'tradeErrCsrf' },
+      { code: 'ACCESS_DENIED', status: 403, copy: 'tradeErrForbidden' },
+      { code: 'SOMETHING_COMPLETELY_NEW', status: 500, copy: 'tradeErrUnknown' },
+    ];
+
+    for (const scenario of cases) {
+      const onRefreshFailed = vi.fn();
+      configureApiClientSessionHandlers({ onRefreshFailed });
+      stubUuids();
+      await mountSubmitTicket(ticketFetch({
+        trades: () => tradeFailure(scenario.code, {
+          status: scenario.status,
+          traceId: `trace-${scenario.code}`,
+        }),
+      }));
+      await gotoReview();
+      await submitTrade();
+
+      const box = requireTestid('ticket-error');
+      expect(box.getAttribute('role'), `${scenario.code} 的底部錯誤應立即播報`).toBe('alert');
+      expect(box.textContent, `${scenario.code} 的文案`).toContain(t('en', scenario.copy));
+      expect(requireTestid('ticket-error-code').textContent?.trim()).toBe(scenario.code);
+      expect(requireTestid('ticket-error-trace-id').textContent).toContain(`trace-${scenario.code}`);
+      expect(bodyText(), `${scenario.code} 洩漏了後端 message`).not.toContain('BackendMessageMustNotReachTheDom');
+      // U-08 的實質驗收:CSRF 403 不得升級成全域 session banner。
+      expect(onRefreshFailed, `${scenario.code} 不得進入 session 升級路徑`).not.toHaveBeenCalled();
+
+      cleanupMounted();
+      resetPortfolioRevisionForTests();
+    }
+  });
+
+  it('Test 40(network):顯示 tradeErrNetwork,不顯示 raw message,traceId 那一格不渲染', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => { throw new TypeError('NetworkErrorRawDetail'); },
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-error').textContent).toContain(t('en', 'tradeErrNetwork'));
+    expect(bodyText()).not.toContain('NetworkErrorRawDetail');
+    // 不得顯示 `null`(Phase 3 D-12 的診斷列規則)。
+    expect(testid('ticket-error-trace-id'), '非 ApiClientError 沒有 traceId,整格不渲染').toBeNull();
+    expect(bodyText()).not.toContain('null');
+  });
+
+  it('Test 41(Phase 3 D-12):成功態不得出現任何 traceId', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-result')).toBeTruthy();
+    expect(bodyText(), '診斷資訊只在錯誤狀態出現').not.toContain('trace-');
+    expect(testid('ticket-error')).toBeNull();
+  });
+
+  it('Test 42(U-04 key 處置表):KEY_REUSED 丟棄 key;CONFLICT 與網路失敗保留', async () => {
+    // (a) KEY_REUSED 必須丟棄 —— 否則使用者照文案「重新送出」會再吃一次 409,無出路。
+    stubUuids();
+    let reused = true;
+    const reuseFetch = ticketFetch({
+      trades: () => (reused
+        ? tradeFailure('TRADE_IDEMPOTENCY_KEY_REUSED', { status: 409 })
+        : tradeResponse()),
+    });
+    await mountSubmitTicket(reuseFetch);
+    await gotoReview();
+    await submitTrade();
+    reused = false;
+    await submitTrade();
+
+    const reuseKeys = idempotencyKeys(reuseFetch);
+    expect(reuseKeys).toHaveLength(2);
+    expect(reuseKeys[1], 'KEY_REUSED 之後必須換新 key,否則使用者卡在無出路的迴圈').not.toBe(reuseKeys[0]);
+
+    cleanupMounted();
+    resetPortfolioRevisionForTests();
+
+    // (b) TRADE_CONFLICT 保留 —— 「這次沒寫入,但意圖沒變」,沿用同一把重送是安全的。
+    stubUuids();
+    let conflict = true;
+    const conflictFetch = ticketFetch({
+      trades: () => (conflict ? tradeFailure('TRADE_CONFLICT', { status: 409 }) : tradeResponse()),
+    });
+    await mountSubmitTicket(conflictFetch);
+    await gotoReview();
+    await submitTrade();
+    conflict = false;
+    await submitTrade();
+
+    const conflictKeys = idempotencyKeys(conflictFetch);
+    expect(conflictKeys[1], 'TRADE_CONFLICT 重送必須沿用同一把 key').toBe(conflictKeys[0]);
+  });
+
+  it('Test 43(401 不在 ticket 顯示):走全域 SessionBanner,ticket 內無錯誤節點', async () => {
+    const onRefreshFailed = vi.fn();
+    configureApiClientSessionHandlers({ onRefreshFailed });
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('AUTH_TOKEN_EXPIRED', { status: 401 }),
+      refresh: () => tradeFailure('AUTH_REFRESH_FAILED', { status: 401 }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(onRefreshFailed, '401 / refresh 失敗由 apiClient 升級成全域 session 狀態').toHaveBeenCalled();
+    expect(testid('ticket-error'), '401 不得在 ticket 內顯示').toBeNull();
+    expect(document.body.querySelector('[data-testid^="ticket-field-error-"]')).toBeNull();
+  });
+});
+
+describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
+  it('Test 44(顯示與快取):切到 SELL 讀一次 holdings,換 symbol 不再讀', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch({
+      assets: () => assetPageResponse([CONTRADICTORY, MSFT]),
+      holdings: () => holdingsResponse([holding('AAPL', 12), holding('MSFT', 34)]),
+    });
+    await mountSubmitTicket(fetchImpl);
+
+    expect(holdingsCallCount(fetchImpl), 'BUY 不需要持倉預檢').toBe(0);
+
+    await switchToSell();
+    expect(holdingsCallCount(fetchImpl)).toBe(1);
+    expect(requireTestid('ticket-sellable-qty').textContent).toContain('12');
+
+    await pickOption('MSFT');
+    expect(requireTestid('ticket-sellable-qty').textContent).toContain('34');
+    expect(holdingsCallCount(fetchImpl), '該 ticket 生命週期內只讀一次').toBe(1);
+  });
+
+  it('Test 45(三態):載入中與讀取失敗都有可讀文字,且都不阻擋送出', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    await mountSubmitTicket(ticketFetch({ holdings: () => pending.promise }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-loading').textContent).toContain(t('en', 'sellableQtyLoading'));
+    expect(advanceButton().disabled, '預檢載入中不得阻擋送出').toBe(false);
+
+    cleanupMounted();
+    resetPortfolioRevisionForTests();
+
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => failureResponse('PORTFOLIO_HOLDINGS_UNAVAILABLE', 'trace-holdings-down'),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-failed').textContent).toContain(t('en', 'sellableQtyFailed'));
+    // 後端仍是權威(judgment §5):讀不到持倉不代表不能記錄交易。
+    expect(advanceButton().disabled, '預檢失敗不得阻擋送出').toBe(false);
+  });
+
+  it('Test 46(零持倉的文案):顯示「可賣數量:0」,不得寫「您未持有此標的」', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      // 後端 SQL 有 `total_quantity > 0` 過濾(JdbcTradingRepository.java:210),
+      // 「從未持有」與「已全數賣出」在回應裡不可分 —— 所以只能說 0,不能說「未持有」。
+      holdings: () => holdingsResponse([holding('MSFT', 5)]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 0`);
+    for (const forbidden of ['未持有', 'do not hold', 'not hold', 'No holdings']) {
+      expect(bodyText(), `不得宣稱使用者從未持有:${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('Test 47(超量):qty 大於可賣數量時顯示 tradeErrOversell 且送出鈕 disabled', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', 5)]),
+    }));
+    await switchToSell();
+
+    // preset 預填 qty = 10,可賣只有 5。
+    expect(requireInput('ticket-qty').value).toBe('10');
+    expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(true);
+  });
+
+  it('Test 48(judgment §5 的實質驗收):預檢通過仍可能被後端 409 拒絕', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+      trades: () => tradeFailure('TRADE_INSUFFICIENT_HOLDING', { status: 409 }),
+    }));
+    await switchToSell();
+
+    // 前端預檢**通過**(可賣 100,只賣 10)—— 但那只是 UX,不是防護。
+    expect(advanceButton().disabled).toBe(false);
+    await gotoReview();
+    await submitTrade();
+
+    expect(requireTestid('ticket-error').textContent).toContain(t('en', 'tradeErrOversell'));
+    expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('TRADE_INSUFFICIENT_HOLDING');
+  });
+
+  it('Test 49(快取失效):一筆交易成功後,下次切 SELL 會重新讀 holdings', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+    });
+    await mountSubmitTicket(fetchImpl);
+    await switchToSell();
+    expect(holdingsCallCount(fetchImpl)).toBe(1);
+
+    await gotoReview();
+    await submitTrade();
+    expect(requireTestid('ticket-result')).toBeTruthy();
+
+    await clickDeep(requireTestid('ticket-record-another'));
+    await switchToSell();
+
+    // 交易成功會改變持倉,快取必須跟著 portfolioRevision 失效。
+    expect(holdingsCallCount(fetchImpl), '成交後的持倉數字不得沿用舊快取').toBe(2);
+  });
+
+  it('Test 50(Phase 3 D-04 / judgment §7):預檢只碰 symbol 與 totalQuantity', async () => {
+    for (const field of ['avgCost', 'costBasis', 'unrealizedPnl', 'realizedPnl', 'roi']) {
+      expect(orderTicketSource, `SELL 預檢不得引用損益欄位:${field}`).not.toContain(field);
+    }
+    expect(orderTicketSource).toContain('totalQuantity');
+    expect(orderTicketSource).toContain('listHoldings');
   });
 });
