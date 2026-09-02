@@ -1715,3 +1715,30 @@ describe('OrderTicket — 再次開啟 ticket 清除成交後標記(F-2 / UI-SPE
     expect(portfolioRevision.value, '重讀訊號不得被清除').toBe(1);
   });
 });
+
+describe('OrderTicket 送出路徑 — D-16 未知 fields key(F-3)', () => {
+  it('Test 53:fields 只含前端不認得的 key 時,退回底部的一般驗證錯誤而不是零回饋', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      // 今日唯一實例是後端 MissingRequestHeaderException 的 `Idempotency-Key`;
+      // 日後後端新增受驗欄位或改 key 命名,同樣不得讓使用者按了送出卻什麼都沒看到。
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { 'Idempotency-Key': 'required header is missing' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    // 沒有任何欄位可綁 → 退回 ticket 步驟(有輸入框可修),但底部必須有可見、可播報的錯誤。
+    expect(testid('ticket-review-advance'), '應退回 ticket 步驟').not.toBeNull();
+    const box = requireTestid('ticket-error');
+    expect(box.getAttribute('role')).toBe('alert');
+    expect(box.textContent).toContain(t('en', 'tradeErrValidation'));
+    expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('VALIDATION_FAILED');
+    expect(document.body.querySelector('[data-testid^="ticket-field-error-"]')).toBeNull();
+    // fields 的 value 與後端 message 一樣不得進入 DOM(T-04-09)。
+    expect(bodyText()).not.toContain('required header is missing');
+    expect(bodyText()).not.toContain('BackendMessageMustNotReachTheDom');
+  });
+});
