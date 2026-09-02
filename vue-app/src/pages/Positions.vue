@@ -365,14 +365,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h as createElement, onMounted, ref, watch } from 'vue';
+import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { HoldingDto, PortfolioSummaryDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { apiLastFill, portfolioRevision } from '../services/portfolioRevision';
+import { apiLastFill, clearLastFill, portfolioRevision } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
@@ -444,6 +444,11 @@ onMounted(() => {
   if (live) return;
   void loadSummary();
   void loadHoldings();
+});
+
+// UI-SPEC §9:「新」標記的壽命到頁面 unmount 為止(App.vue 的 v-if 切頁會卸載本頁),不靠計時器。
+onUnmounted(() => {
+  clearLastFill();
 });
 
 // =============== U-05 / U-06:成交後重讀的並存狀態(不取代 status 三態) ===============

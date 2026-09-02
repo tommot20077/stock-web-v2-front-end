@@ -99,6 +99,18 @@ export function clearLastCreatedTrade(): void {
 }
 
 /**
+ * D-13 / UI-SPEC §9:清掉 API mode 的「新」標記(fresh 高亮 + `新` pill)。
+ *
+ * 標記的壽命由三個時機界定 —— 再次開啟 ticket、Trades 頁任何篩選/排序/頁碼變更、
+ * 或頁面 unmount(`App.vue` 的 `v-if` 切頁)。**不用 setTimeout**:計時器會讓元件測試
+ * 變得時間相依而 flaky。只清 `lastFill`,不動 `portfolioRevision`(重讀訊號)也不替
+ * D-11 的提示做決定(那有自己的清除規則,見 {@link clearLastCreatedTrade})。
+ */
+export function clearLastFill(): void {
+  lastFill.value = null;
+}
+
+/**
  * 測試用的顯式 reset,比照 `pageApiClients.ts:37-39` 的 `resetRuntimeApiClientsForTests`。
  *
  * ⚠️ 必須在**各測試檔自己**的 `afterEach` 呼叫,**不得**加進 `testSetup.ts`(理由見檔頭)。

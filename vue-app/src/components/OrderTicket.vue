@@ -612,7 +612,12 @@ import { ApiClientError } from '../services/apiClient';
 // 不得在本檔自己寫 Number() —— 那正是 vue-tsc 在模板內抓不到的 Pitfall 8。
 import { closeSeries } from '../services/marketApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { notifyTradeCreated, portfolioRevision } from '../services/portfolioRevision';
+import {
+  clearLastCreatedTrade,
+  clearLastFill,
+  notifyTradeCreated,
+  portfolioRevision,
+} from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
@@ -1204,6 +1209,9 @@ watch(() => props.open, async (open) => {
   if (!open) return;
   apiClients();
   resetTicket();
+  // UI-SPEC §9 / D-11:再次開啟 ticket = 上一筆的「新」標記與「不在檢視範圍」提示都到此為止。
+  clearLastFill();
+  clearLastCreatedTrade();
   const preset = props.preset;
   if (preset?.side) side.value = preset.side;
   // 先開下拉再送查詢:preset 解析中必須看得到 loading 態,不得靜默留空(§2)。

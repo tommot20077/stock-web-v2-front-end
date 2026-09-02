@@ -189,7 +189,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h as createElement, onMounted, ref, watch } from 'vue';
+import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { fmtNum } from '../data';
 import { ApiClientError } from '../services/apiClient';
@@ -199,6 +199,7 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
   apiLastFill,
   clearLastCreatedTrade,
+  clearLastFill,
   lastCreatedTradeId,
   portfolioRevision,
 } from '../services/portfolioRevision';
@@ -383,7 +384,11 @@ function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
   pageNo.value = 0;
   // D-11:使用者自己改了條件就代表他不再需要那條提示。
   // 成交後的重讀**不清**(那是提示的產生來源,清掉就永遠比不到)。
-  if (options.refresh !== true) clearLastCreatedTrade();
+  // UI-SPEC §9:「新」標記同樣隨檢視變更結束 —— 重讀後第 0 列可能是另一筆同 symbol 的舊交易。
+  if (options.refresh !== true) {
+    clearLastCreatedTrade();
+    clearLastFill();
+  }
   void loadTrades(options);
 }
 
@@ -416,6 +421,7 @@ function goToPage(delta: number) {
   if (next < 0 || next >= totalPages.value) return;
   pageNo.value = next;
   clearLastCreatedTrade();
+  clearLastFill();
   void loadTrades();
 }
 
@@ -423,6 +429,11 @@ onMounted(() => {
   // mock mode 完全走 live 委派,不打任何網路。
   if (live) return;
   void loadTrades();
+});
+
+// UI-SPEC §9:「新」標記的壽命到頁面 unmount 為止(App.vue 的 v-if 切頁會卸載本頁),不靠計時器。
+onUnmounted(() => {
+  clearLastFill();
 });
 
 /*
