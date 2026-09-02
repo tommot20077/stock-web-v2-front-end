@@ -6,9 +6,15 @@ import Trades from './Trades.vue';
 import tradesSource from './Trades.vue?raw';
 import { t } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import {
+  apiLastFill,
+  bumpPortfolioRevision,
+  notifyTradeCreated,
+  resetPortfolioRevisionForTests,
+} from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
-import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
+import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 05(03-05-PLAN.md)。API mode 的 Trades 一律把篩選/排序/分頁轉成
 // `GET /api/v1/trades` 的 query 參數(D-05/D-06/D-07/D-08),頁碼重置與溢出回退見 D-15,
@@ -220,6 +226,9 @@ const restorers: Array<() => void> = [];
 afterEach(() => {
   while (restorers.length) restorers.pop()!();
   cleanupMounted();
+  // 04-07 硬規則:模組級 singleton 的 reset 必須在**各測試檔自己**的 afterEach 呼叫,
+  // 絕不得加進 testSetup.ts(那會搶在 vi.mock 之前綁定真實實作)。
+  resetPortfolioRevisionForTests();
 });
 
 describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)', () => {
@@ -793,5 +802,358 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+});
+
+// =====================================================================================
+// 04-12(D-10 / D-11 / D-12 / U-05 / U-06):成交後的重讀。
+// =====================================================================================
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+/** 從任一列往上找到列表所屬的 `.card` —— 區塊級 aria-busy 的斷言對象,不新增 testid。 */
+function tradesCard(): HTMLElement {
+  const row = rows()[0];
+  expect(row, '至少要有一列交易才能定位列表區塊').toBeTruthy();
+  return row.closest('.card') as HTMLElement;
+}
+
+describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
+  it('Test 3(D-10):revision 變動後列表重讀一次', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'a', symbol: 'AAA' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+    expect(urls(fetchMock)).toHaveLength(1);
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    expect(urls(fetchMock)).toHaveLength(2);
+  });
+
+  it('Test 4(Pitfall 12):mock mode 下 revision 變動不得發出任何網路請求', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('Test 6/7(U-05):重讀期間保留舊列並顯示「更新中…」,成功後才換成新值', async () => {
+    let gate: ReturnType<typeof deferred<Response>> | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes('/trades')) throw new Error(`unexpected fetch: ${url}`);
+      if (gate) return gate.promise;
+      return success(page({ items: [trade({ id: 'old', symbol: 'OLD' })], totalElements: 1, totalPages: 1 }));
+    });
+    await mountApiTrades(fetchMock);
+    expect(rows()[0].textContent).toContain('OLD');
+
+    gate = deferred<Response>();
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM。
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('OLD');
+    expect(testid('trades-loading')).toBeNull();
+
+    const note = requireTestid('trades-refreshing');
+    expect(note.textContent).toContain(t('en', 'portfolioRefreshing'));
+    expect(tradesCard().getAttribute('aria-busy')).toBe('true');
+
+    gate.resolve(success(page({ items: [trade({ id: 'new', symbol: 'NEWSYM' })], totalElements: 1, totalPages: 1 })));
+    gate = null;
+    await flushAsync();
+
+    expect(testid('trades-refreshing')).toBeNull();
+    expect(tradesCard().getAttribute('aria-busy')).toBe('false');
+    expect(rows()[0].textContent).toContain('NEWSYM');
+    expect(document.body.textContent).not.toContain('OLD');
+  });
+
+  it('Test 8(U-06 / D-12):重讀失敗時舊資料留存並明示可能過期,重試可再送', async () => {
+    let failRefetch = false;
+    const fetchMock = scriptedFetch(() => (failRefetch
+      ? failure('TRADES_UNAVAILABLE', 'trace-refetch-down')
+      : success(page({ items: [trade({ id: 'old', symbol: 'OLD' })], totalElements: 1, totalPages: 1 }))));
+    await mountApiTrades(fetchMock);
+
+    failRefetch = true;
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    // 舊資料仍在畫面上,且**不進** status:'error'
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('OLD');
+    expect(testid('trades-error')).toBeNull();
+    expect(testid('trades-refreshing')).toBeNull();
+
+    const stale = requireTestid('trades-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+    expect(stale.getAttribute('role')).toBe('status');
+    expect(requireTestid('trades-refresh-error-code').textContent).toContain('TRADES_UNAVAILABLE');
+    expect(requireTestid('trades-refresh-trace-id').textContent).toContain('trace-refetch-down');
+    expect(stale.textContent).not.toContain('backend said no');
+
+    failRefetch = false;
+    click(requireTestid('trades-refresh-retry'));
+    await flushAsync();
+
+    expect(urls(fetchMock)).toHaveLength(3);
+    expect(testid('trades-refresh-error')).toBeNull();
+    expect(rows()[0].textContent).toContain('OLD');
+  });
+});
+
+// =====================================================================================
+// 04-12 Task 2:D-11 重讀規則與「不在檢視範圍」提示 + D-13 fresh 高亮。
+// =====================================================================================
+
+/** 從 `?raw` 原始碼切出一段程式碼區塊 —— 行為測試抓不到的「不得出現的實作」用它鎖住。 */
+function sourceBlock(startMarker: string, endMarker: string): string {
+  const start = tradesSource.indexOf(startMarker);
+  expect(start, `原始碼找不到 ${startMarker}`).toBeGreaterThan(-1);
+  const end = tradesSource.indexOf(endMarker, start);
+  expect(end, `找不到 ${startMarker} 的結尾`).toBeGreaterThan(-1);
+  return tradesSource.slice(start, end + endMarker.length);
+}
+
+function freshRow(): HTMLElement[] {
+  return rows().filter(row => row.classList.contains('fresh'));
+}
+
+describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)', () => {
+  it('Test 11(D-11):重讀保留篩選與排序,但頁碼歸零', async () => {
+    const fetchMock = scriptedFetch((_call, url) => {
+      const pageNo = Number(paramsOf(url).get('page'));
+      return success(page({
+        items: [trade({ id: `p${pageNo}` })],
+        page: pageNo,
+        totalElements: 60,
+        totalPages: 3,
+      }));
+    });
+    await mountApiTrades(fetchMock);
+
+    clickChip('Sell');
+    await flushAsync();
+    click(headerCell(t('en', 'qty')));
+    await flushAsync();
+    click(requireTestid('trades-next'));
+    await flushAsync();
+    expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('1');
+
+    bumpPortfolioRevision();
+    await flushAsync();
+
+    const p = paramsOf(lastUrl(fetchMock));
+    expect(p.get('type'), '篩選必須保留').toBe('SELL');
+    expect(p.get('sort'), '排序鍵必須保留').toBe('quantity');
+    expect(p.get('direction'), '排序方向必須保留').toBe('desc');
+    expect(p.get('page'), '頁碼必須歸零').toBe('0');
+  });
+
+  it('Test 12(不得複製第二條重置邏輯):watch 區塊走既有的單一入口', () => {
+    const watchBlock = sourceBlock('watch(portfolioRevision', '\n});');
+    expect(watchBlock).toContain('applyQueryChange');
+    // 複製「頁碼歸零 + 重新請求」會讓兩份實作日後各自漂移(D-15 的入口已宣示過這件事)。
+    expect(watchBlock, '不得自己歸零頁碼').not.toContain('pageNo.value = 0');
+    expect(watchBlock, '不得繞過單一入口直接請求').not.toContain('loadTrades(');
+  });
+
+  it('Test 13(D-11):新交易在重讀結果內時,不顯示「不在檢視範圍」提示', async () => {
+    let refetched = false;
+    const fetchMock = scriptedFetch(() => success(page({
+      items: refetched
+        ? [trade({ id: 'new-trade', symbol: 'NEWSYM' }), trade({ id: 'old' })]
+        : [trade({ id: 'old' })],
+      totalElements: refetched ? 2 : 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    refetched = true;
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'NEWSYM' }));
+    await flushAsync();
+
+    expect(rows()).toHaveLength(2);
+    expect(testid('trades-not-in-current-view')).toBeNull();
+  });
+
+  it('Test 14(D-11):新交易不在重讀結果內時,明確告知而不是讓人以為沒記錄成功', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'old', symbol: 'OLD' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    // D-03 允許補登,新交易不保證在第 0 頁,甚至可能不符當前篩選。
+    notifyTradeCreated(trade({ id: 'not-in-view', symbol: 'ZZZ' }));
+    await flushAsync();
+
+    const note = requireTestid('trades-not-in-current-view');
+    expect(note.textContent).toContain(t('en', 'tradeNotInCurrentView'));
+    // 這不是錯誤 —— 不得套用錯誤區塊的樣式,也不得出現「讀取失敗」字樣。
+    expect(note.classList.contains('block-error')).toBe(false);
+    expect(note.textContent).not.toContain(t('en', 'loadFailed'));
+  });
+
+  it('Test 15(判定只能比 id):不得在前端重算「這筆是否符合當前條件」', () => {
+    const block = sourceBlock('const inResultSet', '\n});');
+    expect(block).toContain('lastCreatedTradeId');
+    expect(block).toContain('.id ===');
+    // 前端重算等於複製一份後端的篩選邏輯,第一個邊界情況(半開區間、時區)就會分歧
+    // (Phase 3 D-04 / judgment §7)。
+    for (const forbidden of ['activeFilter', 'sortKey', 'sortDir', 'dateFrom', 'dateTo', 'filterParams']) {
+      expect(block, `判定不得碰 ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('Test 16(清除時機):變更篩選後提示消失', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'old', symbol: 'OLD' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    notifyTradeCreated(trade({ id: 'not-in-view', symbol: 'ZZZ' }));
+    await flushAsync();
+    expect(testid('trades-not-in-current-view')).not.toBeNull();
+
+    clickChip('Sell');
+    await flushAsync();
+
+    expect(testid('trades-not-in-current-view')).toBeNull();
+    expect(tradesSource, '清除必須經 clearLastCreatedTrade,而不是只藏起提示')
+      .toContain('clearLastCreatedTrade');
+  });
+});
+
+describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
+  it('Test 18/19(D-13 / U-12):API mode 第 0 列帶 fresh 高亮,且有非顏色線索的「新」標記', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'new-trade', symbol: 'AAPL' }), trade({ id: 'other', symbol: 'MSFT' })],
+      totalElements: 2,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+    expect(freshRow()).toHaveLength(0);
+
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+
+    expect(rows()[0].classList.contains('fresh')).toBe(true);
+    expect(freshRow()).toHaveLength(1);
+
+    // U-12:色盲、高對比模式、動畫已結束的使用者都必須看得出是哪一列。
+    const badge = requireTestid('trades-fresh-badge');
+    expect(badge.textContent?.trim()).toBe(t('en', 'freshBadge'));
+    expect(rows()[0].contains(badge)).toBe(true);
+
+    // §Layout Contract:「新」標記**不得改變列高**。jsdom 不套用 scoped CSS 也算不出高度,
+    // 所以用原始碼斷言(沿用 04-11 送出鈕 min-width 的手法):
+    // 標記只能有水平內距,並自帶小於本列文字行高的 line-height。
+    expect(tradesSource).toMatch(/\.fresh-badge\s*\{[^}]*padding:\s*0 8px/);
+    expect(tradesSource).toMatch(/\.fresh-badge\s*\{[^}]*line-height:\s*1\.2/);
+  });
+
+  it('Test 20(來源切換):mock mode 的 fresh 只認 live.lastFill,不看 apiLastFill', async () => {
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = [
+      { d: '2026-05-16', type: 'BUY', sym: 'AAA', qty: 2, px: 10, fee: 1, note: 'first' },
+    ];
+    await nextTick();
+
+    notifyTradeCreated(trade({ id: 'api-only', symbol: 'AAA' }));
+    await nextTick();
+
+    expect(freshRow()).toHaveLength(0);
+    expect(testid('trades-fresh-badge')).toBeNull();
+  });
+
+  it('Test 21(U-12):fresh 的壽命不靠計時器', () => {
+    // 計時器會讓元件測試時間相依而 flaky;`App.vue:36` 的 v-if 切頁卸載已界定實際壽命。
+    expect(tradesSource).not.toContain('setTimeout');
+  });
+
+  it('Test 22(a11y):prefers-reduced-motion 下取消動畫,「新」標記照常顯示', () => {
+    expect(tradesSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?tbody tr\.fresh\s*\{[^}]*animation:\s*none/,
+    );
+    // 標記本身不在動畫裡,不會被 reduced-motion 一併關掉
+    expect(tradesSource).toContain('data-testid="trades-fresh-badge"');
+  });
+
+  it('D-13:Phase 3 留下的「Phase 4 再接」TODO 註解已清除', () => {
+    expect(tradesSource).not.toContain('Phase 4 接 post-trade refetch');
+    expect(tradesSource).not.toContain('無成交事件來源');
+  });
+});
+
+describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
+  const twoAapl = () => success(page({
+    items: [trade({ id: 'new-trade', symbol: 'AAPL' }), trade({ id: 'old-aapl', symbol: 'AAPL' })],
+    totalElements: 2,
+    totalPages: 2,
+  }));
+
+  it('Test 21:變更排序後「新」標記與 apiLastFill 一併清除,不得把另一筆舊交易標成新', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    click(headerCell(t('en', 'qty')));
+    await flushAsync();
+
+    // 重讀後第 0 列仍是 AAPL(可能是另一筆舊交易),只靠 symbol 比對會誤標 —— 標記必須隨檢視變更清除。
+    expect(apiLastFill.value).toBeNull();
+    expect(freshRow()).toHaveLength(0);
+    expect(testid('trades-fresh-badge')).toBeNull();
+  });
+
+  it('Test 22:換頁同樣清除「新」標記', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    click(requireTestid('trades-next'));
+    await flushAsync();
+
+    expect(apiLastFill.value).toBeNull();
+    expect(freshRow()).toHaveLength(0);
+  });
+
+  it('Test 23:頁面 unmount 時清除「新」標記(壽命由 unmount 界定,不用 setTimeout)', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    unmountAll();
+
+    expect(apiLastFill.value, 'App.vue 的 v-if 切頁會卸載本頁,標記不得活過這一刻').toBeNull();
   });
 });

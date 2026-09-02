@@ -74,6 +74,29 @@
     </div>
 
     <!--
+      U-05 / U-06:成交後重讀的指示列。刻意**不新增卡片、不改任何 grid span**,
+      只在彙總條上方插入一條 12px 說明列;失敗時就地換成 stale 提示 + 診斷列 + 重試。
+    -->
+    <div v-if="!live && summaryRefreshing" class="refresh-strip" style="grid-column: span 12">
+      <div class="refresh-note" data-testid="positions-refreshing">{{ t(lang, 'portfolioRefreshing') }}</div>
+    </div>
+    <div v-else-if="!live && summaryRefreshError" class="refresh-strip" style="grid-column: span 12">
+      <!-- role="status" 而非 alert:交易已經成功,這不是需要打斷使用者的錯誤(U-06) -->
+      <div class="refresh-stale" role="status" data-testid="positions-refresh-error">
+        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div class="details">
+          <span data-testid="positions-refresh-error-code">{{ summaryRefreshError.code }}</span>
+          <span v-if="summaryRefreshError.traceId" data-testid="positions-refresh-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ summaryRefreshError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="positions-refresh-retry" @click="refreshSummary">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
+    </div>
+
+    <!--
       彙總條。mock:六張含 Sharpe/年化/MaxDD 的合成卡照舊。
       API mode(D-14 落點 + D-16):六張全部改讀 summary 後端欄位,假 KPI 就地被取代。
     -->
@@ -108,7 +131,8 @@
         :key="i"
         class="card stat"
         data-testid="positions-stat"
-        :class="{ scrubbed: scrubDays > 0 }"
+        :class="{ scrubbed: scrubDays > 0, 'block-refreshing': summaryRefreshing }"
+        :aria-busy="summaryRefreshing"
       >
         <div class="stat-l">{{ s.l }}</div>
         <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}</div>
@@ -189,7 +213,33 @@
     </div>
 
     <!-- Holdings table -->
-    <div class="card" style="grid-column: span 12; overflow: hidden">
+    <div
+      class="card"
+      style="grid-column: span 12; overflow: hidden"
+      :class="{ 'block-refreshing': holdingsRefreshing }"
+      :aria-busy="holdingsRefreshing"
+    >
+      <!-- U-05 / U-06:重讀期間保留整張表格,只在頂端加一條指示列(見上方 summary 的同型說明) -->
+      <div v-if="!live && holdingsRefreshing" class="refresh-note" data-testid="positions-refreshing">
+        {{ t(lang, 'portfolioRefreshing') }}
+      </div>
+      <div
+        v-else-if="!live && holdingsRefreshError"
+        class="refresh-stale"
+        role="status"
+        data-testid="positions-refresh-error"
+      >
+        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div class="details">
+          <span data-testid="positions-refresh-error-code">{{ holdingsRefreshError.code }}</span>
+          <span v-if="holdingsRefreshError.traceId" data-testid="positions-refresh-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ holdingsRefreshError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="positions-refresh-retry" @click="refreshHoldings">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
       <!--
         Q5(大清單):loading 不依賴資料筆數,先渲染固定骨架列,資料到位後一次填入完整表格。
         本階段不做虛擬捲動(holdings 後端不分頁,實測筆數見 SUMMARY)。
@@ -232,10 +282,18 @@
             v-for="p in sortedPositions"
             :key="p.sym"
             data-testid="positions-row"
-            :class="{ fresh: mockLastFill && p.sym === mockLastFill.sym, scrubbed: scrubDays > 0 }"
+            :class="{ fresh: effectiveLastFill && p.sym === effectiveLastFill.sym, scrubbed: scrubDays > 0 }"
             @click="$emit('order', { sym: p.sym })"
           >
-            <td style="font-weight:600;padding-left:16px">{{ p.sym }}</td>
+            <td style="font-weight:600;padding-left:16px">
+              {{ p.sym }}
+              <!-- U-12:不只靠顏色與動畫 —— 色盲 / 高對比 / 動畫播完的使用者都要看得出是哪一列 -->
+              <span
+                v-if="effectiveLastFill && p.sym === effectiveLastFill.sym"
+                class="fresh-badge"
+                data-testid="positions-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td style="color:var(--fg-dim)">{{ p.name }}</td>
             <td class="num" style="text-align:right">{{ p.qty }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(p.avg) }}</td>
@@ -261,16 +319,25 @@
         <!--
           API 路徑:每一格都是後端欄位(D-04)。唯一的前端衍生是 weight,
           且分母是 summary.totalMarketValue 而非 qty×price 的自行加總(D-04 例外條款)。
-          lastFill 在 API mode 無成交事件來源,故不綁 fresh class(Phase 4 引入 post-trade refetch 時再接)。
+          D-13:fresh 的來源是 effectiveLastFill(API mode 由 post-trade refetch 提供)。
         -->
         <tbody v-else>
           <tr
             v-for="h in sortedHoldings"
             :key="h.assetId"
             data-testid="positions-row"
+            :class="{ fresh: effectiveLastFill && h.symbol === effectiveLastFill.sym }"
             @click="$emit('order', { sym: h.symbol })"
           >
-            <td style="font-weight:600;padding-left:16px">{{ h.symbol }}</td>
+            <td style="font-weight:600;padding-left:16px">
+              {{ h.symbol }}
+              <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
+              <span
+                v-if="effectiveLastFill && h.symbol === effectiveLastFill.sym"
+                class="fresh-badge"
+                data-testid="positions-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
             <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
             <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(h.avgCost) }}</td>
@@ -298,13 +365,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h as createElement, onMounted, ref } from 'vue';
+import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { HoldingDto, PortfolioSummaryDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
+import { apiLastFill, clearLastFill, portfolioRevision } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
@@ -317,7 +385,12 @@ const live = api.live;
 
 // live 的 getter 每次存取才解析 store,故必須在 computed / render 內取用才有 reactivity。
 const mockPositions = computed<Position[]>(() => (live ? live.positions : []));
-const mockLastFill = computed(() => (live ? live.lastFill : null));
+
+/**
+ * D-13:fresh 高亮的來源切換。mock mode 有 Pinia 的成交事件,API mode 由 `apiLastFill` 補上。
+ * 兩者形狀逐字相同(04-07 的刻意設計),所以**綁定表達式一個字都不用改,只是來源換了**。
+ */
+const effectiveLastFill = computed(() => (live ? live.lastFill : apiLastFill.value));
 
 // =============== API mode 區塊狀態機(D-11:兩區塊各自載入、各自重試) ===============
 interface BlockError {
@@ -371,6 +444,69 @@ onMounted(() => {
   if (live) return;
   void loadSummary();
   void loadHoldings();
+});
+
+// UI-SPEC §9:「新」標記的壽命到頁面 unmount 為止(App.vue 的 v-if 切頁會卸載本頁),不靠計時器。
+onUnmounted(() => {
+  clearLastFill();
+});
+
+// =============== U-05 / U-06:成交後重讀的並存狀態(不取代 status 三態) ===============
+/*
+ * Phase 3 的 `status: 'loading'` 會把表格換成骨架列。交易剛成功卻讓整頁資料消失再長回來,
+ * 是「看起來像出錯了」的典型誤導 —— 正是 D-12 要避免的「以為交易沒成功 → 再送一次」。
+ * 因此重讀走一組**與 status 並存**的旗標:舊值留在畫面上,只多一條「更新中…」;
+ * 失敗時也不進 `status: 'error'`(那會清掉舊值),改用 stale 提示明示「可能不是最新」。
+ *
+ * 兩個資料源各有自己的一組旗標(D-12:四個資料源各自獨立,一個失敗不影響其他)。
+ */
+const summaryRefreshing = ref(false);
+const summaryRefreshError = ref<BlockError | null>(null);
+const holdingsRefreshing = ref(false);
+const holdingsRefreshError = ref<BlockError | null>(null);
+
+async function refreshSummary() {
+  // 還沒有可保留的舊值(首次載入中,或首次就失敗)→ 沒有 U-05 要保護的東西,退回一般載入。
+  if (summaryState.value.status !== 'loaded') {
+    await loadSummary();
+    return;
+  }
+  summaryRefreshing.value = true;
+  summaryRefreshError.value = null;
+  try {
+    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+  } catch (error) {
+    summaryRefreshError.value = describeError(error);
+  } finally {
+    summaryRefreshing.value = false;
+  }
+}
+
+async function refreshHoldings() {
+  if (holdingsState.value.status !== 'loaded') {
+    await loadHoldings();
+    return;
+  }
+  holdingsRefreshing.value = true;
+  holdingsRefreshError.value = null;
+  try {
+    holdingsState.value = { status: 'loaded', data: await api.listHoldings() };
+  } catch (error) {
+    holdingsRefreshError.value = describeError(error);
+  } finally {
+    holdingsRefreshing.value = false;
+  }
+}
+
+/*
+ * D-10:成交後由**已掛載**的頁自己重讀自己的資料源。
+ * `App.vue:36` 用 `v-if` 切頁,未掛載的頁沒有任何消費者,代它發請求是純粹的無效工。
+ */
+watch(portfolioRevision, () => {
+  // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 與 onMounted 同一條規則。
+  if (live) return;
+  void refreshSummary();
+  void refreshHoldings();
 });
 
 function signedMoney(value: number): string {
@@ -864,6 +1000,38 @@ tr.scrubbed:hover { background: color-mix(in oklch, #a855f7 8%, transparent); }
   border: 1px solid var(--border); background: var(--surface2);
   color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
 }
+/* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
+.refresh-note { padding: 8px 20px; font-size: 12px; color: var(--fg-dim); }
+.refresh-stale { padding: 14px 20px; font-size: 13px; }
+.refresh-stale .details {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.refresh-stale .details span { overflow-wrap: anywhere; }
+.block-refreshing { opacity: .72; transition: opacity .15s; }
+
+/*
+ * U-12:剛成交列的非顏色線索。形狀沿用 Trades 的 .pill,但**只有水平內距**:
+ * 12px × line-height 1.2 = 14.4px,小於本列 13px 文字的行高,因此 inline-block
+ * 完整落在既有 line box 內 —— §Layout Contract 的「不改列高」是這樣達成的。
+ */
+.fresh-badge {
+  display: inline-block; margin-left: 8px;
+  padding: 0 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg);
+}
+
+/*
+ * U-12 / a11y:動畫關掉,標記照常顯示 —— 這正是「不只靠動畫」的價值所在。
+ * 高亮的壽命由 App.vue 的 v-if 切頁卸載界定,**不用計時器**(計時器會讓測試時間相依而 flaky)。
+ */
+@media (prefers-reduced-motion: reduce) {
+  tbody tr.fresh { animation: none; }
+  .skeleton-row { animation: none; }
+  .block-refreshing { transition: none; }
+}
+
 /* Q5:骨架列固定筆數,載入呈現不隨資料量變動 */
 .skeleton-row {
   height: 14px; margin: 8px 0; border-radius: 4px;

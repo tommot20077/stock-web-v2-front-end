@@ -57,8 +57,36 @@ export function cleanupMounted() {
   resetRuntimeApiClientsForTests();
 }
 
+/**
+ * 把「fetch mock → apiClient 解析信封 → 元件重新渲染」這串非同步鏈跑完。
+ *
+ * 真計時器下每輪先做一次 macrotask hop(`setImmediate`):它會把佇列裡**所有**已排入的 microtask
+ * 清空,不受鏈長影響。固定輪數的 microtask 清法在 Node 20 會漏——`Response.json()` 在 Node 20 的
+ * undici 需要比 Node 24 更多個 tick,本機(Node 24)綠、CI(Node 20)紅,04-12 三頁的 refetch 測試
+ * 就是這樣在 CI 掛掉的。假計時器下 `setTimeout` 不會自己觸發,退回純 microtask 輪次。
+ */
+/**
+ * 一次 macrotask hop。優先用 Node 的 `setImmediate`(vitest 的 jsdom 環境有它):
+ * `setTimeout(0)` 在 jsdom 對巢狀計時器套 4ms 最小延遲,一個迴圈 11 種 code 的測試
+ * 累積上千次 hop 會撞到 5s 逾時。`setImmediate` 不在 DOM lib 型別裡,故經 globalThis 取用,
+ * 沒有時退回 `setTimeout(0)`。
+ */
+function macrotaskHop(): Promise<void> {
+  return new Promise<void>(resolve => {
+    const g = globalThis as unknown as { setImmediate?: (callback: () => void) => unknown };
+    if (typeof g.setImmediate === 'function') {
+      g.setImmediate(resolve);
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
 export async function flushAsync(times = 6) {
   for (let i = 0; i < times; i += 1) {
+    if (!vi.isFakeTimers()) {
+      await macrotaskHop();
+    }
     await Promise.resolve();
     await nextTick();
   }

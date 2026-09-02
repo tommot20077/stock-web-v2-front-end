@@ -5,6 +5,29 @@
       API mode(D-14):只有 totalMarketValue 與 roi 兩張有後端資料的卡;
       今日損益 / 可用現金無後端來源,直接不渲染(不顯示假資料)。
     -->
+    <!--
+      U-05 / U-06:成交後重讀的指示列。刻意**不新增卡片、不改任何 grid span**,
+      只在 KPI 區上方插入一條 12px 說明列;失敗時就地換成 stale 提示 + 診斷列 + 重試。
+    -->
+    <div v-if="!live && summaryRefreshing" class="refresh-strip" :style="{ gridColumn: 'span 12' }">
+      <div class="refresh-note" data-testid="overview-refreshing">{{ t(lang, 'portfolioRefreshing') }}</div>
+    </div>
+    <div v-else-if="!live && summaryRefreshError" class="refresh-strip" :style="{ gridColumn: 'span 12' }">
+      <!-- role="status" 而非 alert:交易已經成功,這不是需要打斷使用者的錯誤(U-06) -->
+      <div class="refresh-stale" role="status" data-testid="overview-refresh-error">
+        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div class="details">
+          <span data-testid="overview-refresh-error-code">{{ summaryRefreshError.code }}</span>
+          <span v-if="summaryRefreshError.traceId" data-testid="overview-refresh-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ summaryRefreshError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="overview-refresh-retry" @click="refreshSummary">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
+    </div>
+
     <div
       v-if="!live && summaryLoading"
       class="card kpi block-state"
@@ -36,6 +59,8 @@
         :key="i"
         class="card kpi"
         data-testid="overview-kpi"
+        :class="{ 'block-refreshing': summaryRefreshing }"
+        :aria-busy="summaryRefreshing"
         :style="{ gridColumn: `span ${kpiSpan}` }"
       >
         <div class="kpi-l">{{ k.l }}</div>
@@ -116,10 +141,36 @@
     </div>
 
     <!-- 近期交易。API mode 走 GET /trades?page=0&size=5(D-09),與交易頁不共用狀態。 -->
-    <div class="card" style="grid-column: span 12; padding: 20px">
+    <div
+      class="card"
+      style="grid-column: span 12; padding: 20px"
+      :class="{ 'block-refreshing': tradesRefreshing }"
+      :aria-busy="tradesRefreshing"
+    >
       <div class="row-between" style="margin-bottom:12px">
         <div class="ttl">{{ t(lang, 'recentTrades') }}</div>
         <button class="btn-accent" @click="emit('order')">+ {{ t(lang, 'addTrade') }}</button>
+      </div>
+      <!-- U-05 / U-06:重讀期間保留整張表格,只在區塊頂端加一條指示列 -->
+      <div v-if="!live && tradesRefreshing" class="refresh-note" data-testid="overview-refreshing">
+        {{ t(lang, 'portfolioRefreshing') }}
+      </div>
+      <div
+        v-else-if="!live && tradesRefreshError"
+        class="refresh-stale"
+        role="status"
+        data-testid="overview-refresh-error"
+      >
+        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div class="details">
+          <span data-testid="overview-refresh-error-code">{{ tradesRefreshError.code }}</span>
+          <span v-if="tradesRefreshError.traceId" data-testid="overview-refresh-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ tradesRefreshError.traceId }}
+          </span>
+        </div>
+        <button class="block-retry" data-testid="overview-refresh-retry" @click="refreshRecentTrades">
+          {{ t(lang, 'authRetry') }}
+        </button>
       </div>
       <div v-if="!live && tradesLoading" class="block-state" data-testid="overview-trades-loading">
         {{ t(lang, 'loading') }}
@@ -180,13 +231,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
+import { portfolioRevision } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
 import Donut from '../components/Donut.vue';
 
@@ -253,6 +305,65 @@ onMounted(() => {
   if (live) return;
   void loadSummary();
   void loadRecentTrades();
+});
+
+// =============== U-05 / U-06:成交後重讀的並存狀態(不取代 status 三態) ===============
+/*
+ * Phase 3 的 `status: 'loading'` 會把區塊換成 loading 文字/骨架。交易剛成功卻讓資料消失
+ * 再長回來,是「看起來像出錯了」的典型誤導 —— 正是 D-12 要避免的「以為交易沒成功 →
+ * 再送一次」。因此重讀走一組**與 status 並存**的旗標:舊值留在畫面上,只多一條「更新中…」;
+ * 失敗時也不進 `status: 'error'`(那會清掉舊值),改用 stale 提示明示「可能不是最新」。
+ *
+ * 兩個資料源各有自己的一組旗標(D-12:四個資料源各自獨立,一個失敗不影響其他)。
+ */
+const summaryRefreshing = ref(false);
+const summaryRefreshError = ref<BlockError | null>(null);
+const tradesRefreshing = ref(false);
+const tradesRefreshError = ref<BlockError | null>(null);
+
+async function refreshSummary() {
+  // 還沒有可保留的舊值(首次載入中,或首次就失敗)→ 沒有 U-05 要保護的東西,退回一般載入。
+  if (summaryState.value.status !== 'loaded') {
+    await loadSummary();
+    return;
+  }
+  summaryRefreshing.value = true;
+  summaryRefreshError.value = null;
+  try {
+    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+  } catch (error) {
+    summaryRefreshError.value = describeError(error);
+  } finally {
+    summaryRefreshing.value = false;
+  }
+}
+
+async function refreshRecentTrades() {
+  if (tradesState.value.status !== 'loaded') {
+    await loadRecentTrades();
+    return;
+  }
+  tradesRefreshing.value = true;
+  tradesRefreshError.value = null;
+  try {
+    const result = await api.listTrades({ page: 0, size: 5 });
+    tradesState.value = { status: 'loaded', data: result.items };
+  } catch (error) {
+    tradesRefreshError.value = describeError(error);
+  } finally {
+    tradesRefreshing.value = false;
+  }
+}
+
+/*
+ * D-10:成交後由**已掛載**的頁自己重讀自己的資料源。
+ * `App.vue:36` 用 `v-if` 切頁,未掛載的頁沒有任何消費者,代它發請求是純粹的無效工。
+ */
+watch(portfolioRevision, () => {
+  // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 與 onMounted 同一條規則。
+  if (live) return;
+  void refreshSummary();
+  void refreshRecentTrades();
 });
 
 const ranges = ['1D','1W','1M','3M','6M','1Y','All'];
@@ -371,5 +482,17 @@ tbody td { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 1
   margin-top: 8px; min-height: 32px; padding: 0 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface2);
   color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
+}
+/* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
+.refresh-note { padding: 4px 0 8px; font-size: 12px; color: var(--fg-dim); }
+.refresh-stale { padding: 4px 0 12px; font-size: 13px; }
+.refresh-stale .details {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.refresh-stale .details span { overflow-wrap: anywhere; }
+.block-refreshing { opacity: .72; transition: opacity .15s; }
+@media (prefers-reduced-motion: reduce) {
+  .block-refreshing { transition: none; }
 }
 </style>

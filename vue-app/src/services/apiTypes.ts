@@ -87,6 +87,71 @@ export interface TradeDto {
   createdAt: string;
 }
 
+/**
+ * 對應後端 stock-module-asset 的 `AssetDto`(`AssetDto.java:9-24`);逐欄同形,勿增刪(judgment §4)。
+ *
+ * 五個價格欄位宣告為 `number | null` 是刻意的:後端是 `BigDecimal`(非 primitive),
+ * 沒有價格資料的 asset 會是 `null`。宣告成 `number` 會讓報價卡顯示 `NaN`
+ * (`04-UI-SPEC.md` §2/§3 已規定 `null` 顯示 `—`)。
+ *
+ * `assetType` / `currency` 刻意宣告為 `string` 而非 union:後端是 `AssetType`
+ * (`AssetType.java` = STOCK / CRYPTO / FX / BOND)與 `CurrencyCode`
+ * (`CurrencyCode.java` = USD / TWD / EUR / JPY)兩個 enum,Jackson 以常數名序列化。
+ * 常數名列在此處僅供查閱 —— **不**寫成 union,因為後端新增一個 enum 值就會讓前端
+ * 型別檢查紅掉,而 adapter 只是原樣傳遞、不對這兩欄做分支。
+ *
+ * **注意 `AssetDto` 的 BigDecimal 沒有 `@JsonSerialize(ToStringSerializer)`,是 JSON number
+ * —— 與 `KlineDto` 相反。**
+ */
+export interface AssetDto {
+  uuid: string;
+  symbol: string;
+  name: string;
+  /** 後端 AssetType enum 常數名:STOCK / CRYPTO / FX / BOND */
+  assetType: string;
+  market: string;
+  /** 後端 CurrencyCode enum 常數名:USD / TWD / EUR / JPY */
+  currency: string;
+  sector: string;
+  /** 只有 true 才可送出交易(D-01;後端 `TradingService.resolveTradeableAsset` 是最終權威) */
+  tradeable: boolean;
+  latestPrice: number | null;
+  change: number | null;
+  changePercent: number | null;
+  /** 已格式化的成交量字串(例:`52.1M`),後端就是 String,前端不得重算 */
+  volumeText: string;
+  high: number | null;
+  low: number | null;
+}
+
+/**
+ * 對應後端 stock-module-market-data 的 `KlineDto`(`KlineDto.java:23-30`);逐欄同形,勿增刪(judgment §4)。
+ *
+ * `KlineDto.java` 的五個 BigDecimal 欄位掛 `@JsonSerialize(using = ToStringSerializer.class)`,
+ * 序列化為 JSON 字串以避免浮點精度損失。**注意與 `AssetDto` 相反** —— `AssetDto` 的
+ * BigDecimal 沒有這個註解,是 JSON number。
+ *
+ * 因此 OHLCV 五欄在 TypeScript 必須是 `string`;要當數字用一律經 `marketApi.ts` 的
+ * `closeSeries()` 轉換,不要在元件內散落 `Number()`。
+ */
+export interface KlineDto {
+  /** Java `Instant` → JSON ISO-8601 字串(UTC) */
+  bucket: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+/**
+ * 對應後端 `KlineInterval`(`KlineInterval.java`)的 wire 字串白名單。
+ *
+ * 這五個值是 `MarketController.klines` 明確驗證的白名單(非法值回 400 `KLINE_INTERVAL_INVALID`),
+ * 寫成 union 可讓錯誤在編譯期就被抓到,而非等到 runtime 吃 400。
+ */
+export type KlineInterval = '1m' | '5m' | '15m' | '1h' | '1d';
+
 export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'custom';
 export type BacktestPeriod = '1Y' | '3Y' | '5Y';
 export type BacktestRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'rejected';
