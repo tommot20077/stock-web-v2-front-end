@@ -481,6 +481,17 @@
             </div>
           </div>
           <p class="irreversible">{{ t(lang, 'tradeIrreversibleNote') }}</p>
+          <!--
+            鐵律 6:review 步驟沒有輸入框,但 canSubmit 仍可能在這裡翻成 false
+            (SELL 的 holdings 晚於「確認內容」才落地)。錯誤必須在這一步就看得到,
+            不得讓「記錄交易」按下去零回饋。
+          -->
+          <div
+            v-if="validationError"
+            class="form-error"
+            role="alert"
+            data-testid="ticket-review-error"
+          >{{ validationError }}</div>
           <p
             v-if="submitting"
             class="submitting-note"
@@ -570,7 +581,7 @@
               type="button"
               :class="['btn-accent', 'btn-submit', side.toLowerCase()]"
               data-testid="ticket-submit"
-              :disabled="submitting"
+              :disabled="submitting || !canSubmit"
               @click="submitTrade"
             >{{ submitting ? t(lang, 'recordingTrade') : t(lang, 'recordTrade') }}</button>
           </template>
@@ -1269,7 +1280,11 @@ async function submitTrade() {
   if (submitting.value) return;
   orderError.value = '';
   submitError.value = null;
-  if (!selected.value || !canSubmit.value) return;
+  if (!selected.value || !canSubmit.value) {
+    // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時退回 ticket,讓欄位級錯誤可見,不得靜默。
+    step.value = 'ticket';
+    return;
+  }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
   try {
