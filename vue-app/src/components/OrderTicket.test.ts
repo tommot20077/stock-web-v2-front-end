@@ -32,6 +32,7 @@ import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   lastCreatedTradeId,
+  notifyTradeCreated,
   portfolioRevision,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
@@ -1698,5 +1699,19 @@ describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
     await submitTrade();
     expect(tradeCalls(fetchImpl)).toHaveLength(0);
     expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+  });
+});
+
+describe('OrderTicket — 再次開啟 ticket 清除成交後標記(F-2 / UI-SPEC §9 / D-11)', () => {
+  it('Test 52:開啟 ticket 時 apiLastFill 與 lastCreatedTradeId 一併清空,revision 不動', async () => {
+    notifyTradeCreated(RECORDED_TRADE);
+    expect(apiLastFill.value).not.toBeNull();
+    expect(lastCreatedTradeId.value).toBe(RECORDED_TRADE.id);
+
+    await mountTicket({ mode: 'api' });
+
+    expect(apiLastFill.value, '「新」標記的壽命到再次開啟 ticket 為止(UI-SPEC §9)').toBeNull();
+    expect(lastCreatedTradeId.value, 'D-11 提示的壽命到再次開啟 ticket 為止').toBeNull();
+    expect(portfolioRevision.value, '重讀訊號不得被清除').toBe(1);
   });
 });

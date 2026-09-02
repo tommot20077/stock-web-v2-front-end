@@ -3,6 +3,7 @@ import {
   apiLastFill,
   bumpPortfolioRevision,
   clearLastCreatedTrade,
+  clearLastFill,
   lastCreatedTradeId,
   notifyTradeCreated,
   portfolioRevision,
@@ -121,6 +122,18 @@ describe('portfolioRevision — D-11 提示清除', () => {
     expect(lastCreatedTradeId.value).toBeNull();
     expect(portfolioRevision.value).toBe(1);
     expect(apiLastFill.value).toEqual({ sym: 'AAPL', type: 'BUY', qty: 10, px: 218.4 });
+  });
+
+  it('clearLastFill only clears lastFill, leaving revision and trade id intact', () => {
+    // UI-SPEC §9:「新」標記的壽命到「再次開啟 ticket / Trades 變更檢視 / 頁面 unmount」為止,
+    // 這三個時機都不該連帶重置重讀訊號,也不該替 D-11 的提示做決定(那有自己的清除規則)。
+    notifyTradeCreated(TRADE_DTO);
+
+    clearLastFill();
+
+    expect(apiLastFill.value).toBeNull();
+    expect(portfolioRevision.value).toBe(1);
+    expect(lastCreatedTradeId.value).toBe(TRADE_DTO.id);
   });
 });
 

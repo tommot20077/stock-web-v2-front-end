@@ -7,13 +7,14 @@ import tradesSource from './Trades.vue?raw';
 import { t } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
+  apiLastFill,
   bumpPortfolioRevision,
   notifyTradeCreated,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
-import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
+import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 05(03-05-PLAN.md)。API mode 的 Trades 一律把篩選/排序/分頁轉成
 // `GET /api/v1/trades` 的 query 參數(D-05/D-06/D-07/D-08),頁碼重置與溢出回退見 D-15,
@@ -1104,5 +1105,55 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
   it('D-13:Phase 3 留下的「Phase 4 再接」TODO 註解已清除', () => {
     expect(tradesSource).not.toContain('Phase 4 接 post-trade refetch');
     expect(tradesSource).not.toContain('無成交事件來源');
+  });
+});
+
+describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
+  const twoAapl = () => success(page({
+    items: [trade({ id: 'new-trade', symbol: 'AAPL' }), trade({ id: 'old-aapl', symbol: 'AAPL' })],
+    totalElements: 2,
+    totalPages: 2,
+  }));
+
+  it('Test 21:變更排序後「新」標記與 apiLastFill 一併清除,不得把另一筆舊交易標成新', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    click(headerCell(t('en', 'qty')));
+    await flushAsync();
+
+    // 重讀後第 0 列仍是 AAPL(可能是另一筆舊交易),只靠 symbol 比對會誤標 —— 標記必須隨檢視變更清除。
+    expect(apiLastFill.value).toBeNull();
+    expect(freshRow()).toHaveLength(0);
+    expect(testid('trades-fresh-badge')).toBeNull();
+  });
+
+  it('Test 22:換頁同樣清除「新」標記', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    click(requireTestid('trades-next'));
+    await flushAsync();
+
+    expect(apiLastFill.value).toBeNull();
+    expect(freshRow()).toHaveLength(0);
+  });
+
+  it('Test 23:頁面 unmount 時清除「新」標記(壽命由 unmount 界定,不用 setTimeout)', async () => {
+    const fetchMock = scriptedFetch(twoAapl);
+    await mountApiTrades(fetchMock);
+    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    await flushAsync();
+    expect(freshRow()).toHaveLength(1);
+
+    unmountAll();
+
+    expect(apiLastFill.value, 'App.vue 的 v-if 切頁會卸載本頁,標記不得活過這一刻').toBeNull();
   });
 });

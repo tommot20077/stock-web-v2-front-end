@@ -9,6 +9,7 @@ import { t } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
+  apiLastFill,
   bumpPortfolioRevision,
   notifyTradeCreated,
   resetPortfolioRevisionForTests,
@@ -16,7 +17,7 @@ import {
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import OrderTicket from '../components/OrderTicket.vue';
 import type { AssetDto, HoldingDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
-import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
+import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 04(03-04-PLAN.md)。API mode 的 Positions 一律讀後端欄位(D-04),
 // weight 是唯一的前端衍生例外(marketValue / summary.totalMarketValue),priceTime 依 D-03 顯示,
@@ -903,5 +904,24 @@ describe('Positions — D-13 fresh 高亮(04-12 / U-12)', () => {
     // 來源切換用 effectiveLastFill,mockLastFill 的直接引用已不存在
     expect(positionsSource).toContain('effectiveLastFill');
     expect(positionsSource).not.toContain('mockLastFill');
+  });
+});
+
+describe('Positions — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
+  it('Test 21:頁面 unmount 時清除 apiLastFill,重新 mount 不得再帶「新」', async () => {
+    const mount = () => mountApiWith(
+      [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
+      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+    );
+    await mount();
+    notifyTradeCreated(freshTrade('BBB'));
+    await flushAsync();
+    expect(allTestids('positions-fresh-badge')).toHaveLength(1);
+
+    unmountAll();
+    expect(apiLastFill.value, '標記的壽命到頁面 unmount 為止(UI-SPEC §9),否則持倉列會永久帶「新」').toBeNull();
+
+    await mount();
+    expect(allTestids('positions-fresh-badge')).toHaveLength(0);
   });
 });
