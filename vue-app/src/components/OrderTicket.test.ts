@@ -1667,3 +1667,36 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     expect(orderTicketSource).toContain('listHoldings');
   });
 });
+
+// =====================================================================================
+// PR #9 合併前 review 修正(AGENTS.md 鐵律 6:可見的控制不得靜默 no-op)。
+// =====================================================================================
+
+describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
+  it('Test 51:holdings 在進入 review 後才落地且不足時,review 步驟必須顯示錯誤、送出鈕 disabled、不得送出', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const fetchImpl = ticketFetch({ holdings: () => pending.promise });
+    await mountSubmitTicket(fetchImpl);
+    await switchToSell();
+
+    // Test 45:預檢載入中不阻擋,使用者可以先進 review。
+    expect(advanceButton().disabled).toBe(false);
+    await gotoReview();
+    expect(bodyText()).toContain(t('en', 'tradeIrreversibleNote'));
+
+    // holdings 此時才回來:可賣 5,preset 的 qty 是 10 → oversell 在 review 步驟才成立。
+    pending.resolve(holdingsResponse([holding('AAPL', 5)]));
+    await flushAsync(16);
+
+    const alert = requireTestid('ticket-review-error');
+    expect(alert.getAttribute('role'), 'review 步驟的錯誤必須立即播報').toBe('alert');
+    expect(alert.textContent).toContain(t('en', 'tradeErrOversell'));
+    expect(submitButton().disabled, 'canSubmit 翻 false 後送出鈕不得仍可按').toBe(true);
+
+    // 程式化點擊(繞過 disabled)也不得送出,且畫面上仍要有可見錯誤。
+    await submitTrade();
+    expect(tradeCalls(fetchImpl)).toHaveLength(0);
+    expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+  });
+});
