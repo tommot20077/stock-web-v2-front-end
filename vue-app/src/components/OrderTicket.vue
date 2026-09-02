@@ -542,7 +542,7 @@
           只露 `code` 與 traceId,**絕不露後端 `message`**(Phase 3 D-12 / T-04-09)。
         -->
         <div
-          v-if="submitError && !submitError.fields"
+          v-if="submitError && !hasFieldLevelErrors"
           class="form-error submit-error"
           role="alert"
           data-testid="ticket-error"
@@ -1077,6 +1077,13 @@ const FIELD_ERROR_COPY: Record<string, string> = {
 };
 
 const fieldErrorKeys = computed(() => Object.keys(submitError.value?.fields ?? {}));
+
+/**
+ * `fields` 至少有一個 key 對得到輸入框,才算「欄位級」呈現。
+ * 一個都對不到(例如後端日後新增受驗欄位、或 header 類的 `Idempotency-Key`)時,
+ * 退回底部的一般驗證錯誤 —— 否則使用者按了送出卻什麼都看不到(鐵律 6)。
+ */
+const hasFieldLevelErrors = computed(() => fieldErrorKeys.value.some(field => field in FIELD_ERROR_COPY));
 
 function fieldErrorId(field: string): string {
   return `trade-${field}-error`;
