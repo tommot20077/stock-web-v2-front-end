@@ -9,7 +9,10 @@
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test --grep @smoke"
+    "test:e2e": "playwright test --grep @smoke",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write src"
   },
   "dependencies": {
     "pinia": "^3.0.4",
@@ -17,10 +20,17 @@
     "vue-router": "^5.0.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
     "@vitejs/plugin-vue": "^6.0.7",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
+    "globals": "^17.12.0",
     "jsdom": "^29.1.1",
+    "prettier": "^3.9.6",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.69.0",
     "vite": "^8.0.13",
     "vitest": "^4.1.6",
     "vue-tsc": "^3.2.9"

@@ -155,9 +155,11 @@ import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';
 import { t } from '../i18n';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { Lang } from '../types';
+import type { Lang, Theme } from '../types';
+import { resolveTvWidgetTheme } from '../chartTvTheme';
+import type { ChartThemeMode } from '../chartTvTheme';
 
-const props = defineProps<{ lang: Lang; sym: string; themeMode: 'tv' | 'mixed' }>();
+const props = defineProps<{ lang: Lang; sym: string; themeMode: ChartThemeMode; theme: Theme }>();
 defineEmits<{ order: [preset: { sym: string; side?: 'BUY' | 'SELL' }]; back: [] }>();
 
 const portfolio = useMockPortfolioStore();
@@ -234,12 +236,13 @@ async function mountWidget() {
     const el = document.getElementById(containerId);
     if (!el) return;
     el.innerHTML = '';
+    const tvTheme = resolveTvWidgetTheme(props.themeMode, props.theme);
     widget = new (window as any).TradingView.widget({
       container_id: containerId,
       symbol: tv,
       interval: 'D',
       timezone: 'Asia/Taipei',
-      theme: props.themeMode === 'mixed' ? 'dark' : 'dark',
+      theme: tvTheme.theme,
       style: '1',
       locale: props.lang === 'zh' ? 'zh_TW' : 'en',
       enable_publishing: false,
@@ -249,8 +252,8 @@ async function mountWidget() {
       save_image: false,
       studies: ['MASimple@tv-basicstudies', 'Volume@tv-basicstudies'],
       autosize: true,
-      backgroundColor: props.themeMode === 'mixed' ? '#0d1117' : '#131722',
-      gridColor: props.themeMode === 'mixed' ? '#1f2632' : '#1e222d',
+      backgroundColor: tvTheme.backgroundColor,
+      gridColor: tvTheme.gridColor,
     });
   } catch (e: any) {
     if (unmounted || seq !== mountSeq) return;
@@ -264,7 +267,7 @@ onBeforeUnmount(() => {
   mountSeq++;
   cleanupWidget();
 });
-watch(() => [props.sym, props.themeMode, props.lang], () => { mountWidget(); });
+watch(() => [props.sym, props.themeMode, props.theme, props.lang], () => { mountWidget(); });
 
 // --- Order book / tape (synthetic) ---
 const quotePrice = computed(() => {

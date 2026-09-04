@@ -35,7 +35,7 @@
     <main v-if="showMainContent" class="main">
       <Overview v-if="page === 'overview'" :lang="tweaks.lang" @order="openTicket" @navigate="page = $event" />
       <Markets v-else-if="page === 'markets'" :lang="tweaks.lang" @order="openTicket" @chart="openChart" />
-      <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" @order="openTicket" @back="page = 'markets'" />
+      <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" :theme="tweaks.theme" @order="openTicket" @back="page = 'markets'" />
       <Positions v-else-if="page === 'positions'" :lang="tweaks.lang" @order="openTicket" />
       <Analytics v-else-if="page === 'analytics'" :lang="tweaks.lang" @order="openTicket" @toast="showToast" />
       <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" @order="openTicket" />

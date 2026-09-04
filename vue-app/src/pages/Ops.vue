@@ -131,7 +131,7 @@ async function run() {
     currentJob.value = null;
     await refreshOpsData();
     emit('toast', `${job.status === 'success' ? '✓' : '✗'} ${label}`);
-  } catch (error) {
+  } catch {
     currentJob.value = null;
     await refreshOpsData();
     emit('toast', `✗ ${label}`);
