@@ -72,7 +72,7 @@
       <div class="card span-4 padlg">
         <div class="ttl" style="margin-bottom:14px">{{ t(lang, 'targetWeight') }}</div>
         <div class="sliders">
-          <div v-for="(p, i) in weights" :key="p.sym" class="slider-row">
+          <div v-for="p in weights" :key="p.sym" class="slider-row">
             <div class="row-between" style="margin-bottom:4px">
               <span class="sym mono">{{ p.sym }}</span>
               <span class="num" :class="p.target !== p.current ? 'edited' : ''">

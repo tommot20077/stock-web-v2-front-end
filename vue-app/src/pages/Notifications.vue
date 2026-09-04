@@ -142,7 +142,7 @@
 
     <!-- ===== Filter chips + day selection ===== -->
     <div class="filters">
-      <button v-for="(c, i) in chips" :key="c.k" :class="['chip', { active: chip === c.k }]" @click="chip = c.k">
+      <button v-for="c in chips" :key="c.k" :class="['chip', { active: chip === c.k }]" @click="chip = c.k">
         {{ c.l }}
         <span class="chip-num">{{ c.n }}</span>
       </button>

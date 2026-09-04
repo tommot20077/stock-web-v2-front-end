@@ -63,7 +63,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 
-const emit = defineEmits<{ run: [code: string] }>();
+defineEmits<{ run: [code: string] }>();
 
 const presetId = ref('ma_cross');
 

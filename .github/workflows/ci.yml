@@ -22,5 +22,6 @@ jobs:
           cache-dependency-path: vue-app/package-lock.json
 
       - run: npm ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
