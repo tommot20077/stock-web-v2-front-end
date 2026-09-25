@@ -1,5 +1,6 @@
 <template>
   <div class="page alerts-page">
+    <MockDataNotice :lang="lang" />
     <!-- Header -->
     <div class="hdr-row">
       <div>
@@ -218,6 +219,7 @@
 </template>
 
 <script setup lang="ts">
+import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { t } from '../i18n';
 import { SYMBOLS, CRYPTO, FX, BONDS, fmtNum } from '../data';

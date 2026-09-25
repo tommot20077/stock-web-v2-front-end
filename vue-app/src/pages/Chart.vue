@@ -64,6 +64,7 @@ function loadTradingViewScript(): Promise<void> {
 
 <template>
   <div class="page">
+    <MockDataNotice :lang="lang" />
     <!-- Top bar -->
     <div class="topbar">
       <button class="back" @click="$emit('back')">← {{ t(lang, 'markets') }}</button>
@@ -151,6 +152,7 @@ function loadTradingViewScript(): Promise<void> {
 </template>
 
 <script setup lang="ts">
+import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';
 import { t } from '../i18n';
