@@ -6,7 +6,7 @@
         <button class="btn-ghost" data-testid="trades-export" :disabled="exporting" @click="exportCsv">
           {{ t(lang, 'export') }}
         </button>
-        <button class="btn-accent" @click="$emit('order')">+ {{ t(lang, 'addTrade') }}</button>
+        <button class="btn-accent" data-testid="trades-add-trade" @click="$emit('order')">+ {{ t(lang, 'addTrade') }}</button>
       </div>
     </div>
 

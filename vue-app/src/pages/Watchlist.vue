@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <MockDataNotice :lang="lang" />
     <div class="row-between" style="margin-bottom:18px">
       <div>
         <h2>{{ t(lang, 'watchlist') }}</h2>
@@ -68,6 +69,7 @@
 </template>
 
 <script setup lang="ts">
+import MockDataNotice from '../components/MockDataNotice.vue';
 import { ref, computed, watchEffect } from 'vue';
 import { t } from '../i18n';
 import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';

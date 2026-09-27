@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <MockDataNotice :lang="lang" />
     <h2 style="margin:0 0 16px">{{ t(lang, 'settings') }}</h2>
     <div class="layout">
       <div class="sidebar">
@@ -186,6 +187,7 @@
 </template>
 
 <script setup lang="ts">
+import MockDataNotice from '../components/MockDataNotice.vue';
 import { ref, reactive, onMounted } from 'vue';
 import { t } from '../i18n';
 import type { Lang, NotificationPrefs, Theme } from '../types';

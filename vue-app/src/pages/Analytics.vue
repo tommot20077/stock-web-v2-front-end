@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <MockDataNotice :lang="lang" />
     <!-- Header -->
     <div class="ah">
       <div>
@@ -362,6 +363,7 @@
 </template>
 
 <script setup lang="ts">
+import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, ref, reactive } from 'vue';
 import { t } from '../i18n';
 import { POSITIONS } from '../data';
