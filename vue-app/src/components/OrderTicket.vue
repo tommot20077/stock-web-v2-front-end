@@ -1047,9 +1047,10 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   // U-08(刻意覆寫 `02-UI-SPEC.md:144`):app 啟動時的 CSRF bootstrap 失敗 → 全域 banner;
   // 單一 unsafe 請求被 CSRF 拒絕 → 該請求的發起處,也就是這裡。
   AUTH_CSRF_TOKEN_INVALID: 'tradeErrCsrf',
+  // 前端合成(`apiClient.ts` 的 `ensureCsrfToken`:bootstrap 後仍拿不到 cookie),後端不會送。
   AUTH_CSRF_TOKEN_MISSING: 'tradeErrCsrf',
-  ACCESS_DENIED: 'tradeErrForbidden',
-  FORBIDDEN: 'tradeErrForbidden',
+  // 後端 403 的實際 code(`ErrorCode.AUTH_FORBIDDEN`);其他 403 仍由下方 status 兜底。
+  AUTH_FORBIDDEN: 'tradeErrForbidden',
   NETWORK_ERROR: 'tradeErrNetwork',
 };
 
