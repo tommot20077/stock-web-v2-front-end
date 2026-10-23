@@ -2,7 +2,7 @@
   <header class="hdr">
     <div class="brand">
       <span class="logo">R</span>
-      Resource
+      <span class="brand-name">Resource</span>
     </div>
     <nav class="nav">
       <button
@@ -13,15 +13,15 @@
         @click="$emit('navigate', it.k)"
       >{{ it.l }}</button>
     </nav>
-    <div style="flex:1" />
-    <button class="search-btn" @click="$emit('open-cmdk')">
+    <div class="spacer" />
+    <button class="search-btn" :aria-label="t(lang, 'search')" @click="$emit('open-cmdk')">
       <span>🔍</span>
       <span class="search-label">{{ t(lang, 'search') }}</span>
       <kbd>⌘K</kbd>
     </button>
-    <div v-if="sessionStatus" :class="['session-chip', sessionTone]">
+    <div v-if="sessionStatus" :class="['session-chip', sessionTone, { 'has-identity': safeSessionIdentity }]">
       <span class="session-dot" />
-      <span class="session-copy">{{ sessionLabel }}</span>
+      <span class="session-copy" :title="sessionLabel">{{ sessionLabel }}</span>
       <span v-if="safeSessionIdentity" class="session-identity" data-testid="header-session-identity">{{ safeSessionIdentity }}</span>
       <button
         v-if="sessionStatus === 'authenticated'"
@@ -34,14 +34,20 @@
       </button>
     </div>
     <div class="bell-wrap">
-      <button class="icon-btn" @click="bellOpen = !bellOpen">
+      <button
+        class="icon-btn"
+        data-testid="header-bell"
+        :aria-label="t(lang, 'notifications')"
+        :aria-expanded="bellOpen"
+        @click="bellOpen = !bellOpen"
+      >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
           <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
         </svg>
         <span class="bell-dot" />
       </button>
-      <div v-if="bellOpen" class="bell-pop" @click.stop>
+      <div v-if="bellOpen" class="bell-pop" data-testid="header-bell-pop" @click.stop>
         <div class="bell-head">
           <span style="font-weight:600">{{ t(lang, 'notifications') }}</span>
           <span style="font-size:11px;color:var(--fg-dim)">{{ unreadCount }} {{ t(lang, 'unread') }}</span>
@@ -135,13 +141,19 @@ const sessionTone = computed(() => {
   background: var(--surface);
   position: relative;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: -0.3px; }
+.brand { flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: -0.3px; }
 .logo {
   width: 22px; height: 22px; background: var(--accent); border-radius: 6px;
   display: inline-flex; align-items: center; justify-content: center;
   color: #fff; font-size: 12px; font-weight: 700;
 }
-.nav { display: flex; gap: 2px; flex-shrink: 0 }
+.nav {
+  display: flex; gap: 2px; min-width: 0;
+  /* 空間不夠時最後才縮(權重 = shrink × 寬度,其他項目先縮),縮了就在列內捲動 */
+  flex: 0 0.01 auto;
+  overflow-x: auto; scrollbar-width: thin;
+}
+.spacer { flex: 1; }
 .nav-btn {
   padding: 6px 10px; border-radius: 6px;
   background: transparent; border: 0;
@@ -156,10 +168,11 @@ const sessionTone = computed(() => {
   border-radius: 8px; color: var(--fg-dim); font-size: 12px;
   flex-shrink: 1;
 }
-.search-label { flex: 1; text-align: left; }
+.search-label { flex: 1; text-align: left; white-space: nowrap; }
 .search-btn kbd { font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
 .session-chip {
-  height: 36px; max-width: 300px; min-width: 0;
+  /* 不設 min-width: 0 —— 讓 chip 至少保住「狀態 + 登出」的內容寬,不夠時改由 nav 縮並捲動 */
+  height: 36px; max-width: 300px;
   display: flex; align-items: center; gap: 8px;
   padding: 0 10px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--surface2);
@@ -175,8 +188,14 @@ const sessionTone = computed(() => {
 .session-copy, .session-identity {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.session-copy { flex-shrink: 0; font-weight: 600; color: var(--fg); }
+.session-copy { flex-shrink: 1; min-width: 0; font-weight: 600; color: var(--fg); }
 .session-identity { min-width: 0; }
+/*
+ * 有身分(email)時只縮身分:狀態文字只要分到一點點縮減量(即使 0.03px)就會出現省略號。
+ * 沒有身分時(未登入 / 斷線)狀態文字是唯一能縮的,必須可縮,否則長文案會撐出 chip。
+ */
+.session-chip.has-identity .session-copy { flex-shrink: 0; }
+.session-chip:not(.has-identity) .session-copy { min-width: 6em; }
 .session-logout {
   height: 28px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface);
@@ -184,7 +203,7 @@ const sessionTone = computed(() => {
   white-space: nowrap;
 }
 .session-logout:disabled { opacity: .62; cursor: not-allowed; }
-.bell-wrap { position: relative; }
+.bell-wrap { position: relative; flex-shrink: 0; }
 .icon-btn {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
@@ -197,7 +216,7 @@ const sessionTone = computed(() => {
   border-radius: 50%; border: 2px solid var(--surface);
 }
 .bell-pop {
-  position: absolute; top: 44px; right: 0; width: 320px;
+  position: absolute; top: 44px; right: 0; width: min(320px, calc(100vw - 24px));
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.15);
   z-index: 20;
@@ -209,12 +228,37 @@ const sessionTone = computed(() => {
 .bell-row { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-start; }
 .bell-rowdot { width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
 .avatar {
-  width: 32px; height: 32px; border-radius: 50%;
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%;
   background: var(--surface2); display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 600;
+}
+/*
+ * 10 個導覽項加右側工具區的固有寬度約 1070px,flex-shrink: 0 的 nav 會把整頁撐出水平捲軸
+ * (todo 2026-09-04-frontend-header-rwd-320px)。現在 nav 可縮並在列內橫向捲動;
+ * 窄螢幕再改兩列:第一列品牌 + 工具區,第二列導覽。捲動一律留在 header 裡而不是整頁。
+ */
+@media (max-width: 1279px) {
+  .hdr { flex-wrap: wrap; height: auto; min-height: 60px; padding: 10px 16px 0; gap: 8px 12px; }
+  .nav { order: 10; flex: 1 0 100%; padding-bottom: 8px; }
+  /*
+   * 換行判斷用的是 flex-basis,不會先縮再換行:chip 若以內容寬參與換行,狀態文字一長
+   * 就把通知鈴擠到下一列。basis 0 + min-width 0 + 高 grow 讓它拿走第一列剩餘空間
+   * (上限仍是 max-width);登出鈕靠右,chip 變寬時不會留一段空白在按鈕後面。
+   */
+  .session-chip { flex: 100 1 0; min-width: 0; }
+  .session-logout { margin-left: auto; flex-shrink: 0; }
 }
 @media (max-width: 900px) {
   .session-chip { max-width: 180px; }
   .session-identity { display: none; }
+  .search-btn { min-width: 0; }
+  .search-label, .search-btn kbd { display: none; }
+}
+@media (max-width: 480px) {
+  .hdr { padding: 8px 12px 0; gap: 8px; }
+  .brand-name { display: none; }
+  /* 頭像目前是寫死的示範字樣、不可互動;登出與身分狀態仍在 session chip 內 */
+  .avatar { display: none; }
+  .session-chip { gap: 6px; padding: 0 8px; }
 }
 </style>
