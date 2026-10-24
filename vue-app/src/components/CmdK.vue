@@ -111,7 +111,7 @@ function pageLabel(page: Page) {
 const pages = computed<Item[]>(() => {
   const map: Array<[Page, string]> = [
     ['overview', 'g o'], ['markets', 'g m'], ['chart', 'g c'], ['positions', 'g p'],
-    ['analytics', 'g a'], ['trades', 'g t'], ['watchlist', 'g w'],
+    ['analytics', 'g a'], ['trades', 'g t'], ['cash', 'g h'], ['watchlist', 'g w'],
     ['backtest', 'g b'], ['alerts', 'g l'], ['notifications', 'g n'],
     ['settings', 'g s'], ['ops', 'g x'],
   ];
