@@ -247,6 +247,10 @@ function entryUrls(fetchImpl: CashFetch): string[] {
     .map(([url]) => url);
 }
 
+function lastOf<T>(list: T[]): T | undefined {
+  return list[list.length - 1];
+}
+
 function summaryUrls(fetchImpl: CashFetch): string[] {
   return urls(fetchImpl).filter(url => url.includes('/portfolio/summary'));
 }
@@ -519,7 +523,7 @@ describe('Cash page — one-click reversal flow', () => {
     expect(postBodies(fetchImpl)).toHaveLength(1);
     expect(postBodies(fetchImpl)[0]!.reversalOfId).toBe(PLAIN_DEPOSIT.id);
     // 成功 → 列表以 page=0 重讀。
-    expect(entryUrls(fetchImpl).at(-1)).toBe('/api/v1/portfolio/cash-entries?page=0&size=10');
+    expect(lastOf(entryUrls(fetchImpl))).toBe('/api/v1/portfolio/cash-entries?page=0&size=10');
     expect(rows()).toHaveLength(4);
     // 新沖銷列在最上面,帶「新」;原列變成「已沖銷」且不再有沖銷鈕。
     const top = rows()[0]!;
@@ -699,7 +703,7 @@ describe('Cash page — re-read rules by revision cause (U-10)', () => {
     notifyCashEntryCreated({ id: 'many-0' });
     await flushAsync();
 
-    expect(entryUrls(fetchImpl).at(-1)).toBe('/api/v1/portfolio/cash-entries?page=0&size=10');
+    expect(lastOf(entryUrls(fetchImpl))).toBe('/api/v1/portfolio/cash-entries?page=0&size=10');
     expect(summaryUrls(fetchImpl)).toHaveLength(summaryGets + 1);
     expect(requireTestid('cash-entries-page-indicator').textContent?.trim()).toBe('1 / 3');
   });
