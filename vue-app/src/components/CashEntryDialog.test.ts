@@ -52,17 +52,54 @@ function entryResponse(entry: CashEntryDto = RECORDED_ENTRY): Response {
 
 interface RoutedFetchOptions {
   entries?: (init: RequestInit | undefined) => Response | Promise<Response>;
+  refresh?: () => Response | Promise<Response>;
 }
 
 /** 只路由本對話框會碰到的端點;其他一律丟錯,讓「元件偷打了別的 API」立刻可見。 */
 function cashFetch(options: RoutedFetchOptions = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.includes('/auth/refresh')) {
+      return options.refresh ? options.refresh() : jsonResponse({ success: true, data: {}, error: null, meta: {} });
+    }
     if (url.includes('/portfolio/cash-entries')) {
       return options.entries ? options.entries(init) : entryResponse();
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
+}
+
+/**
+ * 後端錯誤信封。`fields` 預設 **null**(後端真實形狀,`apiClient.fieldsFrom` 在空 map 時回 null)。
+ * `message` 一律放一句「絕不得進入 DOM」的字串,讓違規一眼可見。
+ */
+function entryFailure(
+  code: string,
+  options: { status?: number; traceId?: string; fields?: Record<string, string> | null } = {},
+): Response {
+  return jsonResponse(
+    {
+      success: false,
+      data: null,
+      error: { code, message: BACKEND_MESSAGE_CANARY, fields: options.fields ?? null },
+      meta: { traceId: options.traceId ?? 'trace-cash' },
+    },
+    options.status ?? 400,
+  );
+}
+
+const BACKEND_MESSAGE_CANARY = 'BackendMessageMustNotReachTheDom';
+const FIELD_VALUE_CANARY = 'FieldValueCanaryMustNotReachTheDom';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
 }
 
 function entryCalls(fetchImpl: ReturnType<typeof vi.fn>): Array<[string, RequestInit | undefined]> {
@@ -247,5 +284,390 @@ describe('CashEntryDialog tracer — 入金一筆端到端(D-11 / D-30)', () => 
     expect(cashEntryDialogSource).not.toContain('stores/mock');
     expect(cashEntryDialogSource).not.toContain('notifyTradeCreated');
     expect(cashEntryDialogSource.match(/notifyCashEntryCreated\(/g)).toHaveLength(1);
+  });
+});
+
+// 以下 Task 2:表單自檢、key 生命週期、重複送出阻擋、錯誤分派、出金超額提示與 a11y。
+
+/** 填一筆可送出的入金,回到「送出鈕可按」的起點。 */
+async function fillValid(value = '100') {
+  await typeAmount(value);
+}
+
+describe('CashEntryDialog — 前端自檢(UI-SPEC §3 欄位契約)', () => {
+  it('amountEmptyDisablesSubmitWithVisibleReason', async () => {
+    await mountDialog();
+
+    expect(submitButton().disabled).toBe(true);
+    // 尚未輸入也未離開欄位:不提早罵人,但畫面上常駐的說明就是可見原因(鐵律 6)。
+    expect(testid('cash-field-error-amount')).toBeNull();
+    expect(bodyText()).toContain(t('zh', 'cashAmountHint'));
+  });
+
+  it('emptyAmountShowsFieldErrorAfterBlur', async () => {
+    await mountDialog();
+
+    requireTestid('cash-amount').dispatchEvent(new Event('blur'));
+    await nextTick();
+
+    expect(requireTestid('cash-field-error-amount').textContent?.trim()).toBe(t('zh', 'cashErrAmount'));
+    expect(submitButton().disabled).toBe(true);
+  });
+
+  it('invalidAmountsDisableSubmitAndShowError', async () => {
+    await mountDialog();
+
+    for (const bad of ['0', '-1', '1000000000001', '1.123456789', 'abc', '1e5']) {
+      await typeAmount(bad);
+      expect(submitButton().disabled, `金額 ${bad} 應 disabled`).toBe(true);
+      expect(requireTestid('cash-field-error-amount').textContent?.trim(), `金額 ${bad}`).toBe(t('zh', 'cashErrAmount'));
+    }
+  });
+
+  it('boundaryAmountsAreAccepted', async () => {
+    await mountDialog();
+
+    for (const ok of ['1000000000000', '0.12345678', '0.5', '.5', ' 100 ']) {
+      await typeAmount(ok);
+      expect(submitButton().disabled, `金額 ${ok} 應可送出`).toBe(false);
+      expect(testid('cash-field-error-amount')).toBeNull();
+    }
+  });
+
+  it('futureOccurredAtDisablesSubmit', async () => {
+    await mountDialog();
+    await fillValid();
+
+    await setValue(requireTestid('cash-occurred-at') as HTMLInputElement, '2999-01-01T00:00');
+
+    expect(submitButton().disabled).toBe(true);
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAt'));
+  });
+
+  it('localFieldErrorIsLinkedToItsInput', async () => {
+    await mountDialog();
+    await typeAmount('0');
+
+    const input = requireTestid('cash-amount');
+    const error = requireTestid('cash-field-error-amount');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
+    // 欄位級錯誤不加 role="alert":多個欄位同時出錯會連續朗讀(§Accessibility Contract)。
+    expect(error.getAttribute('role')).toBeNull();
+  });
+});
+
+describe('CashEntryDialog — 重複送出阻擋(T-04.1-46)', () => {
+  it('doubleClickSubmitsOnlyOnce', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const { fetchImpl } = await mountDialog({ fetchImpl: cashFetch({ entries: () => pending.promise }) });
+    await fillValid();
+
+    await submit();
+    await submit();
+
+    expect(entryCalls(fetchImpl), '連點兩次只得送出一次').toHaveLength(1);
+  });
+
+  it('freezesTheWholeDialogWhileSubmitting', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const { fetchImpl, onClose } = await mountDialog({ fetchImpl: cashFetch({ entries: () => pending.promise }) });
+    await fillValid();
+    await submit();
+
+    expect(entryCalls(fetchImpl)).toHaveLength(1);
+    expect(submitButton().disabled, '送出中必須有明確的 :disabled').toBe(true);
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'recordingTrade'));
+    for (const id of ['cash-amount', 'cash-occurred-at', 'cash-note', 'cash-type-deposit', 'cash-type-withdrawal', 'cash-currency-TWD', 'cash-cancel']) {
+      expect((requireTestid(id) as HTMLButtonElement | HTMLInputElement).disabled, `${id} 送出中應 disabled`).toBe(true);
+    }
+    expect(document.body.querySelector('[role="dialog"]')?.getAttribute('aria-busy')).toBe('true');
+    const status = requireTestid('cash-submitting-status');
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent?.trim()).toBe(t('zh', 'recordingTrade'));
+
+    // ✕ / 遮罩 / Esc 都不得關閉(in-flight 的寫入不可被中途丟棄)。
+    await click(requireTestid('cash-dialog-close'));
+    await click(document.body.querySelector<HTMLElement>('.mask')!);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushAsync();
+    expect(onClose, '送出中不得關閉').not.toHaveBeenCalled();
+  });
+
+  it('keepsTheSubmitLabelWidthStableByUsingTheWidestLabel', () => {
+    expect(cashEntryDialogSource).toMatch(/\.btn-submit\s*\{[^}]*min-width:/);
+    expect(cashEntryDialogSource).toMatch(/class="btn-accent btn-submit"/);
+  });
+});
+
+describe('CashEntryDialog — Idempotency-Key 生命週期(D-11 / T-04.1-47)', () => {
+  it('opening the dialog does not mint a key; pressing submit mints exactly one', async () => {
+    const randomUUID = stubUuids();
+    await mountDialog();
+    expect(randomUUID).not.toHaveBeenCalled();
+
+    await fillValid();
+    await submit();
+
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('keepsTheKeyAfterANetworkFailure', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('Failed to fetch');
+          return entryResponse();
+        },
+      }),
+    });
+    await fillValid();
+
+    await submit();
+    expect(requireTestid('cash-error')).toBeTruthy();
+    await submit();
+
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+  });
+
+  it('keepsTheKeyAfterA5xx', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => {
+          calls += 1;
+          return calls === 1 ? entryFailure('INTERNAL_ERROR', { status: 500 }) : entryResponse();
+        },
+      }),
+    });
+    await fillValid();
+
+    await submit();
+    await submit();
+
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+  });
+
+  it('mintsANewKeyAfterAnyFieldChange', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({ entries: () => entryFailure('INTERNAL_ERROR', { status: 500 }) }),
+    });
+    await fillValid('100');
+    await submit();
+
+    await typeAmount('200');
+    await submit();
+
+    // 改完欄位立刻送出:flush 'sync' 的 dirty 標記讓這一次就換 key,而不是下一次。
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-2']);
+    expect(entryBodies(fetchImpl).map(b => b.amount)).toEqual([100, 200]);
+  });
+
+  it('dropsTheKeyAfterCashIdempotencyKeyReused', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({ entries: () => entryFailure('CASH_IDEMPOTENCY_KEY_REUSED', { status: 409 }) }),
+    });
+    await fillValid();
+
+    await submit();
+    // 使用者照文案「確認欄位後重新送出」,沒有改任何欄位 —— 仍必須是新 key,否則形成無出路的 409 迴圈。
+    await submit();
+
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-2']);
+  });
+
+  it('showsFieldLevelErrorsUnderTheFieldAndNeverTheFieldValue', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => entryFailure('VALIDATION_FAILED', {
+          fields: { amount: FIELD_VALUE_CANARY },
+        }),
+      }),
+    });
+    await fillValid();
+
+    await submit();
+
+    const error = requireTestid('cash-field-error-amount');
+    expect(error.textContent?.trim()).toBe(t('zh', 'cashErrAmount'));
+    const input = requireTestid('cash-amount');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
+    // 有欄位級錯誤時底部不重複顯示。
+    expect(testid('cash-error')).toBeNull();
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+    expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+
+    // 改欄位後:錯誤清掉、下一次送出自動換 key。
+    await typeAmount('150');
+    expect(testid('cash-field-error-amount')).toBeNull();
+    await submit();
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-2']);
+  });
+
+  it('neverRendersTheIdempotencyKey', async () => {
+    stubUuids();
+    await mountDialog({ fetchImpl: cashFetch({ entries: () => entryFailure('INTERNAL_ERROR', { status: 500 }) }) });
+    await fillValid();
+
+    await submit();
+
+    expect(bodyText()).not.toContain('key-1');
+    expect(document.body.innerHTML).not.toContain('key-1');
+  });
+});
+
+describe('CashEntryDialog — 錯誤分派(UI-SPEC §Copywriting 錯誤狀態)', () => {
+  const CASES: Array<{ name: string; response: () => Response; key: string; code: string }> = [
+    { name: 'VALIDATION_FAILED(無 fields)', response: () => entryFailure('VALIDATION_FAILED'), key: 'cashErrValidation', code: 'VALIDATION_FAILED' },
+    { name: 'CASH_IDEMPOTENCY_KEY_REUSED', response: () => entryFailure('CASH_IDEMPOTENCY_KEY_REUSED', { status: 409 }), key: 'cashErrKeyReused', code: 'CASH_IDEMPOTENCY_KEY_REUSED' },
+    { name: 'AUTH_CSRF_TOKEN_INVALID', response: () => entryFailure('AUTH_CSRF_TOKEN_INVALID', { status: 403 }), key: 'cashErrCsrf', code: 'AUTH_CSRF_TOKEN_INVALID' },
+    { name: 'AUTH_FORBIDDEN', response: () => entryFailure('AUTH_FORBIDDEN', { status: 403 }), key: 'cashErrForbidden', code: 'AUTH_FORBIDDEN' },
+    { name: '其他 403', response: () => entryFailure('SOMETHING_ELSE', { status: 403 }), key: 'cashErrForbidden', code: 'SOMETHING_ELSE' },
+    { name: '500', response: () => entryFailure('INTERNAL_ERROR', { status: 500 }), key: 'cashErrUnknown', code: 'INTERNAL_ERROR' },
+  ];
+
+  it.each(CASES)('dispatches $name to its copy with a code + trace id diagnostics row', async ({ response, key, code }) => {
+    await mountDialog({ fetchImpl: cashFetch({ entries: () => response() }) });
+    await fillValid();
+
+    await submit();
+
+    const error = requireTestid('cash-error');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain(t('zh', key));
+    expect(requireTestid('cash-error-code').textContent?.trim()).toBe(code);
+    expect(requireTestid('cash-error-trace-id').textContent).toContain('trace-cash');
+    // T-04.1-48:後端 message 與使用者輸入不得回射。
+    expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+  });
+
+  it('dispatchesANetworkFailureToCashErrNetworkWithoutATraceId', async () => {
+    await mountDialog({
+      fetchImpl: cashFetch({ entries: () => { throw new TypeError('Failed to fetch'); } }),
+    });
+    await fillValid();
+
+    await submit();
+
+    expect(requireTestid('cash-error').textContent).toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('cash-error-code').textContent?.trim()).toBe('NETWORK_ERROR');
+    // traceId 為 null 時整格不渲染(不顯示 `null`)。
+    expect(testid('cash-error-trace-id')).toBeNull();
+    expect(bodyText()).not.toContain('null');
+  });
+
+  it('doesNotShowA401InsideTheDialog', async () => {
+    const onRefreshFailed = vi.fn();
+    configureApiClientSessionHandlers({ onRefreshFailed });
+    await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => entryFailure('AUTH_TOKEN_EXPIRED', { status: 401 }),
+        refresh: () => entryFailure('AUTH_REFRESH_FAILED', { status: 401 }),
+      }),
+    });
+    await fillValid();
+
+    await submit();
+
+    expect(onRefreshFailed, '401 由 apiClient 升級成全域 session 狀態').toHaveBeenCalled();
+    expect(testid('cash-error'), '401 不得在對話框內顯示').toBeNull();
+  });
+});
+
+describe('CashEntryDialog — 出金超額提示(D-01 / U-16:資訊,不阻擋)', () => {
+  const USD_100 = [{ currency: 'USD', amount: 100 }];
+
+  it('showsAnInformationalHintWhenAWithdrawalExceedsTheBalance', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: USD_100 } });
+
+    await typeAmount('150');
+
+    const hint = requireTestid('cash-withdraw-over-balance');
+    expect(hint.textContent?.trim()).toBe(t('zh', 'cashWithdrawOverBalance').replace('{code}', 'USD'));
+    expect(hint.textContent).not.toContain('{code}');
+    // 不是錯誤:送出鈕仍可按,也不是 alert。
+    expect(submitButton().disabled).toBe(false);
+    expect(hint.getAttribute('role')).toBeNull();
+  });
+
+  it('doesNotShowTheHintWithinTheBalanceOrWithoutBalancesOrForDeposits', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: USD_100 } });
+    await typeAmount('100');
+    expect(testid('cash-withdraw-over-balance'), '剛好等於餘額不算超額').toBeNull();
+    await typeAmount('150');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+
+    await click(requireTestid('cash-type-deposit'));
+    expect(testid('cash-withdraw-over-balance'), '入金不顯示').toBeNull();
+  });
+
+  it('doesNotShowTheHintWhenBalancesAreNotProvided', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD' } });
+
+    await typeAmount('150');
+
+    expect(testid('cash-withdraw-over-balance')).toBeNull();
+  });
+});
+
+describe('CashEntryDialog — 無障礙與初始狀態(§Accessibility Contract)', () => {
+  it('focusesTheAmountOnOpenAndLabelsTheDialog', async () => {
+    await mountDialog();
+
+    expect(document.activeElement).toBe(requireTestid('cash-amount'));
+    const dialog = requireTestid('cash-dialog');
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    const labelledBy = dialog.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(labelledBy!)?.textContent?.trim()).toBe(t('zh', 'cashRecordDeposit'));
+    expect(requireTestid('cash-dialog-close').getAttribute('aria-label')).toBe(t('zh', 'closeCashDialog'));
+    expect(requireTestid('cash-dialog-close').querySelector('[aria-hidden="true"]')).toBeTruthy();
+  });
+
+  it('escapeClosesWhenIdle', async () => {
+    const { onClose } = await mountDialog();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushAsync();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('preselectsTheInitialCurrencyAndTypeWithAriaPressed', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD' } });
+
+    expect(requireTestid('cash-currency-USD').getAttribute('aria-pressed')).toBe('true');
+    expect(requireTestid('cash-currency-TWD').getAttribute('aria-pressed')).toBe('false');
+    expect(requireTestid('cash-type-withdrawal').getAttribute('aria-pressed')).toBe('true');
+    expect(requireTestid('cash-type-deposit').getAttribute('aria-pressed')).toBe('false');
+    expect(document.getElementById('cash-dialog-title')?.textContent?.trim()).toBe(t('zh', 'cashRecordWithdrawal'));
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'cashRecordWithdrawal'));
+  });
+
+  it('showsTheLedgerOnlyAndIrreversibleNotesAlways', async () => {
+    await mountDialog();
+
+    expect(bodyText()).toContain(t('zh', 'cashLedgerOnlyNote'));
+    expect(bodyText()).toContain(t('zh', 'cashIrreversibleNote'));
+  });
+
+  it('usesCsprngKeysAndTheDoubleGuardInSource', () => {
+    expect(cashEntryDialogSource).toContain('crypto.randomUUID');
+    expect(cashEntryDialogSource).not.toContain('Math.random');
+    expect(cashEntryDialogSource).toContain("flush: 'sync'");
+    expect(cashEntryDialogSource).toContain('if (submitting.value) return');
+    expect(cashEntryDialogSource).toContain('role="alert"');
   });
 });
