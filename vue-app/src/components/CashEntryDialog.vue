@@ -26,6 +26,35 @@
 
         <!-- FORM -->
         <div v-if="step === 'form'" class="body">
+          <!-- 沖銷模式:類型 / 幣別 / 金額由原紀錄帶入且不可編輯,發生時間不顯示(送出時為現在,U-04) -->
+          <template v-if="reversalOf">
+            <div class="quote-card" data-testid="cash-reversal-original">
+              <div class="quote-lab">{{ t(lang, 'cashReversalOriginal') }}</div>
+              <div class="sum-row">
+                <span>{{ t(lang, 'cashOccurredAt') }}</span>
+                <b class="num">{{ formatDateTime(reversalOf.occurredAt) }}</b>
+              </div>
+              <div class="sum-row">
+                <span>{{ t(lang, 'type') }}</span>
+                <b>{{ typeLabel(reversalOf.type) }}</b>
+              </div>
+              <div class="sum-row">
+                <span>{{ t(lang, 'cashAmount') }}</span>
+                <b class="num">{{ fmtMoney(reversalOf.amount, reversalOf.currency, minorUnits(reversalOf.currency)) }}</b>
+              </div>
+              <div v-if="reversalOf.note" class="sum-row">
+                <span>{{ t(lang, 'notes') }}</span>
+                <b class="wrap-any">{{ reversalOf.note }}</b>
+              </div>
+            </div>
+            <!-- 沖銷模式唯一的 Display 級元素:方向相反的預覽 -->
+            <div class="reversal-preview" data-testid="cash-reversal-preview">
+              <span class="rp-lab">{{ t(lang, 'cashReversalWillRecord') }}</span>
+              {{ typeLabel(type) }} {{ fmtMoney(reversalOf.amount, reversalOf.currency, minorUnits(reversalOf.currency)) }}
+            </div>
+          </template>
+
+          <template v-else>
           <div id="cash-type-label" class="lab">{{ t(lang, 'type') }}</div>
           <div
             class="type-toggle"
@@ -134,9 +163,12 @@
             data-testid="cash-field-error-occurredAt"
           >{{ fieldErrorText('occurredAt') }}</p>
 
+          </template>
+
           <label class="lab" for="cash-note">{{ t(lang, 'notes') }}</label>
           <textarea
             id="cash-note"
+            ref="noteInput"
             v-model="note"
             rows="2"
             maxlength="500"
@@ -153,9 +185,12 @@
             data-testid="cash-field-error-note"
           >{{ fieldErrorText('note') }}</p>
 
-          <!-- 常駐揭露:這裡只記帳(D-01),寫入後不可改(append-only,錯了只能沖銷) -->
-          <p class="hint note-first">{{ t(lang, 'cashLedgerOnlyNote') }}</p>
-          <p class="hint">{{ t(lang, 'cashIrreversibleNote') }}</p>
+          <p v-if="reversalOf" class="hint note-first">{{ t(lang, 'cashReversalNote') }}</p>
+          <template v-else>
+            <!-- 常駐揭露:這裡只記帳(D-01),寫入後不可改(append-only,錯了只能沖銷) -->
+            <p class="hint note-first">{{ t(lang, 'cashLedgerOnlyNote') }}</p>
+            <p class="hint">{{ t(lang, 'cashIrreversibleNote') }}</p>
+          </template>
           <p
             v-if="submitting"
             class="submitting-note"
@@ -195,21 +230,25 @@
               <span>{{ t(lang, 'notes') }}</span>
               <b class="entry-id">{{ recorded?.note || '—' }}</b>
             </div>
+            <!-- 沖銷分錄以日期指回原紀錄,不露 reversalOfId 原始值 -->
+            <div v-if="reversalOfDate" class="span-2" data-testid="cash-result-reversal-of">
+              <span>{{ tf(lang, 'cashReversalOf', { date: reversalOfDate }) }}</span>
+            </div>
           </div>
         </div>
 
         <!-- 送出錯誤:body 與 footer 之間的單一區域;診斷列只露 code 與 traceId,絕不露後端 message -->
         <div
-          v-if="submitError && !hasFieldLevelErrors"
+          v-if="shownError && !hasFieldLevelErrors"
           class="form-error submit-error"
           role="alert"
           data-testid="cash-error"
         >
           <div>{{ submitErrorMessage }}</div>
           <div class="details">
-            <span data-testid="cash-error-code">{{ submitError.code }}</span>
-            <span v-if="submitError.traceId" data-testid="cash-error-trace-id">
-              {{ t(lang, 'authRequestId') }} {{ submitError.traceId }}
+            <span data-testid="cash-error-code">{{ shownError.code }}</span>
+            <span v-if="shownError.traceId" data-testid="cash-error-trace-id">
+              {{ t(lang, 'authRequestId') }} {{ shownError.traceId }}
             </span>
           </div>
         </div>
@@ -233,12 +272,14 @@
           </template>
           <template v-else>
             <button
+              v-if="!reversalOf"
               type="button"
               class="btn-ghost"
               data-testid="cash-record-another"
               @click="recordAnother"
             >{{ t(lang, 'recordAnother') }}</button>
-            <button type="button" class="btn-accent" data-testid="cash-done" @click="emit('close')">
+            <!-- 沖銷模式只有「完成」(右):flex 的 space-between 在單一子元素時會靠左,所以補 margin-left:auto -->
+            <button type="button" class="btn-accent btn-done" data-testid="cash-done" @click="emit('close')">
               {{ t(lang, 'cashDone') }}
             </button>
           </template>
@@ -256,7 +297,7 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyCashEntryCreated } from '../services/portfolioRevision';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import { fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
+import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
 import type { CashEntryDto, CashEntryType } from '../services/cashApi';
 import type { Lang } from '../types';
@@ -297,6 +338,7 @@ const submitting = ref(false);
 const recorded = ref<CashEntryDto | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
+const noteInput = ref<HTMLTextAreaElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 
 // =================== Idempotency-Key 的生命週期(Phase 4 D-14 / 04.1 D-11) ===================
@@ -315,12 +357,23 @@ interface SubmitError {
   status: number;
 }
 const submitError = ref<SubmitError | null>(null);
+/**
+ * 沖銷衝突(原紀錄已沖銷 / 不可沖銷 / 找不到)的鎖定狀態。與 `submitError` 分開存放:
+ * `submitError` 會在使用者改欄位時清掉,而鎖定後「送出鈕 disabled 的可見原因」必須持續顯示。
+ */
+const lockedError = ref<SubmitError | null>(null);
+const shownError = computed(() => submitError.value ?? lockedError.value);
+
+/** 沖銷模式:類型 / 幣別 / 金額由原紀錄帶入,唯一可編輯的是備註。 */
+const isReversal = computed(() => props.reversalOf !== null);
 
 function resetForm() {
   step.value = 'form';
-  type.value = props.initialType;
-  currency.value = props.initialCurrency;
-  amount.value = '';
+  const original = props.reversalOf;
+  // 方向相反、幣別與金額照原紀錄:DB 層會擋不一致,UI 自動帶值讓它不可能送出不一致的組合(D-25)。
+  type.value = original ? (original.type === 'DEPOSIT' ? 'WITHDRAWAL' : 'DEPOSIT') : props.initialType;
+  currency.value = original ? original.currency : props.initialCurrency;
+  amount.value = original ? String(original.amount) : '';
   note.value = '';
   const now = new Date();
   occurredAt.value = toLocalInputValue(now);
@@ -329,6 +382,7 @@ function resetForm() {
   touched.amount = false;
   touched.occurredAt = false;
   submitError.value = null;
+  lockedError.value = null;
   currentKey.value = null;
   dirtySinceSubmit.value = false;
 }
@@ -337,26 +391,44 @@ watch(() => props.open, async (open) => {
   if (!open) return;
   resetForm();
   await nextTick();
-  // 焦點落在 form 的唯一 Display 元素(金額)。
-  amountInput.value?.focus();
+  // form 焦點落在唯一 Display 元素(金額);沖銷模式落在備註,不落在送出鈕以免 Enter 誤送。
+  (isReversal.value ? noteInput.value : amountInput.value)?.focus();
 }, { immediate: true });
 
 const dialogTitle = computed(() => {
   if (step.value === 'result') return resultTitleText.value;
+  if (isReversal.value) return t(props.lang, 'cashDialogTitleReversal');
   return type.value === 'DEPOSIT' ? t(props.lang, 'cashRecordDeposit') : t(props.lang, 'cashRecordWithdrawal');
 });
 
-const submitLabel = computed(() =>
-  type.value === 'DEPOSIT' ? t(props.lang, 'cashRecordDeposit') : t(props.lang, 'cashRecordWithdrawal'));
+const submitLabel = computed(() => {
+  if (isReversal.value) return t(props.lang, 'cashRecordReversal');
+  return type.value === 'DEPOSIT' ? t(props.lang, 'cashRecordDeposit') : t(props.lang, 'cashRecordWithdrawal');
+});
 
-const resultTitleText = computed(() =>
-  recorded.value?.type === 'WITHDRAWAL' ? t(props.lang, 'cashWithdrawalRecorded') : t(props.lang, 'cashDepositRecorded'));
+const resultTitleText = computed(() => {
+  if (isReversal.value) return t(props.lang, 'cashReversalRecorded');
+  return recorded.value?.type === 'WITHDRAWAL' ? t(props.lang, 'cashWithdrawalRecorded') : t(props.lang, 'cashDepositRecorded');
+});
 
-const recordedTypeLabel = computed(() => {
-  const kind = recorded.value?.type;
+function typeLabel(kind: string | null | undefined): string {
   if (kind === 'DEPOSIT') return t(props.lang, 'cashTypeDeposit');
   if (kind === 'WITHDRAWAL') return t(props.lang, 'cashTypeWithdrawal');
   return kind ?? '—';
+}
+const recordedTypeLabel = computed(() => typeLabel(recorded.value?.type));
+
+/** 本機時區的 `YYYY-MM-DD HH:mm`(與發生時間輸入框同一個時區語意)。 */
+function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const time = new Date(iso);
+  return Number.isNaN(time.getTime()) ? iso : toLocalInputValue(time).replace('T', ' ');
+}
+
+/** result 的「沖銷 {date} 的紀錄」:日期取後端的 `reversalOfOccurredAt`,缺時退回原紀錄的發生時間。 */
+const reversalOfDate = computed(() => {
+  if (!isReversal.value || !recorded.value) return '';
+  return formatDateTime(recorded.value.reversalOfOccurredAt ?? props.reversalOf?.occurredAt).slice(0, 10);
 });
 
 /** 副標:帶號金額(入金 +、出金 -);數字一律取後端回傳值。 */
@@ -393,11 +465,16 @@ function isOccurredAtValid(): boolean {
 }
 const occurredAtValid = computed(() => isOccurredAtValid());
 
-const canSubmit = computed(() => amountValid.value && occurredAtValid.value);
+const canSubmit = computed(() => {
+  if (lockedError.value) return false;
+  // 沖銷模式沒有可輸入的金額 / 時間,自檢不適用。
+  if (isReversal.value) return true;
+  return amountValid.value && occurredAtValid.value;
+});
 
 /** 出金超過該幣別目前餘額 —— 只決定提示是否顯示,不顯示差額,前端不做會計。 */
 const overBalance = computed(() => {
-  if (type.value !== 'WITHDRAWAL' || !props.balances || !amountValid.value) return false;
+  if (isReversal.value || type.value !== 'WITHDRAWAL' || !props.balances || !amountValid.value) return false;
   const balance = props.balances.find(b => b.currency === currency.value)?.amount ?? 0;
   return parsedAmount.value > balance;
 });
@@ -480,7 +557,7 @@ function ensureIdempotencyKey(): string {
 async function submitEntry() {
   if (submitting.value) return;
   submitError.value = null;
-  if (!canSubmit.value || !isOccurredAtValid()) {
+  if (!canSubmit.value || (!isReversal.value && !isOccurredAtValid())) {
     // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時讓欄位錯誤可見,不得靜默。
     touched.amount = true;
     touched.occurredAt = true;
@@ -492,11 +569,13 @@ async function submitEntry() {
     const entry = await getRuntimeApiClients().cash.createEntry({
       type: type.value,
       currency: currency.value,
-      amount: parsedAmount.value,
+      // 沖銷直接取原紀錄的數字,不經字串往返(例如 1e-8 的 String 化)。
+      amount: props.reversalOf ? props.reversalOf.amount : parsedAmount.value,
       note: note.value ? note.value : null,
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
-      occurredAt: toLocalIso(new Date(occurredAt.value)),
-      reversalOfId: null,
+      // 沖銷不送發生時間(U-04):由後端帶 now()。
+      occurredAt: props.reversalOf ? null : toLocalIso(new Date(occurredAt.value)),
+      reversalOfId: props.reversalOf ? props.reversalOf.id : null,
     }, idempotencyKey);
     recorded.value = entry;
     // 冪等命中(同一把 key 拿回既有分錄)與首次建立走完全同一條路徑;重讀同一份資料無害。
@@ -526,10 +605,16 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   AUTH_FORBIDDEN: 'cashErrForbidden',
   // 前端合成的診斷碼:後端不會回這個值,所以與「後端回了未知 code」可明確區分。
   NETWORK_ERROR: 'cashErrNetwork',
+  CASH_ENTRY_ALREADY_REVERSED: 'cashErrAlreadyReversed',
+  CASH_ENTRY_NOT_REVERSIBLE: 'cashErrNotReversible',
+  CASH_ENTRY_NOT_FOUND: 'cashErrOriginalNotFound',
 };
 
+/** 沖銷三衝突:此原紀錄不會再能被沖銷,丟棄 key、鎖定送出、通知開啟者重讀列表。 */
+const REVERSAL_CONFLICT_CODES = ['CASH_ENTRY_ALREADY_REVERSED', 'CASH_ENTRY_NOT_REVERSIBLE', 'CASH_ENTRY_NOT_FOUND'];
+
 const submitErrorMessage = computed(() => {
-  const error = submitError.value;
+  const error = shownError.value;
   if (!error) return '';
   const key = SUBMIT_ERROR_COPY[error.code] ?? (error.status === 403 ? 'cashErrForbidden' : 'cashErrUnknown');
   return t(props.lang, key);
@@ -553,6 +638,14 @@ function handleSubmitFailure(error: unknown) {
   // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
   // key 保留:登入回來後重送的是同一個意圖。
   if (described.status === 401) return;
+
+  if (isReversal.value && REVERSAL_CONFLICT_CODES.includes(described.code)) {
+    currentKey.value = null;
+    lockedError.value = described;
+    submitError.value = null;
+    emit('reversalConflict', described.code);
+    return;
+  }
 
   submitError.value = described;
   if (described.code === 'CASH_IDEMPOTENCY_KEY_REUSED') currentKey.value = null;
@@ -638,6 +731,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 .inp:disabled { opacity: .5; cursor: not-allowed; }
 textarea.inp { resize: vertical; }
 
+/* 沖銷原紀錄摘要卡:OrderTicket .quote-card 的形狀(此卡在對話框內,不在頁面卡片內) */
+.quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); margin-bottom: 4px; }
+.sum-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 400; padding: 4px 0; }
+.sum-row span { color: var(--fg-dim); }
+.sum-row b { font-weight: 600; text-align: right; }
+.wrap-any { overflow-wrap: anywhere; }
+/* 沖銷模式唯一的 Display 級元素 */
+.reversal-preview { margin-top: 16px; font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; }
+.rp-lab { font-size: 12px; font-weight: 600; color: var(--fg-dim); margin-right: 8px; }
+
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
   margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
@@ -718,6 +822,7 @@ textarea.inp { resize: vertical; }
   所以由最寬的標籤(en `Record withdrawal`,13px/600 約 125px + 48px 水平內距)決定下限。
 */
 .btn-submit { min-width: 176px; }
+.btn-done { margin-left: auto; }
 .btn-accent:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
 .btn-accent:disabled { opacity: .4; cursor: not-allowed; }
 .btn-ghost {
