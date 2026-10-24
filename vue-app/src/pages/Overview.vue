@@ -299,7 +299,7 @@
       </div>
     </div>
 
-    <div class="card" style="grid-column: span 6; padding: 20px">
+    <div class="card col-6 stack-mobile" style="padding: 20px">
       <div class="row-between" style="margin-bottom:12px">
         <div class="ttl">★ {{ t(lang, 'watchlist') }}</div>
         <button class="link" @click="emit('navigate', 'watchlist')">→</button>
@@ -320,7 +320,7 @@
       </div>
     </div>
 
-    <div class="card" style="grid-column: span 6; padding: 20px">
+    <div class="card col-6 stack-mobile" style="padding: 20px">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'news') }}</div>
       <div v-for="(n, i) in NEWS" :key="i" class="news-row">
         <div class="news-thumb" />
@@ -865,6 +865,7 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
 }
 .seg-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 .col-4 { grid-column: span 4; }
+.col-6 { grid-column: span 6; }
 .col-8 { grid-column: span 8; }
 .col-12 { grid-column: span 12; }
 .alloc-list { list-style: none; margin: 0; padding: 0; }
@@ -941,6 +942,8 @@ tbody td { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 1
 }
 @media (max-width: 639px) {
   .kpi-card { grid-column: span 12; }
+  /* 觀察清單 / 新聞:兩欄並排在 <640px 會把 main 撐出水平捲動(04.1-19 L2 抓到),改為單欄堆疊 */
+  .stack-mobile { grid-column: span 12; }
   .toolbar-hint { flex: 1 1 100%; }
   .ccy-switch { margin-left: 0; }
 }
