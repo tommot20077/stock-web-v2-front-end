@@ -6,7 +6,13 @@
         <!-- 標題列彙總:mock 由持倉陣列加總,API mode 讀 summary 後端欄位(D-04) -->
         <div v-if="live" class="sub">${{ fmtNum(totalVal, 0) }} · {{ mockPositions.length }} {{ lang === 'zh' ? '檔' : 'holdings' }}</div>
         <div v-else-if="summary" class="sub" data-testid="positions-header-summary">
-          ${{ fmtNum(summary.totalMarketValue, 0) }} · {{ summary.holdingCount }} {{ lang === 'zh' ? '檔' : 'holdings' }}
+          <!-- 04.1-16:summary 是基準幣(D-05);數值與代碼拆成兩個 span(UI-SPEC §Money) -->
+          <span class="num">{{ fmtMoneyAmount(summary.totalMarketValue, summary.baseCurrency, 0) }}</span><span v-if="Number.isFinite(summary.totalMarketValue)" class="stat-ccy">{{ summary.baseCurrency }}</span>
+          · {{ summary.holdingCount }} {{ lang === 'zh' ? '檔' : 'holdings' }}
+        </div>
+        <!-- D-04:缺匯率的持倉不計入總額,明說而不是靜默少算 -->
+        <div v-if="!live && summary && summary.fxExcludedCount > 0" class="sub" data-testid="positions-fx-excluded">
+          {{ tf(lang, 'fxExcludedHint', { n: summary.fxExcludedCount, base: summary.baseCurrency }) }}
         </div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
@@ -135,7 +141,7 @@
         :aria-busy="summaryRefreshing"
       >
         <div class="stat-l">{{ s.l }}</div>
-        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}</div>
+        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
         <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
       </div>
     </template>
@@ -215,7 +221,7 @@
     <!-- Holdings table -->
     <div
       class="card"
-      style="grid-column: span 12; overflow: hidden"
+      style="grid-column: span 12; overflow-x: auto"
       :class="{ 'block-refreshing': holdingsRefreshing }"
       :aria-busy="holdingsRefreshing"
     >
@@ -240,6 +246,12 @@
           {{ t(lang, 'authRetry') }}
         </button>
       </div>
+      <!-- 04.1-16(PORT-10):各列金額是原幣,權重是基準幣;summary 未就緒時沒有 {base} 可填 → 整行不渲染 -->
+      <div
+        v-if="!live && summary && holdings.length"
+        class="currency-note"
+        data-testid="positions-currency-note"
+      >{{ tf(lang, 'holdingsCurrencyNote', { base: summary.baseCurrency }) }}</div>
       <!--
         Q5(大清單):loading 不依賴資料筆數,先渲染固定骨架列,資料到位後一次填入完整表格。
         本階段不做虛擬捲動(holdings 後端不分頁,實測筆數見 SUMMARY)。
@@ -333,6 +345,8 @@
           >
             <td style="font-weight:600;padding-left:16px">
               {{ h.symbol }}
+              <!-- 04.1-16:幣別標籤一次,該列金額改裸數字;currency 缺值不猜、不退回 $ -->
+              <span v-if="h.currency" class="ccy-tag" data-testid="positions-ccy-tag">{{ h.currency }}</span>
               <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
               <span
                 v-if="effectiveLastFill && h.symbol === effectiveLastFill.sym"
@@ -342,15 +356,15 @@
             </td>
             <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
             <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
-            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(h.avgCost) }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(h.avgCost, h.currency, 2) }}</td>
             <td class="num" style="text-align:right">
-              ${{ fmtNum(h.marketPrice) }}
+              {{ fmtMoneyAmount(h.marketPrice, h.currency, 2) }}
               <!-- D-03:行情來自快取可能延遲,顯示時間讓使用者知道資料新鮮度 -->
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
-            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(h.marketValue, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:500">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
             <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
-              <div>{{ signedMoney(h.unrealizedPnl) }}</div>
+              <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
               <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
             </td>
             <!--
@@ -388,8 +402,8 @@
 
 <script setup lang="ts">
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
-import { t } from '../i18n';
-import { fmtRatioPct, fmtSignedMoneyAmount } from '../moneyFormat';
+import { t, tf } from '../i18n';
+import { fmtMoneyAmount, fmtRatioPct, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
@@ -532,10 +546,6 @@ watch(portfolioRevision, () => {
   void refreshHoldings();
 });
 
-function signedMoney(value: number): string {
-  return `${value >= 0 ? '+' : '-'}$${fmtNum(Math.abs(value), 0)}`;
-}
-
 /** D-03:priceTime 為 ISO-8601 或 null(mock 端恆為 null),格式化為本地日期時間短格式。 */
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -547,14 +557,17 @@ function fmtDateTime(iso: string | null): string {
 
 /**
  * D-04 明文例外:後端 HoldingDto / PortfolioSummaryDto 都沒有 weight,只能前端衍生。
- * 但分母必須是後端的 summary.totalMarketValue —— 不得改用本頁 holdings 的 qty×price 自行加總。
- * summary 尚未載入(或分母為 0)時回 null,呈現為破折號而非編造 0.0%。
+ * 04.1-16(RESEARCH Q1.4 / Pitfall 3):D-05 之後 summary.totalMarketValue 是**基準幣**,
+ * 而持倉列的 marketValue 仍是**原幣**。分子必須用後端已折好的 marketValueInBase(同為基準幣),
+ * 前端不知道匯率(D-21),只做比值。
+ * 回傳 0..1 的比值;summary 未載入、分母為 0、或 marketValueInBase 為 null(缺匯率)→ null,
+ * 呈現為破折號而非編造 0.0%。
  */
 function holdingWeight(holding: HoldingDto): number | null {
   const s = summary.value;
   if (!s || !Number.isFinite(s.totalMarketValue) || s.totalMarketValue === 0) return null;
-  if (!Number.isFinite(holding.marketValue)) return null;
-  return holding.marketValue / s.totalMarketValue * 100;
+  if (holding.marketValueInBase === null || !Number.isFinite(holding.marketValueInBase)) return null;
+  return holding.marketValueInBase / s.totalMarketValue;
 }
 
 /** 今日損益格的色彩 class:null → fg-dim;其餘依正負(0 視為 up,與同列 P&L 一致)。 */
@@ -564,13 +577,12 @@ function dayPnlClass(holding: HoldingDto): string {
 }
 
 function holdingWeightLabel(holding: HoldingDto): string {
-  const w = holdingWeight(holding);
-  return w === null ? '—' : `${w.toFixed(1)}%`;
+  return fmtWeightPct(holdingWeight(holding));
 }
 
 function holdingWeightWidth(holding: HoldingDto): string {
   const w = holdingWeight(holding);
-  return `${w === null ? 0 : Math.max(0, Math.min(100, w))}%`;
+  return `${w === null ? 0 : Math.max(0, Math.min(100, w * 100))}%`;
 }
 
 // =============== mock mode:以下計算與模板與 Phase 3 之前完全相同 ===============
@@ -625,43 +637,52 @@ const series = computed(() => {
   return genSeries(cfg.n, start, cfg.vol, cfg.seed);
 });
 
-const mockStats = computed(() => {
+/** 彙總卡的共同形狀。ccy 為空字串 = 不渲染代碼 span(mock 與比率卡)。 */
+interface StatCard { l: string; v: string; ccy: string; up: boolean | null; delta: string }
+
+const mockStats = computed<StatCard[]>(() => {
   const cfg = rangeCfg[range.value];
   const pnl = rangePnl.value;
   return [
     {
       l: t(props.lang, 'mktValue'),
       v: '$' + fmtNum(totalVal.value, 0),
+      ccy: '',
       up: null as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'unrealized'),
       v: (pnl >= 0 ? '+' : '−') + '$' + fmtNum(Math.abs(pnl), 0),
+      ccy: '',
       up: pnl >= 0 as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'roi'),
       v: fmtPct(safePct(pnl, totalCost.value)),
+      ccy: '',
       up: pnl >= 0 as boolean | null,
       delta: rangeLabel.value,
     },
     {
       l: t(props.lang, 'sharpe'),
       v: cfg.sharpe,
+      ccy: '',
       up: null as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'annualized'),
       v: cfg.annual,
+      ccy: '',
       up: cfg.annual.startsWith('+') as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'maxDd'),
       v: cfg.dd,
+      ccy: '',
       up: false as boolean | null,
       delta: '',
     },
@@ -672,16 +693,22 @@ const mockStats = computed(() => {
  * API mode 的六張卡全部來自 summary 後端欄位(D-14 授權落點 + D-04);
  * roi 是比值,×100 是顯示格式化而非平行重算。Sharpe / 年化 / MaxDD 三張寫死卡就地被取代(D-16)。
  */
-const apiStats = computed(() => {
+const apiStats = computed<StatCard[]>(() => {
   const s = summary.value;
   if (!s) return [];
+  const base = s.baseCurrency;
+  // 基準幣金額:數值與代碼拆兩個 span(UI-SPEC §Money);非有限值只顯示 —,不帶代碼。
+  const money = (value: number): Pick<StatCard, 'v' | 'ccy'> =>
+    ({ v: fmtMoneyAmount(value, base, 0), ccy: Number.isFinite(value) ? base : '' });
+  const signed = (value: number): Pick<StatCard, 'v' | 'ccy'> =>
+    ({ v: fmtSignedMoneyAmount(value, base, 0), ccy: Number.isFinite(value) ? base : '' });
   return [
-    { l: t(props.lang, 'mktValue'), v: '$' + fmtNum(s.totalMarketValue, 0), up: null as boolean | null, delta: '' },
-    { l: t(props.lang, 'unrealized'), v: signedMoney(s.unrealizedPnl), up: (s.unrealizedPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), up: (s.roi >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'realizedPnl'), v: signedMoney(s.realizedPnl), up: (s.realizedPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'totalPnlLabel'), v: signedMoney(s.totalPnl), up: (s.totalPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'costBasis'), v: '$' + fmtNum(s.totalCostBasis, 0), up: null as boolean | null, delta: '' },
+    { l: t(props.lang, 'mktValue'), ...money(s.totalMarketValue), up: null, delta: '' },
+    { l: t(props.lang, 'unrealized'), ...signed(s.unrealizedPnl), up: s.unrealizedPnl >= 0, delta: '' },
+    { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), ccy: '', up: s.roi >= 0, delta: '' },
+    { l: t(props.lang, 'realizedPnl'), ...signed(s.realizedPnl), up: s.realizedPnl >= 0, delta: '' },
+    { l: t(props.lang, 'totalPnlLabel'), ...signed(s.totalPnl), up: s.totalPnl >= 0, delta: '' },
+    { l: t(props.lang, 'costBasis'), ...money(s.totalCostBasis), up: null, delta: '' },
   ];
 });
 
@@ -900,6 +927,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .stat { grid-column: span 2; padding: 16px; }
 .stat-l { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
 .stat-v { font-size: 20px; font-weight: 600; margin-top: 6px; letter-spacing: -0.2px; }
+.stat-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .stat-d { font-size: 11px; margin-top: 2px; color: var(--fg-mute); }
 .chart { padding: 20px; }
 .ttl { font-size: 14px; font-weight: 600; }
@@ -937,6 +965,13 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   100% { background: transparent; }
 }
 tbody td { padding: 12px 0; }
+/* 04.1-16:幣別標籤(同 Trades.vue 的 .ccy-tag,UI-SPEC §Interaction 7);只有水平內距,不改列高 */
+.ccy-tag {
+  display: inline-block; margin-left: 8px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
+}
+.currency-note { padding: 8px 16px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
 .day-up { color: var(--up); }
 .day-dn { color: var(--dn); }
 .day-na { color: var(--fg-dim); }
