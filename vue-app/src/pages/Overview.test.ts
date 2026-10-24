@@ -446,7 +446,7 @@ describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', (
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
     expect(callsMatching(fetchMock, '/trades')).toHaveLength(1);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
@@ -459,7 +459,7 @@ describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', (
     mountWithPinia(Overview, { lang: 'en' });
     await flushAsync();
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // mock mode 走 Pinia reactivity:executeOrder 直接改 store,不需要也不應該觸發 refetch。
@@ -476,7 +476,7 @@ describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', (
     expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
 
     gate = deferred<Response>();
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM,不被骨架/空狀態取代。
@@ -508,7 +508,7 @@ describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', (
     await mountApiOverview(fetchMock);
 
     failRefetch = true;
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // 舊資料仍在畫面上,且**不進** status:'error'(那會清掉舊資料)

@@ -674,7 +674,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
     expect(callsMatching(fetchMock, '/portfolio/holdings')).toHaveLength(1);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
@@ -687,7 +687,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
     await flushAsync();
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -698,7 +698,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     // Trades 頁的 GET /trades 沒有任何消費者,發它是純粹的無效工。
     const fetchMock = await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
@@ -716,7 +716,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     expect(rowSymbols()).toEqual(['ZZA']);
 
     gate = deferred<Response>();
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM,不被骨架取代。
@@ -748,7 +748,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     await mountApiPositions(fetchMock);
 
     failRefetch = true;
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // 舊資料仍在畫面上,且**不進** status:'error'(那會清掉舊資料)
@@ -786,7 +786,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     await mountApiPositions(fetchMock);
 
     refetching = true;
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // summary 區塊:舊值留存 + stale 提示,不進 status:'error'

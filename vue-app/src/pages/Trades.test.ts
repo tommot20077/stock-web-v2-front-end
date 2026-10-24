@@ -872,7 +872,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     await mountApiTrades(fetchMock);
     expect(urls(fetchMock)).toHaveLength(1);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(urls(fetchMock)).toHaveLength(2);
@@ -884,7 +884,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
     await flushAsync();
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -902,7 +902,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     expect(rows()[0].textContent).toContain('OLD');
 
     gate = deferred<Response>();
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM。
@@ -932,7 +932,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     await mountApiTrades(fetchMock);
 
     failRefetch = true;
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // 舊資料仍在畫面上,且**不進** status:'error'
@@ -996,7 +996,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await flushAsync();
     expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('1');
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     const p = paramsOf(lastUrl(fetchMock));

@@ -34,6 +34,20 @@ import type { TradeDto } from './apiTypes';
  */
 
 /**
+ * ## 重讀訊號的「觸發來源」(Phase 04.1 U-09 / U-10)
+ *
+ * 原本 revision 只代表「有交易建立,請重讀」。入出金對話框(04.1-15)與基準幣切換也需要
+ * 讓已掛載的頁重讀,但**重讀失敗時的提示文案不能再一律說「交易已記錄」**(U-09),
+ * 現金頁也只該在來源是 `'cash'` 時重讀入出金列表(U-10)。所以每次 bump 都必須帶 cause,
+ * 已掛載的頁依 {@link portfolioRevisionCause} 選文案 / 決定要不要重讀。
+ *
+ * - `'trade'`:交易建立({@link notifyTradeCreated})。
+ * - `'cash'`:入金 / 出金 / 沖銷建立({@link notifyCashEntryCreated})。
+ * - `'baseCurrency'`:基準幣變更(所有金額的換算幣別都變了)。
+ */
+export type PortfolioRevisionCause = 'trade' | 'cash' | 'baseCurrency';
+
+/**
  * 「最近一次成交」的摘要,供 Positions / Trades 兩頁的 fresh 高亮使用(D-13)。
  *
  * 欄位名刻意是 `sym` / `type` / `qty` / `px`,與 `portfolioApi.ts:36` 的 mock
@@ -53,9 +67,17 @@ export interface LastFill {
 const revision = ref(0);
 const lastFill = ref<LastFill | null>(null);
 const lastTradeId = ref<string | null>(null);
+const revisionCause = ref<PortfolioRevisionCause | null>(null);
+const lastCashEntryId = ref<string | null>(null);
 
 /** D-10:portfolio 三塊的重讀訊號。已掛載的頁 `watch` 它,重跑各自現有的 load 函式。 */
 export const portfolioRevision: Readonly<Ref<number>> = readonly(revision);
+
+/**
+ * 最近一次 {@link portfolioRevision} 變動的觸發來源;尚無任何觸發時為 `null`。
+ * 必須與 revision 一起讀:watcher 被觸發時它已經是新值(各 notify* 先設 cause、最後才 bump)。
+ */
+export const portfolioRevisionCause: Readonly<Ref<PortfolioRevisionCause | null>> = readonly(revisionCause);
 
 /**
  * D-13:API mode 的 `lastFill` 等價物。
@@ -71,6 +93,12 @@ export const apiLastFill: Readonly<Ref<LastFill | null>> = readonly(lastFill);
 export const lastCreatedTradeId: Readonly<Ref<string | null>> = readonly(lastTradeId);
 
 /**
+ * 剛建立的入出金分錄 id。現金頁用它標示「新」列,並在新紀錄不在當前頁時顯示提示
+ * (與 {@link lastCreatedTradeId} 同一型態、同一壽命規則;從 Overview 入金後再進現金頁也看得到)。
+ */
+export const lastCreatedCashEntryId: Readonly<Ref<string | null>> = readonly(lastCashEntryId);
+
+/**
  * 交易建立成功後的**唯一**入口:一次呼叫同時產生三個訊號。
  *
  * @param trade 後端回傳的 `TradeDto`(權威快照)。三個訊號全部由它推導,
@@ -79,12 +107,33 @@ export const lastCreatedTradeId: Readonly<Ref<string | null>> = readonly(lastTra
 export function notifyTradeCreated(trade: TradeDto): void {
   lastFill.value = { sym: trade.symbol, type: trade.type, qty: trade.quantity, px: trade.price };
   lastTradeId.value = trade.id;
-  // 最後才 bump:watcher 被觸發時,前兩個訊號已經是新值。
+  revisionCause.value = 'trade';
+  // 最後才 bump:watcher 被觸發時,前面的訊號已經是新值。
   revision.value += 1;
 }
 
-/** 只提升 revision,給「需要重讀但沒有成交事件」的情境備用(例如手動重新整理)。 */
-export function bumpPortfolioRevision(): void {
+/**
+ * 入出金 / 沖銷建立成功後的**唯一**入口(與 {@link notifyTradeCreated} 對稱的單一原子動作)。
+ *
+ * **只設 cash 的訊號**:入金不是成交,絕不得碰 `apiLastFill` / `lastCreatedTradeId`,否則 Positions /
+ * Trades 會標出一筆不存在的「新」交易(RESEARCH Q11.1)。先設 id 與 cause、最後才 bump,
+ * 理由同 {@link notifyTradeCreated}:watcher 被觸發時看到的就是完整的新狀態。
+ *
+ * @param entry 後端回傳的 `CashEntryDto`(只需要 `id`,權威快照的其餘欄位不在此保存)。
+ */
+export function notifyCashEntryCreated(entry: { id: string }): void {
+  lastCashEntryId.value = entry.id;
+  revisionCause.value = 'cash';
+  revision.value += 1;
+}
+
+/**
+ * 只提升 revision,給「需要重讀但沒有成交事件」的情境(例如基準幣變更、手動重新整理)。
+ *
+ * @param cause 觸發來源,**必填**:重讀失敗的提示文案依它選擇,不能再預設成「交易」(U-09)。
+ */
+export function bumpPortfolioRevision(cause: PortfolioRevisionCause): void {
+  revisionCause.value = cause;
   revision.value += 1;
 }
 
@@ -96,6 +145,14 @@ export function bumpPortfolioRevision(): void {
  */
 export function clearLastCreatedTrade(): void {
   lastTradeId.value = null;
+}
+
+/**
+ * 清掉「新入出金紀錄不在目前這一頁」的提示與「新」標記(壽命規則同 {@link clearLastCreatedTrade})。
+ * **只清 `lastCreatedCashEntryId`**,不動 revision 與 cause。
+ */
+export function clearLastCreatedCashEntry(): void {
+  lastCashEntryId.value = null;
 }
 
 /**
@@ -119,4 +176,6 @@ export function resetPortfolioRevisionForTests(): void {
   revision.value = 0;
   lastFill.value = null;
   lastTradeId.value = null;
+  revisionCause.value = null;
+  lastCashEntryId.value = null;
 }
