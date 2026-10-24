@@ -31,6 +31,7 @@ function trade(over: Partial<TradeDto> & { id: string }): TradeDto {
     price: 10,
     fee: 0,
     note: null,
+    currency: 'TWD',
     executedAt: '2026-05-16T09:30:00Z',
     createdAt: '2026-05-16T09:30:00Z',
     ...over,
@@ -232,7 +233,7 @@ afterEach(() => {
 });
 
 describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)', () => {
-  it('初始載入明確送出預設排序與分頁參數,並渲染後端回傳的列(D-07)', async () => {
+  it('初始載入明確送出預設排序與分頁參數,並渲染後端回傳的列;總額為裸數字、幣別為標籤、無 $(D-07 / D-28 / D-30)', async () => {
     const fetchMock = scriptedFetch(() => success(page({
       items: [
         trade({ id: 'u-1', symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, note: 'hello', executedAt: '2026-05-16T09:30:00Z' }),
@@ -256,12 +257,37 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     expect(first).not.toContain('T09:30');
     expect(first).toContain('NVDA');
     expect(first).toContain('BUY');
-    // total 欄 = quantity × price(與後端 total 排序鍵同語意,不含 fee)
-    expect(first).toContain('$300');
+    // total 欄 = quantity × price(與後端 total 排序鍵同語意,不含 fee)。
+    // 04.1-11(D-28 / D-30):原本斷言整列含 `$300`;金額不再寫死 `$`,改定位到總額格(第 6 個 td)
+    // 斷言裸數字 `300`,幣別由標的後的 trades-ccy-tag 表示一次,並鎖定整列不含 `$`。
+    const cells = rows()[0].querySelectorAll('td');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(rows()[0].querySelector('[data-testid="trades-ccy-tag"]')?.textContent).toBe('TWD');
+    expect(first).not.toContain('$');
     expect(first).toContain('hello');
     // note 為 null 時退回破折號,不出現 "null"
     expect(rows()[1].textContent).toContain('—');
     expect(document.body.textContent).not.toContain('null');
+  });
+
+  it('apiRowWithoutCurrencyRendersNoTagAndNoDollar:currency 缺值時不渲染標籤,金額為裸數字,不出現 $ 或 undefined', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'nc-1', symbol: 'NVDA', quantity: 3, price: 100, fee: 1, currency: null })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    expect(rows()).toHaveLength(1);
+    const row = rows()[0];
+    expect(row.querySelector('[data-testid="trades-ccy-tag"]')).toBeNull();
+    const cells = row.querySelectorAll('td');
+    expect(cells[4].textContent?.trim()).toBe('100.00');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(cells[6].textContent?.trim()).toBe('1.00');
+    expect(row.textContent).not.toContain('$');
+    expect(row.textContent).not.toContain('undefined');
+    expect(row.textContent).not.toContain('null');
   });
 
   it('row :key 用 TradeDto.id(uuid),同內容不同 id 的交易不共用 key', async () => {
@@ -713,6 +739,20 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
     await flushAsync();
   }
+
+  it('mockModeTbodyIsUnchanged:mock tbody 不含 trades-ccy-tag,金額仍是 $ 前綴(逐字保留)', async () => {
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    expect(rows()).toHaveLength(3);
+    expect(document.body.querySelector('[data-testid="trades-ccy-tag"]')).toBeNull();
+    const first = rows()[0].querySelectorAll('td');
+    expect(first[4].textContent?.trim()).toBe('$10.00');
+    expect(first[5].textContent?.trim()).toBe('$20');
+    expect(first[6].textContent?.trim()).toBe('$1');
+  });
 
   it('chips 恰為 All / Buy / Sell / Dividend / 2026 五個(mock 保留寫死年份)', async () => {
     await mountMock();
