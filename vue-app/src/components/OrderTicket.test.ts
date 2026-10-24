@@ -142,6 +142,18 @@ function bodyText(): string {
   return document.body.textContent ?? '';
 }
 
+/** 金額的數字與代碼之間是 NBSP(moneyFormat.ts);比對前攤平成一般空白並修剪。 */
+function flat(text: string | null | undefined): string {
+  return (text ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** result-sub 沒有 testid(testid 清單不動),以 class 取。 */
+function resultSub(): HTMLElement {
+  const el = document.body.querySelector<HTMLElement>('.result-sub');
+  expect(el, '.result-sub').toBeTruthy();
+  return el!;
+}
+
 async function setInput(input: HTMLInputElement, value: string) {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -864,6 +876,9 @@ describe('OrderTicket 報價卡與走勢圖(04-10 / D-01 / UI-SPEC §Interaction
  * 後端回傳的 `TradeDto`。**刻意與表單輸入矛盾**:表單會送 10 股 @ 190.20
  * (preset AAPL 的 latestPrice),這裡回 7 股 @ 188.88。
  * 成功畫面只要有任何一格改用表單值渲染,Test 30 立刻紅(D-09 / judgment §1)。
+ *
+ * 04.1-14:`currency` 刻意是 `TWD`,而被選標的(`CONTRADICTORY`)是 `USD` ——
+ * 成功畫面的幣別若取自 review 時的 `selected.currency`,Test 30 立刻紅(T-04.1-44)。
  */
 const RECORDED_TRADE: TradeDto = {
   id: '6f1c2b7e-1a2b-4c3d-8e9f-0123456789ab',
@@ -873,7 +888,7 @@ const RECORDED_TRADE: TradeDto = {
   price: 188.88,
   fee: 1.5,
   note: null,
-  currency: 'USD',
+  currency: 'TWD',
   executedAt: '2026-08-15T10:30:00+08:00',
   createdAt: '2026-08-15T10:30:05+08:00',
 };
@@ -1233,7 +1248,7 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     expect(keys[1]).not.toBe(keys[0]);
   });
 
-  it('Test 30(D-09):成功畫面只渲染後端 TradeDto,即使它與表單輸入矛盾', async () => {
+  it('Test 30(D-09 / 04.1-14):成功畫面只渲染後端 TradeDto(含後端幣別),即使它與表單輸入矛盾', async () => {
     stubUuids();
     await mountSubmitTicket(ticketFetch());
 
@@ -1247,7 +1262,60 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     // 後端回的是 7 股 @ 188.88 —— 畫面必須跟後端走。
     expect(requireTestid('ticket-result-price').textContent).toContain('188.88');
     expect(requireTestid('ticket-result-price').textContent).not.toContain('190.20');
+    // 幣別同樣跟後端走(後端 TWD,被選標的 USD)。
+    expect(requireTestid('ticket-result-price').textContent).toContain('TWD');
     expect(requireTestid('ticket-result-qty').textContent?.trim()).toBe('7');
+  });
+
+  it('resultUsesBackendCurrencyNotSelectedAssetCurrency:選 USD 標的、後端記 TWD → 成功畫面全是 TWD(T-04.1-44)', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+    await gotoReview();
+    await submitTrade();
+
+    const price = flat(requireTestid('ticket-result-price').textContent);
+    expect(price).toBe('188.88 TWD');
+    expect(price).not.toContain('USD');
+    expect(price).not.toContain('$');
+
+    const sub = flat(resultSub().textContent);
+    expect(sub).toContain('@ 188.88 TWD');
+    expect(sub).not.toContain('$');
+
+    // 手續費 1.5 → minorUnits dp 2;總額 7 × 188.88 = 1,322.16(dp 2)。
+    const result = flat(requireTestid('ticket-result').textContent);
+    expect(result).toContain('1.50 TWD');
+    expect(result).toContain('1,322.16 TWD');
+    expect(result).not.toContain('USD');
+    expect(result).not.toContain('$');
+  });
+
+  it('resultWithoutCurrencyShowsBareNumber:後端 currency 缺值 → 只顯示數字,不帶代碼、不退回 $(U-29)', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({ trades: () => tradeResponse({ ...RECORDED_TRADE, currency: null }) }));
+    await gotoReview();
+    await submitTrade();
+
+    const price = flat(requireTestid('ticket-result-price').textContent);
+    expect(price).toBe('188.88');
+    const result = flat(requireTestid('ticket-result').textContent);
+    expect(result).not.toContain('$');
+    expect(result).not.toContain('undefined');
+    expect(result).not.toContain('USD');
+    expect(flat(resultSub().textContent)).toContain('@ 188.88');
+  });
+
+  it('mockModeResultKeepsOriginalFormat:mock mode 成功畫面維持既有 $ 呈現(UI-SPEC §0)', async () => {
+    await mountTicket();
+    await click(requireTestid('ticket-review-advance'));
+    await clickDeep(requireTestid('ticket-submit'));
+
+    expect(testid('ticket-result'), 'mock 送出後應進入成功畫面').toBeTruthy();
+    const price = flat(requireTestid('ticket-result-price').textContent);
+    expect(price).toMatch(/^\$\d[\d,]*\.\d{2}$/);
+    expect(flat(resultSub().textContent)).toMatch(/@ \$\d[\d,]*\.\d{2}$/);
+    const result = flat(requireTestid('ticket-result').textContent);
+    expect(result).not.toMatch(/\b(USD|TWD|JPY|EUR)\b/);
   });
 
   it('Test 31(D-09):交易編號完整顯示,且畫面沒有任何撮合語意', async () => {
@@ -1264,7 +1332,7 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     }
   });
 
-  it('Test 32(U-03 冪等命中):同一把 key 重送拿到既有交易,畫面與首次建立完全相同', async () => {
+  it('Test 32(U-03 冪等命中 / 04.1-14):同一把 key 重送拿到既有交易,畫面(含後端幣別)與首次建立完全相同', async () => {
     stubUuids();
     let fail = true;
     const fetchImpl = ticketFetch({
@@ -1285,7 +1353,7 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
 
     // 目前的 API 契約沒有任何 replay 訊號,所以**不做**「這筆已存在」的變體。
     expect(requireTestid('ticket-result-trade-id').textContent?.trim()).toBe(RECORDED_TRADE.id);
-    expect(requireTestid('ticket-result-price').textContent).toContain('188.88');
+    expect(flat(requireTestid('ticket-result-price').textContent)).toBe('188.88 TWD');
     for (const term of ['already', 'Already', '已存在', 'duplicate', 'Duplicate']) {
       expect(bodyText(), `冪等命中不得出現變體文案:${term}`).not.toContain(term);
     }
