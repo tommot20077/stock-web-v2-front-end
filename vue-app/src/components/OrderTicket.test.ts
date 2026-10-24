@@ -1440,7 +1440,7 @@ describe('OrderTicket 送出路徑 — D-16 錯誤分派(04-11)', () => {
       { code: 'VALIDATION_FAILED', status: 400, copy: 'tradeErrValidation' },
       // U-08:單一 unsafe 請求被 CSRF 拒絕 → 顯示在**發起處**,不是全域 banner。
       { code: 'AUTH_CSRF_TOKEN_INVALID', status: 403, copy: 'tradeErrCsrf' },
-      { code: 'ACCESS_DENIED', status: 403, copy: 'tradeErrForbidden' },
+      { code: 'AUTH_FORBIDDEN', status: 403, copy: 'tradeErrForbidden' },
       { code: 'SOMETHING_COMPLETELY_NEW', status: 500, copy: 'tradeErrUnknown' },
     ];
 
