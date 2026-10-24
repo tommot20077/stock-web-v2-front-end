@@ -1,5 +1,6 @@
 import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import type { PaginatedResponse, RuntimeDataMode } from './apiTypes';
+import { BASE_CURRENCY_OPTIONS } from './profileApi';
 
 /** 後端 `CashEntryType`;沖銷是「方向相反」的另一筆,所以只有這兩種。 */
 export type CashEntryType = 'DEPOSIT' | 'WITHDRAWAL';
@@ -97,33 +98,142 @@ export function createHttpCashApi(basePath = '/api/v1'): CashApi {
   };
 }
 
-/** mock 帳本;模組內狀態,回傳前一律 structuredClone,外部修改不會回灌。 */
-let mockEntries: CashEntryDto[] = [];
+/** 儲存在 mock 帳本的原始分錄;`reversed` / `reversalOfOccurredAt` 在讀取時即時計算。 */
+type StoredCashEntry = Omit<CashEntryDto, 'reversed' | 'reversalOfOccurredAt'>;
 
-function byOccurredAtDesc(a: CashEntryDto, b: CashEntryDto): number {
+/** 已寫入分錄的冪等紀錄(key -> 當時的 payload 與結果 id)。 */
+interface MockIdempotencyRecord {
+  entryId: string;
+  type: string;
+  currency: string;
+  amount: number;
+  occurredAt: string | null;
+  reversalOfId: string | null;
+}
+
+/**
+ * 固定種子(U-26):一開頁就能看到四種列狀態 —— 一般入金、已沖銷的出金、沖銷紀錄本身。
+ * id 與時間皆為固定字串、不用亂數,讓畫面與測試可重現。
+ * 沖銷紀錄(`mock-cash-4`)指回出金(`mock-cash-3`),所以 `mock-cash-3` 讀取時 `reversed` 為 true。
+ */
+function seedEntries(): StoredCashEntry[] {
+  return [
+    {
+      id: 'mock-cash-1', type: 'DEPOSIT', currency: 'TWD', amount: 500000, note: 'Initial deposit',
+      occurredAt: '2026-10-01T09:00:00+08:00', createdAt: '2026-10-01T09:00:05+08:00', reversalOfId: null,
+    },
+    {
+      id: 'mock-cash-2', type: 'DEPOSIT', currency: 'USD', amount: 20000, note: null,
+      occurredAt: '2026-10-05T09:00:00+08:00', createdAt: '2026-10-05T09:00:05+08:00', reversalOfId: null,
+    },
+    {
+      id: 'mock-cash-3', type: 'WITHDRAWAL', currency: 'USD', amount: 500, note: 'Recorded by mistake',
+      occurredAt: '2026-10-10T10:00:00+08:00', createdAt: '2026-10-10T10:00:05+08:00', reversalOfId: null,
+    },
+    {
+      id: 'mock-cash-4', type: 'DEPOSIT', currency: 'USD', amount: 500, note: null,
+      occurredAt: '2026-10-12T10:00:00+08:00', createdAt: '2026-10-12T10:00:05+08:00', reversalOfId: 'mock-cash-3',
+    },
+  ];
+}
+
+/** mock 帳本;模組內狀態,回傳前一律 structuredClone,外部修改不會回灌。 */
+let mockEntries: StoredCashEntry[] = seedEntries();
+let mockIdempotency = new Map<string, MockIdempotencyRecord>();
+
+export function resetMockCashLedgerForTests(): void {
+  mockEntries = seedEntries();
+  mockIdempotency = new Map();
+}
+
+function byOccurredAtDesc(a: StoredCashEntry, b: StoredCashEntry): number {
   const diff = Date.parse(b.occurredAt) - Date.parse(a.occurredAt);
   if (diff !== 0) return diff;
   return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
 }
 
-export function resetMockCashLedgerForTests(): void {
-  mockEntries = [];
+function toDto(entry: StoredCashEntry): CashEntryDto {
+  const original = entry.reversalOfId === null
+    ? undefined
+    : mockEntries.find(candidate => candidate.id === entry.reversalOfId);
+  return {
+    ...entry,
+    reversalOfOccurredAt: original?.occurredAt ?? null,
+    reversed: mockEntries.some(candidate => candidate.reversalOfId === entry.id),
+  };
+}
+
+function validationFailed(fields: Record<string, string>): ApiClientError {
+  return new ApiClientError({ status: 400, code: 'VALIDATION_FAILED', message: 'Validation failed', fields });
+}
+
+function sameInstant(a: string, b: string): boolean {
+  return Date.parse(a) === Date.parse(b);
 }
 
 export function createMockCashApi(): CashApi {
   return {
     mode: 'mock',
-    async createEntry(request) {
-      if (request.amount <= 0) {
-        throw new ApiClientError({
-          status: 400,
-          code: 'VALIDATION_FAILED',
-          message: 'Validation failed',
-          fields: { amount: 'must be greater than 0' },
-        });
+    // 順序與錯誤碼對齊後端 `CashLedgerService#createEntry`:欄位驗證 -> 原分錄查找 ->
+    // 冪等快路徑 -> 沖銷三規則 -> 寫入。冪等排在「已沖銷」之前,成功沖銷的重送才會回同一筆。
+    async createEntry(request, idempotencyKey) {
+      const fields: Record<string, string> = {};
+      if (idempotencyKey.trim() === '') fields['Idempotency-Key'] = 'must not be blank';
+      if (request.type !== 'DEPOSIT' && request.type !== 'WITHDRAWAL') fields.type = 'invalid type';
+      if (!(BASE_CURRENCY_OPTIONS as readonly string[]).includes(request.currency)) {
+        fields.currency = 'unsupported currency';
       }
+      if (!(request.amount > 0)) fields.amount = 'must be greater than 0';
+      if (Object.keys(fields).length > 0) throw validationFailed(fields);
+
+      const reversalOfId = request.reversalOfId ?? null;
+      const original = reversalOfId === null
+        ? undefined
+        : mockEntries.find(candidate => candidate.id === reversalOfId);
+      if (reversalOfId !== null && !original) {
+        throw new ApiClientError({ status: 404, code: 'CASH_ENTRY_NOT_FOUND', message: 'Cash entry not found' });
+      }
+
+      const known = mockIdempotency.get(idempotencyKey);
+      if (known) {
+        const samePayload = known.type === request.type
+          && known.currency === request.currency
+          && known.amount === request.amount
+          && known.reversalOfId === reversalOfId
+          && (request.occurredAt == null || (known.occurredAt !== null && sameInstant(known.occurredAt, request.occurredAt)));
+        if (!samePayload) {
+          throw new ApiClientError({
+            status: 409,
+            code: 'CASH_IDEMPOTENCY_KEY_REUSED',
+            message: 'Idempotency key was reused with a different payload',
+          });
+        }
+        return structuredClone(toDto(mockEntries.find(candidate => candidate.id === known.entryId)!));
+      }
+
+      if (original) {
+        if (original.reversalOfId !== null) {
+          throw new ApiClientError({
+            status: 409,
+            code: 'CASH_ENTRY_NOT_REVERSIBLE',
+            message: 'A reversal entry cannot be reversed',
+          });
+        }
+        if (mockEntries.some(candidate => candidate.reversalOfId === original.id)) {
+          throw new ApiClientError({
+            status: 409,
+            code: 'CASH_ENTRY_ALREADY_REVERSED',
+            message: 'Cash entry has already been reversed',
+          });
+        }
+        const oppositeType = original.type === 'DEPOSIT' ? 'WITHDRAWAL' : 'DEPOSIT';
+        if (request.type !== oppositeType || request.currency !== original.currency || request.amount !== original.amount) {
+          throw validationFailed({ reversalOfId: 'must mirror the original entry' });
+        }
+      }
+
       const now = new Date().toISOString();
-      const entry: CashEntryDto = {
+      const entry: StoredCashEntry = {
         id: crypto.randomUUID(),
         type: request.type,
         currency: request.currency,
@@ -131,19 +241,25 @@ export function createMockCashApi(): CashApi {
         note: request.note ?? null,
         occurredAt: request.occurredAt ?? now,
         createdAt: now,
-        reversalOfId: request.reversalOfId ?? null,
-        reversalOfOccurredAt: null,
-        reversed: false,
+        reversalOfId,
       };
       mockEntries.push(entry);
-      return structuredClone(entry);
+      mockIdempotency.set(idempotencyKey, {
+        entryId: entry.id,
+        type: entry.type,
+        currency: entry.currency,
+        amount: entry.amount,
+        occurredAt: request.occurredAt ?? null,
+        reversalOfId,
+      });
+      return structuredClone(toDto(entry));
     },
     async listEntries(params = {}) {
       const page = params.page ?? 0;
       const size = params.size ?? 10;
       const sorted = [...mockEntries].sort(byOccurredAtDesc);
       return structuredClone({
-        items: sorted.slice(page * size, (page + 1) * size),
+        items: sorted.slice(page * size, (page + 1) * size).map(toDto),
         page,
         size,
         totalElements: sorted.length,
