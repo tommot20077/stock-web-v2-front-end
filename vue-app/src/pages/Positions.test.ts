@@ -101,6 +101,7 @@ function freshTrade(symbol: string): TradeDto {
     price: 1,
     fee: 0,
     note: null,
+    currency: 'USD',
     executedAt: '2026-08-15T10:30:00+08:00',
     createdAt: '2026-08-15T10:30:05+08:00',
   };
@@ -790,6 +791,7 @@ const TICKET_RECORDED: TradeDto = {
   price: 188.88,
   fee: 1.5,
   note: null,
+  currency: 'USD',
   executedAt: '2026-08-15T10:30:00+08:00',
   createdAt: '2026-08-15T10:30:05+08:00',
 };

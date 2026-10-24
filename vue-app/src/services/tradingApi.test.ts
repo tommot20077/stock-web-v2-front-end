@@ -55,6 +55,7 @@ const TRADE_DTO: TradeDto = {
   price: 218.4,
   fee: 1.5,
   note: '手動補登',
+  currency: 'USD',
   executedAt: '2026-07-29T02:30:00Z',
   createdAt: '2026-07-30T01:00:00Z',
 };
@@ -268,10 +269,12 @@ describe('tradingApi mock adapter', () => {
       fee: 1.5,
       sector: 'Tech',
     });
-    // 回傳 TradeDto 形狀:九個欄位齊全,消費端(D-09 成功畫面 / D-13 高亮)只有一條路徑。
+    // 回傳 TradeDto 形狀:十個欄位齊全(04.1-11 起含 currency),消費端(D-09 成功畫面 / D-13 高亮)只有一條路徑。
     expect(Object.keys(trade).sort()).toEqual(
-      ['createdAt', 'executedAt', 'fee', 'id', 'note', 'price', 'quantity', 'symbol', 'type'],
+      ['createdAt', 'currency', 'executedAt', 'fee', 'id', 'note', 'price', 'quantity', 'symbol', 'type'],
     );
+    // mock 沒有幣別資料:不猜測(UI-SPEC U-29)
+    expect(trade.currency).toBeNull();
     // id 沿用 portfolioApi.tradeDtoFrom 的 `mock-{index}` 慣例;store 是 unshift,新交易永遠是 index 0。
     expect(trade.id).toBe('mock-0');
     expect(trade).toMatchObject({ symbol: 'AAPL', type: 'BUY', quantity: 10, price: 218.4, fee: 1.5 });

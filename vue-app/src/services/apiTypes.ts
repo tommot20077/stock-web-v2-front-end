@@ -82,6 +82,11 @@ export interface TradeDto {
   price: number;
   fee: number;
   note: string | null;
+  /**
+   * 標的交易幣別(後端經 AssetFacade 取得的 ISO 4217 代碼,例 `TWD`)。
+   * 後端舊版 / 快取舊形狀或 mock 沒有幣別資料時為 null —— 畫面不得猜測幣別。
+   */
+  currency: string | null;
   /** ISO-8601;顯示取日期部分 */
   executedAt: string;
   createdAt: string;

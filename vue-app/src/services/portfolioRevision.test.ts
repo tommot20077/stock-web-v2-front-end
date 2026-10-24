@@ -37,6 +37,7 @@ const TRADE_DTO: TradeDto = {
   price: 218.4,
   fee: 1.5,
   note: '手動補登',
+  currency: 'USD',
   executedAt: '2026-07-29T02:30:00Z',
   createdAt: '2026-07-30T01:00:00Z',
 };

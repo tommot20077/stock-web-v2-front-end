@@ -31,11 +31,11 @@ const SUMMARY: PortfolioSummaryDto = {
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。
 const API_TRADES: TradeDto[] = [
-  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: 10, price: 11.5, fee: 1, note: null, executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
-  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: 20, price: 12.5, fee: 1, note: null, executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
-  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: 30, price: 13.5, fee: 1, note: null, executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
-  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: 40, price: 14.5, fee: 1, note: null, executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
-  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: 50, price: 15.5, fee: 1, note: null, executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
+  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: 10, price: 11.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
+  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: 20, price: 12.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
+  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: 30, price: 13.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
+  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: 40, price: 14.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
+  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: 50, price: 15.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
 ];
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -420,7 +420,7 @@ function deferred<T>() {
 }
 
 const REFRESHED_TRADES: TradeDto[] = [
-  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null, executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
+  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null, currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
 ];
 
 describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {

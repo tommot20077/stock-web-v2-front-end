@@ -107,6 +107,8 @@ function tradeDtoFrom(trade: Trade, index: number): TradeDto {
     price: trade.px,
     fee: trade.fee,
     note: trade.note,
+    // mock `Trade` 沒有幣別,不猜測(UI-SPEC U-29);mock 畫面不讀此欄位。
+    currency: null,
     executedAt: `${trade.d}T00:00:00Z`,
     createdAt: `${trade.d}T00:00:00Z`,
   };
