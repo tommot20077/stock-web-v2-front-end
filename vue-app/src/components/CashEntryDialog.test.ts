@@ -3,7 +3,9 @@ import { nextTick } from 'vue';
 import CashEntryDialog from './CashEntryDialog.vue';
 // 原始碼字面(Vite `?raw`):鎖住行為測試抓不到的「這段程式碼不存在」(沿用 OrderTicket.test.ts 的手法)。
 import cashEntryDialogSource from './CashEntryDialog.vue?raw';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
+import { fmtMoney, fmtMoneyAmount } from '../moneyFormat';
+import { toLocalInputValue } from '../services/localTime';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
@@ -669,5 +671,181 @@ describe('CashEntryDialog — 無障礙與初始狀態(§Accessibility Contract)
     expect(cashEntryDialogSource).toContain("flush: 'sync'");
     expect(cashEntryDialogSource).toContain('if (submitting.value) return');
     expect(cashEntryDialogSource).toContain('role="alert"');
+  });
+});
+
+// 以下 Task 3:沖銷模式(reversalOf)—— 鎖定欄位、預覽、reversalOfId、沖銷衝突處置。
+
+/** 要被沖銷的原紀錄:出金 1,000 USD → 沖銷會記一筆入金。 */
+const ORIGINAL: CashEntryDto = {
+  id: 'e-9',
+  type: 'WITHDRAWAL',
+  currency: 'USD',
+  amount: 1000,
+  note: 'atm',
+  occurredAt: '2026-10-05T10:00:00+08:00',
+  createdAt: '2026-10-05T10:00:05+08:00',
+  reversalOfId: null,
+  reversalOfOccurredAt: null,
+  reversed: false,
+};
+
+/** 後端回傳的沖銷分錄:id 與原紀錄不同,方向相反,`reversalOfOccurredAt` 由後端帶出。 */
+const REVERSAL_ENTRY: CashEntryDto = {
+  id: 'rev-entry-1',
+  type: 'DEPOSIT',
+  currency: 'USD',
+  amount: 1000,
+  note: null,
+  occurredAt: '2026-10-24T11:00:00+08:00',
+  createdAt: '2026-10-24T11:00:01+08:00',
+  reversalOfId: 'e-9',
+  reversalOfOccurredAt: '2026-10-05T10:00:00+08:00',
+  reversed: false,
+};
+
+/** 與元件相同的本機時區顯示:`YYYY-MM-DD HH:mm`。 */
+function localDateTime(iso: string): string {
+  return toLocalInputValue(new Date(iso)).replace('T', ' ');
+}
+
+function localDate(iso: string): string {
+  return localDateTime(iso).slice(0, 10);
+}
+
+async function mountReversal(options: MountOptions = {}) {
+  return mountDialog({ ...options, props: { reversalOf: ORIGINAL, ...options.props } });
+}
+
+describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
+  it('opensWithTheOriginalSummaryAndAnOppositeDirectionPreview', async () => {
+    await mountReversal();
+
+    expect(document.getElementById('cash-dialog-title')?.textContent?.trim()).toBe(t('zh', 'cashDialogTitleReversal'));
+    const original = requireTestid('cash-reversal-original').textContent ?? '';
+    expect(original).toContain(t('zh', 'cashReversalOriginal'));
+    expect(original).toContain(localDateTime(ORIGINAL.occurredAt));
+    expect(original).toContain(t('zh', 'cashTypeWithdrawal'));
+    expect(original).toContain(fmtMoney(1000, 'USD', 2));
+    expect(original).toContain('atm');
+
+    const preview = requireTestid('cash-reversal-preview').textContent ?? '';
+    expect(preview).toContain(t('zh', 'cashReversalWillRecord'));
+    expect(preview).toContain(t('zh', 'cashTypeDeposit'));
+    expect(preview, '預覽是方向相反的一筆').not.toContain(t('zh', 'cashTypeWithdrawal'));
+    expect(preview).toContain(fmtMoney(1000, 'USD', 2));
+
+    expect(bodyText()).toContain(t('zh', 'cashReversalNote'));
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'cashRecordReversal'));
+    // 原紀錄的 id 只用於送出,不顯示(UI-SPEC Security & Diagnostics Display Contract)。
+    expect(bodyText()).not.toContain('e-9');
+  });
+
+  it('hasNoEditableControlsForTypeCurrencyAmountOrOccurredAtAndFocusesTheNote', async () => {
+    await mountReversal();
+
+    for (const id of ['cash-type-deposit', 'cash-type-withdrawal', 'cash-currency-USD', 'cash-currency-TWD', 'cash-amount', 'cash-occurred-at']) {
+      expect(testid(id), `${id} 在沖銷模式不得存在`).toBeNull();
+    }
+    expect(document.activeElement, '焦點落在備註,不落在送出鈕,避免 Enter 誤送').toBe(requireTestid('cash-note'));
+    expect(submitButton().disabled, '一開啟就可送出(欄位都由原紀錄帶入)').toBe(false);
+  });
+
+  it('submitsTheMirroredEntryWithReversalOfIdAndNoOccurredAt', async () => {
+    stubUuids();
+    const { fetchImpl, onRecorded } = await mountReversal({
+      fetchImpl: cashFetch({ entries: () => entryResponse(REVERSAL_ENTRY) }),
+    });
+
+    await typeNote('oops');
+    await submit();
+
+    expect(entryCalls(fetchImpl)).toHaveLength(1);
+    expect(entryBodies(fetchImpl)[0]).toEqual({
+      type: 'DEPOSIT',
+      currency: 'USD',
+      amount: 1000,
+      note: 'oops',
+      occurredAt: null,
+      reversalOfId: 'e-9',
+    });
+    expect(onRecorded).toHaveBeenCalledWith(REVERSAL_ENTRY);
+  });
+
+  it('showsTheReversalResultWithOnlyADoneButton', async () => {
+    await mountReversal({ fetchImpl: cashFetch({ entries: () => entryResponse(REVERSAL_ENTRY) }) });
+
+    await submit();
+
+    requireTestid('cash-result');
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'cashReversalRecorded'));
+    expect(requireTestid('cash-result-entry-id').textContent?.trim()).toBe('rev-entry-1');
+    expect(bodyText()).toContain(tf('zh', 'cashReversalOf', { date: localDate(REVERSAL_ENTRY.reversalOfOccurredAt!) }));
+    expect(bodyText()).toContain(fmtMoneyAmount(1000, 'USD'));
+    expect(testid('cash-record-another'), '沖銷模式沒有「記錄下一筆」').toBeNull();
+    expect(requireTestid('cash-done')).toBeTruthy();
+    // 重讀訊號仍是 cash,且絕不碰交易訊號。
+    expect(portfolioRevisionCause.value).toBe('cash');
+    expect(lastCreatedCashEntryId.value).toBe('rev-entry-1');
+    expect(apiLastFill.value).toBeNull();
+    expect(bodyText()).not.toContain('e-9');
+  });
+
+  it.each([
+    { code: 'CASH_ENTRY_ALREADY_REVERSED', status: 409, key: 'cashErrAlreadyReversed' },
+    { code: 'CASH_ENTRY_NOT_REVERSIBLE', status: 409, key: 'cashErrNotReversible' },
+    { code: 'CASH_ENTRY_NOT_FOUND', status: 404, key: 'cashErrOriginalNotFound' },
+  ])('locksTheDialogAndNotifiesTheOpenerOn $code', async ({ code, status, key }) => {
+    stubUuids();
+    const { fetchImpl, onReversalConflict } = await mountReversal({
+      fetchImpl: cashFetch({ entries: () => entryFailure(code, { status }) }),
+    });
+
+    await submit();
+
+    expect(requireTestid('cash-error').textContent).toContain(t('zh', key));
+    expect(requireTestid('cash-error-code').textContent?.trim()).toBe(code);
+    expect(onReversalConflict).toHaveBeenCalledTimes(1);
+    expect(onReversalConflict).toHaveBeenCalledWith(code);
+    expect(submitButton().disabled, '此原紀錄不可再沖銷,送出鈕 disabled').toBe(true);
+
+    // 再改備註也不會重新啟用,且可見原因(錯誤文案)持續顯示。
+    await typeNote('another try');
+    expect(submitButton().disabled).toBe(true);
+    expect(requireTestid('cash-error').textContent).toContain(t('zh', key));
+    await submit();
+    expect(entryCalls(fetchImpl), '鎖定後不得再送').toHaveLength(1);
+    expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+  });
+
+  it('mintsANewKeyAfterEditingTheNoteInReversalMode', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountReversal({
+      fetchImpl: cashFetch({ entries: () => entryFailure('INTERNAL_ERROR', { status: 500 }) }),
+    });
+
+    await submit();
+    await submit();
+    await typeNote('changed');
+    await submit();
+
+    // 沒改欄位的重試沿用同一把;備註變更後換新 key(一致性;若前次其實已成功,後端會以 ALREADY_REVERSED 擋下)。
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1', 'key-2']);
+  });
+
+  it('doesNotShowTheWithdrawOverBalanceHintInReversalMode', async () => {
+    await mountDialog({
+      props: {
+        reversalOf: { ...ORIGINAL, type: 'DEPOSIT' },
+        balances: [{ currency: 'USD', amount: 1 }],
+      },
+    });
+
+    expect(testid('cash-withdraw-over-balance')).toBeNull();
+  });
+
+  it('keepsTheReversalPreviewAndConflictContractInSource', () => {
+    expect(cashEntryDialogSource.match(/data-testid="cash-reversal-preview"/g)).toHaveLength(1);
+    expect((cashEntryDialogSource.match(/reversalConflict/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });
