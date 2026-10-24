@@ -4,8 +4,9 @@ import Overview from './Overview.vue';
 // 原始碼字面(Vite ?raw):用來斷言 Overview 沒有 import mock store(PORT-04)。
 // 不走 node:fs —— 本專案 tsconfig 未含 @types/node,且本 plan 不得新增套件。
 import overviewSource from './Overview.vue?raw';
-import { fmtNum, fmtPct } from '../data';
-import { t } from '../i18n';
+import { fmtNum } from '../data';
+import { t, tf } from '../i18n';
+import { fmtRatioPct, fmtSignedMoney } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import { bumpPortfolioRevision, resetPortfolioRevisionForTests } from '../services/portfolioRevision';
@@ -14,10 +15,10 @@ import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import type { Trade } from '../types';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 
-// Phase 3 Plan 03(03-03-PLAN.md)。API mode 的 Overview 只能顯示後端真的有的資料:
-// 兩張 KPI(D-14)、近期交易走 GET /trades?page=0&size=5(D-09),其餘合成/寫死區塊隱藏
-// (D-14 / D-16)。四態與 traceId 見 D-11 / D-12,全域 banner 邊界見 D-13。
-// mock mode 必須與 Phase 3 之前完全一致。
+// Phase 3 Plan 03(03-03-PLAN.md)+ Phase 04.1 Plan 18。API mode 的 Overview 只能顯示後端真的有的資料:
+// 四張 KPI(04.1:總資產 / 今日損益 / 可用現金 / 總報酬率,數值刻意不同於 mock 值以證明來源)、
+// 近期交易走 GET /trades?page=0&size=5(D-09),無後端來源的合成區塊仍隱藏(D-16)。
+// 四態與 traceId 見 D-11 / D-12,全域 banner 邊界見 D-13。mock mode 必須與 Phase 3 之前完全一致。
 
 const SUMMARY: PortfolioSummaryDto = {
   totalMarketValue: 1234567.89,
@@ -27,15 +28,16 @@ const SUMMARY: PortfolioSummaryDto = {
   totalPnl: 135802.46,
   roi: 0.1234,
   holdingCount: 3,
-  // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設,讓後續 plan 的「資料來自 API」斷言可沿用)
+  // Phase 04.1 欄位:值刻意不等於 mock 值(+$12,481 / $84,210 / 約 1,000,000),
+  // 「資料來自 API 而非 mock」的斷言才有意義(T-04.1-55)。
   baseCurrency: 'TWD',
   fxExcludedCount: 0,
   unconvertedCurrencies: [],
-  dayPricePnl: 4321,
+  dayPricePnl: 12345,
   dayPricePnlRatio: 0.0104,
   dayPnlExcludedCount: 0,
   cash: 84210.5,
-  totalEquity: 1319778.39,
+  totalEquity: 7654321,
   cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
   allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
   sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
@@ -130,6 +132,20 @@ function click(el: HTMLElement) {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
 
+/** 卡片的 Display 數值(不含幣別代碼)。 */
+function kpiValue(card: HTMLElement): string {
+  return card.querySelector('.kpi-v .num')?.textContent?.trim() ?? '';
+}
+
+/** 卡片獨立的幣別代碼 span;沒有則為 null。 */
+function kpiCcy(card: HTMLElement): string | null {
+  return card.querySelector('.kpi-ccy')?.textContent?.trim() ?? null;
+}
+
+function summaryWith(overrides: Partial<PortfolioSummaryDto>): PortfolioSummaryDto {
+  return { ...SUMMARY, ...overrides };
+}
+
 afterEach(() => {
   cleanupMounted();
   configureApiClientSessionHandlers({});
@@ -139,7 +155,7 @@ afterEach(() => {
 });
 
 describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () => {
-  it('只渲染兩張有後端資料的 KPI 卡,數值來自 summary(D-14)', async () => {
+  it('恰好渲染四張 KPI 卡,數值來自 summary 而非 mock(PORT-09 / 10 / 11,D-14 / D-22)', async () => {
     const fetchMock = routedFetch({
       summary: () => success(SUMMARY),
       trades: () => tradePage(API_TRADES),
@@ -147,24 +163,149 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     await mountApiOverview(fetchMock);
 
     const cards = allTestids('overview-kpi');
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(4);
 
-    const [totalAssets, totalReturn] = cards;
+    const [totalAssets, dayPnl, cash, totalReturn] = cards;
+
+    // 卡 1:總資產 = totalEquity(D-22,不是 totalMarketValue),代碼是獨立 span
     expect(totalAssets.textContent).toContain(t('en', 'totalAssets'));
-    expect(totalAssets.textContent).toContain(`$${fmtNum(SUMMARY.totalMarketValue, 0)}`);
+    expect(kpiValue(totalAssets)).toBe('7,654,321');
+    expect(kpiCcy(totalAssets)).toBe('TWD');
+    expect(totalAssets.textContent).not.toContain('1,234,568');
+    expect(totalAssets.textContent).not.toContain('$');
     // 副標為真實 holdingCount,而不是 '+1.04% vs yesterday' 的假副標
     expect(totalAssets.textContent).toContain(`${SUMMARY.holdingCount} ${t('en', 'positions')}`);
     expect(totalAssets.textContent).not.toContain(t('en', 'yesterday'));
 
+    // 卡 2:今日損益,帶號數值 + 代碼 + 比率列(箭頭 aria-hidden、up 色)
+    expect(dayPnl.textContent).toContain(t('en', 'todayPnl'));
+    expect(kpiValue(dayPnl)).toBe('+12,345');
+    expect(kpiCcy(dayPnl)).toBe('TWD');
+    const ratio = dayPnl.querySelector<HTMLElement>('[data-testid="overview-kpi-day-pnl-ratio"]');
+    expect(ratio, 'ratio row').toBeTruthy();
+    expect(ratio!.textContent).toContain('↗');
+    expect(ratio!.textContent).toContain('+1.04%');
+    expect(ratio!.textContent).toContain(fmtRatioPct(SUMMARY.dayPricePnlRatio)!);
+    expect(ratio!.querySelector('[aria-hidden="true"]')?.textContent).toBe('↗');
+    expect(ratio!.getAttribute('style')).toContain('var(--up)');
+    // 數值本身維持 --fg(不上色)
+    expect(dayPnl.querySelector('.kpi-v')!.getAttribute('style') ?? '').not.toContain('--up');
+    // 常駐「不含匯差」說明,沒有未計入列
+    expect(requireTestid('overview-kpi-day-pnl-note').textContent).toContain(t('en', 'dayPnlNote'));
+    expect(testid('overview-kpi-day-pnl-excluded')).toBeNull();
+    expect(dayPnl.textContent).not.toContain('+$12,481');
+
+    // 卡 3:可用現金,dp 0
+    expect(cash.textContent).toContain(t('en', 'availableCash'));
+    expect(kpiValue(cash)).toBe('84,211');
+    expect(kpiCcy(cash)).toBe('TWD');
+    expect(cash.textContent).not.toContain('$84,210');
+
+    // 卡 4:總報酬率 = roi × 100(D-04 允許的格式化縮放),副標為帶號總損益 + 代碼
     expect(totalReturn.textContent).toContain(t('en', 'totalReturn'));
-    // roi 是比值,顯示 ×100(D-04 允許的格式化縮放)
-    expect(totalReturn.textContent).toContain(fmtPct(SUMMARY.roi * 100));
+    expect(kpiValue(totalReturn)).toBe(fmtRatioPct(SUMMARY.roi));
+    expect(kpiValue(totalReturn)).toBe('+12.34%');
     expect(totalReturn.textContent).toContain(t('en', 'totalPnlLabel'));
-    expect(totalReturn.textContent).toContain(`+$${fmtNum(SUMMARY.totalPnl, 0)}`);
+    expect(totalReturn.textContent).toContain(fmtSignedMoney(SUMMARY.totalPnl, 'TWD', 0));
+    expect(totalReturn.textContent).toContain('+135,802');
     expect(totalReturn.textContent).not.toContain(t('en', 'annualized'));
   });
 
-  it('隱藏所有無後端資料來源的合成/寫死區塊(D-14 / D-16)', async () => {
+  it('基準幣代碼來自 summary.baseCurrency,不寫死 TWD', async () => {
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ baseCurrency: 'USD' })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    const [totalAssets, dayPnl, cash, totalReturn] = allTestids('overview-kpi');
+    expect(kpiCcy(totalAssets)).toBe('USD');
+    expect(kpiCcy(dayPnl)).toBe('USD');
+    expect(kpiCcy(cash)).toBe('USD');
+    expect(totalReturn.textContent).toContain('+135,802');
+    expect(totalReturn.textContent).toContain('USD');
+    expect(totalReturn.textContent).not.toContain('TWD');
+  });
+
+  describe('今日損益四種呈現(T-04.1-55:缺資料不得顯示成 0)', () => {
+    async function mountWith(overrides: Partial<PortfolioSummaryDto>) {
+      const fetchMock = routedFetch({
+        summary: () => success(summaryWith(overrides)),
+        trades: () => tradePage(API_TRADES),
+      });
+      await mountApiOverview(fetchMock);
+      return allTestids('overview-kpi')[1];
+    }
+
+    it('有值 + 0 檔未計入:數值 + 比率 + 不含匯差說明,沒有未計入列', async () => {
+      const card = await mountWith({ dayPnlExcludedCount: 0 });
+      expect(kpiValue(card)).toBe('+12,345');
+      expect(testid('overview-kpi-day-pnl-ratio')).not.toBeNull();
+      expect(testid('overview-kpi-day-pnl-note')).not.toBeNull();
+      expect(testid('overview-kpi-day-pnl-excluded')).toBeNull();
+    });
+
+    it('有值 + 2 檔未計入:再加「2 檔未計入…」', async () => {
+      const card = await mountWith({ dayPnlExcludedCount: 2 });
+      expect(kpiValue(card)).toBe('+12,345');
+      expect(testid('overview-kpi-day-pnl-ratio')).not.toBeNull();
+      expect(testid('overview-kpi-day-pnl-note')).not.toBeNull();
+      const excluded = requireTestid('overview-kpi-day-pnl-excluded');
+      expect(excluded.textContent).toContain(tf('en', 'dayPnlExcluded', { n: 2 }));
+      expect(excluded.textContent).toMatch(/^\s*2\b/);
+      expect(excluded.textContent).not.toContain('{n}');
+    });
+
+    it('null(全部被排除):數值 —(不是 0)、無代碼、無比率列,仍有說明與未計入列', async () => {
+      const card = await mountWith({ dayPricePnl: null, dayPricePnlRatio: null, dayPnlExcludedCount: 3 });
+      expect(kpiValue(card)).toBe('—');
+      expect(kpiCcy(card)).toBeNull();
+      expect(card.querySelector('.kpi-v')!.textContent).not.toMatch(/\b0\b/);
+      expect(testid('overview-kpi-day-pnl-ratio')).toBeNull();
+      expect(card.textContent).not.toContain('↗');
+      expect(card.textContent).not.toContain('↘');
+      expect(requireTestid('overview-kpi-day-pnl-note').textContent).toContain(t('en', 'dayPnlNote'));
+      expect(requireTestid('overview-kpi-day-pnl-excluded').textContent)
+        .toContain(tf('en', 'dayPnlExcluded', { n: 3 }));
+    });
+
+    it('真實為零:0 TWD,無號、無箭頭、無比率列,與 null 的 — 不同', async () => {
+      const card = await mountWith({ dayPricePnl: 0, dayPricePnlRatio: null, dayPnlExcludedCount: 0 });
+      expect(kpiValue(card)).toBe('0');
+      expect(kpiCcy(card)).toBe('TWD');
+      expect(kpiValue(card)).not.toContain('+');
+      expect(testid('overview-kpi-day-pnl-ratio')).toBeNull();
+      expect(card.textContent).not.toContain('↗');
+      expect(card.textContent).not.toContain('↘');
+      expect(testid('overview-kpi-day-pnl-note')).not.toBeNull();
+      expect(testid('overview-kpi-day-pnl-excluded')).toBeNull();
+    });
+
+    it('負值:- 號、↘、dn 色,數值本身不上色', async () => {
+      const card = await mountWith({ dayPricePnl: -3200, dayPricePnlRatio: -0.0215 });
+      expect(kpiValue(card)).toBe('-3,200');
+      const ratio = requireTestid('overview-kpi-day-pnl-ratio');
+      expect(ratio.textContent).toContain('↘');
+      expect(ratio.textContent).toContain('-2.15%');
+      expect(ratio.getAttribute('style')).toContain('var(--dn)');
+      expect(card.querySelector('.kpi-v')!.getAttribute('style') ?? '').not.toContain('--dn');
+    });
+  });
+
+  it('總報酬率為負時副標帶 - 號並用 dn 色', async () => {
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ roi: -0.05, totalPnl: -50000 })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    const totalReturn = allTestids('overview-kpi')[3];
+    expect(kpiValue(totalReturn)).toBe('-5.00%');
+    expect(totalReturn.textContent).toContain('-50,000');
+    expect(totalReturn.querySelector('.kpi-s')!.getAttribute('style')).toContain('var(--dn)');
+  });
+
+  it('仍隱藏無後端資料來源的合成/寫死區塊;今日損益 / 可用現金不再隱藏(D-14 / D-16,04.1-18 反轉)', async () => {
     const fetchMock = routedFetch({
       summary: () => success(SUMMARY),
       trades: () => tradePage(API_TRADES),
@@ -172,9 +313,9 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     await mountApiOverview(fetchMock);
 
     const body = document.body.textContent ?? '';
-    // 今日損益 / 可用現金 KPI
-    expect(body).not.toContain(t('en', 'todayPnl'));
-    expect(body).not.toContain(t('en', 'availableCash'));
+    // 今日損益 / 可用現金 KPI 在 04.1-18 起有後端來源 → 已渲染,但絕不是 mock 的寫死值
+    expect(body).toContain(t('en', 'todayPnl'));
+    expect(body).toContain(t('en', 'availableCash'));
     expect(body).not.toContain('+$12,481');
     expect(body).not.toContain('$84,210');
     // 資產配置 donut
@@ -245,7 +386,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(testid('overview-trades-error')).toBeNull();
   });
 
-  it('retry 只重打自己的區塊,成功後渲染兩張卡(D-11)', async () => {
+  it('retry 只重打自己的區塊,成功後渲染四張卡(D-11)', async () => {
     let summaryFails = true;
     const fetchMock = routedFetch({
       summary: () => (summaryFails
@@ -265,7 +406,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
     // 重試 summary 不得連帶重打 trades
     expect(callsMatching(fetchMock, '/trades')).toHaveLength(1);
-    expect(allTestids('overview-kpi')).toHaveLength(2);
+    expect(allTestids('overview-kpi')).toHaveLength(4);
     expect(testid('overview-summary-error')).toBeNull();
   });
 
@@ -283,7 +424,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(error.textContent).toContain('TRADE_LIST_UNAVAILABLE');
     expect(error.textContent).toContain('trace-trades-down');
     // summary 區塊不受影響
-    expect(allTestids('overview-kpi')).toHaveLength(2);
+    expect(allTestids('overview-kpi')).toHaveLength(4);
 
     tradesFail = false;
     click(requireTestid('overview-trades-retry'));
