@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <MockDataNotice :lang="lang" />
+    <MockDataNotice :lang="lang" exception="mockDataNoticeExceptBaseCurrency" />
     <h2 style="margin:0 0 16px">{{ t(lang, 'settings') }}</h2>
     <div class="layout">
       <div class="sidebar">
@@ -66,6 +66,23 @@
                   </option>
                 </select>
                 <span class="ccy-status" data-testid="settings-base-currency-status" role="status">{{ ccyStatusText }}</span>
+                <div v-if="ccyError" class="ccy-error" data-testid="settings-base-currency-error" role="alert">
+                  <span class="ccy-error-text">{{ t(lang, ccyError.messageKey) }}</span>
+                  <span class="ccy-diag">
+                    <span data-testid="settings-base-currency-error-code">{{ ccyError.code }}</span>
+                    <span v-if="ccyError.traceId" data-testid="settings-base-currency-trace-id">
+                      {{ t(lang, 'authRequestId') }} {{ ccyError.traceId }}
+                    </span>
+                  </span>
+                  <button
+                    v-if="ccyPhase === 'loadError'"
+                    class="ccy-retry"
+                    data-testid="settings-base-currency-retry"
+                    @click="loadBaseCurrency"
+                  >
+                    {{ t(lang, 'authRetry') }}
+                  </button>
+                </div>
               </div>
             </SettingRow>
             <SettingRow :label="t(lang, 'numFormat')" sub="Decimal &amp; thousand separators">
@@ -208,6 +225,7 @@ import type { Lang, NotificationPrefs, Theme } from '../types';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
 import { useAiAccessSettings } from '../composables/useAiAccessSettings';
 import SettingRow from '../components/SettingRow.vue';
+import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { bumpPortfolioRevision } from '../services/portfolioRevision';
@@ -299,14 +317,22 @@ const profile = [
 // PATCH /me/preferences,mock mode 走模組內狀態(選了會保留、零網路)。元件不碰 mock store、不自行 fetch。
 const clients = getRuntimeApiClients();
 
-type CurrencyPhase = 'loading' | 'idle' | 'saving' | 'saved';
+type CurrencyPhase = 'loading' | 'loadError' | 'idle' | 'saving' | 'saved' | 'saveError';
 const ccyPhase = ref<CurrencyPhase>('loading');
 /** 後端(或 mock)確認過的值;未設定時後端預設 TWD,所以讀取完成前先以 TWD 顯示並 disabled。 */
 const ccySaved = ref<string>(BASE_CURRENCY_OPTIONS[0]);
 /** select 目前顯示的值:儲存中是使用者剛選的新值,失敗時回到 ccySaved。 */
 const ccySelected = ref<string>(BASE_CURRENCY_OPTIONS[0]);
 
-const ccyBusy = computed(() => ccyPhase.value === 'loading' || ccyPhase.value === 'saving');
+/** 只保留 i18n key、code 與 traceId:後端的 error.message 與 fields 的 value 一律不進 DOM。 */
+interface CurrencyError {
+  messageKey: string;
+  code: string;
+  traceId: string | null;
+}
+const ccyError = ref<CurrencyError | null>(null);
+
+const ccyBusy = computed(() => ccyPhase.value !== 'idle' && ccyPhase.value !== 'saved' && ccyPhase.value !== 'saveError');
 const ccyStatusText = computed(() => {
   if (ccyPhase.value === 'loading') return t(props.lang, 'loading');
   if (ccyPhase.value === 'saving') return t(props.lang, 'settingSaving');
@@ -314,15 +340,36 @@ const ccyStatusText = computed(() => {
   return '';
 });
 
+function diagnosticsOf(error: unknown): { code: string; traceId: string | null } {
+  if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
+  return { code: 'NETWORK_ERROR', traceId: null };
+}
+
+/** 儲存失敗的文案分派(UI-SPEC 基準幣表)。401 回傳 null:交給全域 SessionBanner,這裡不重複顯示。 */
+function saveErrorKey(error: unknown): string | null {
+  if (!(error instanceof ApiClientError)) return 'baseCurrencyErrNetwork';
+  if (error.status === 401) return null;
+  if (error.code === 'VALIDATION_FAILED' && error.fields && 'baseCurrency' in error.fields) {
+    return 'baseCurrencyErrUnsupported';
+  }
+  if (error.code === 'AUTH_CSRF_TOKEN_INVALID' || error.code === 'AUTH_CSRF_TOKEN_MISSING') {
+    return 'baseCurrencyErrCsrf';
+  }
+  if (error.status === 403) return 'baseCurrencyErrForbidden';
+  return 'baseCurrencyErrUnknown';
+}
+
 async function loadBaseCurrency() {
   ccyPhase.value = 'loading';
+  ccyError.value = null;
   try {
     const preferences = await clients.profile.getPreferences();
     ccySaved.value = preferences.baseCurrency;
     ccySelected.value = preferences.baseCurrency;
     ccyPhase.value = 'idle';
-  } catch {
-    ccyPhase.value = 'idle';
+  } catch (error) {
+    ccyError.value = { messageKey: 'loadFailed', ...diagnosticsOf(error) };
+    ccyPhase.value = 'loadError';
   }
 }
 
@@ -330,6 +377,7 @@ async function onBaseCurrencyChange(event: Event) {
   const next = (event.target as HTMLSelectElement).value;
   if (next === ccySaved.value) return;
   ccySelected.value = next;
+  ccyError.value = null;
   ccyPhase.value = 'saving';
   try {
     const updated = await clients.profile.updateBaseCurrency(next);
@@ -338,9 +386,12 @@ async function onBaseCurrencyChange(event: Event) {
     ccyPhase.value = 'saved';
     // 已掛載且顯示金額的頁會依此重讀(Settings 自己通常是唯一掛載的頁,故多半是無害的 no-op)。
     bumpPortfolioRevision('baseCurrency');
-  } catch {
+  } catch (error) {
+    // 失敗一律回到已儲存值;PATCH 冪等,再選一次即重試,所以不放重試鈕。
     ccySelected.value = ccySaved.value;
-    ccyPhase.value = 'idle';
+    const messageKey = saveErrorKey(error);
+    ccyError.value = messageKey ? { messageKey, ...diagnosticsOf(error) } : null;
+    ccyPhase.value = 'saveError';
   }
 }
 
@@ -425,6 +476,16 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .ccy-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ccy-status { font-size: 12px; color: var(--fg-dim); }
 .ccy-status:empty { display: none; }
+.ccy-error { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; }
+.ccy-error-text { font-size: 12px; color: var(--dn); overflow-wrap: anywhere; }
+.ccy-diag { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 10px; font-size: 12px; color: var(--fg-dim); }
+.ccy-diag span { overflow-wrap: anywhere; }
+.ccy-retry {
+  min-height: 36px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ccy-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .inp {
   width: 100%; background: var(--surface2); border: 1px solid var(--border);
