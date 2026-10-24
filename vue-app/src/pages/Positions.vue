@@ -230,6 +230,7 @@
     <!-- Holdings table -->
     <div
       class="card"
+      data-testid="positions-table"
       style="grid-column: span 12; overflow-x: auto"
       :class="{ 'block-refreshing': holdingsRefreshing }"
       :aria-busy="holdingsRefreshing"

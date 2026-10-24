@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { LONG_NOTE, expectNoHorizontalScroll, mockPortfolioApi } from '../support/portfolioStubs';
+import { LONG_NOTE, LONG_TRACE_ID, expectNoHorizontalScroll, mockPortfolioApi } from '../support/portfolioStubs';
 
 /**
  * L:app shell header 的窄螢幕版面(todo 2026-09-04-frontend-header-rwd-320px)。
@@ -236,3 +236,54 @@ for (const width of [320, 375, 768, 1280]) {
     });
   }
 }
+
+/**
+ * L5:持倉表 / Trades 表 / Overview 近期交易表在 320 / 375px 於卡內捲動,不帶動頁面。
+ * 表格宿主以 testid 定位(positions-table / trades-table / overview-recent-trades)。
+ */
+const TABLE_PAGES = {
+  positions: { nav: 'positions', ready: 'positions-day-pnl', host: 'positions-table' },
+  trades: { nav: 'trades', ready: 'trades-ccy-tag', host: 'trades-table' },
+  overview: { nav: null, ready: 'overview-trade-ccy-tag', host: 'overview-recent-trades' },
+} as const;
+
+for (const width of [320, 375]) {
+  for (const pageKey of ['positions', 'trades', 'overview'] as const) {
+    test(`L5 ${width}px ${pageKey}:表格在卡內捲動、不帶動頁面 @smoke`, async ({ page }) => {
+      const spec = TABLE_PAGES[pageKey];
+      await page.setViewportSize({ width, height: 800 });
+      await mockPortfolioApi(page);
+      if (spec.nav === null) {
+        await page.goto('/');
+      } else {
+        await openPage(page, spec.nav);
+      }
+      await expect(page.getByTestId(spec.ready).first()).toBeVisible();
+
+      await expectNoHorizontalScroll(page);
+      await expectTableScrollsInsideCard(page, spec.host);
+    });
+  }
+}
+
+/**
+ * L6:summary 回 503 且帶長 traceId 時,Overview 診斷列在 320px 完整顯示 code 與 traceId
+ * (overflow-wrap: anywhere,不被 overflow:hidden / ellipsis 裁切)。
+ */
+test('L6 320px:summary 503 帶長 traceId 時 Overview 診斷列完整顯示 @smoke', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await mockPortfolioApi(page, { failPaths: { '/api/v1/portfolio/summary': { traceId: LONG_TRACE_ID } } });
+  await page.goto('/');
+
+  await expect(page.getByTestId('overview-summary-error')).toBeVisible();
+  const clientWidth = await expectNoHorizontalScroll(page);
+
+  await expect(page.getByTestId('overview-summary-error-code')).toHaveText('SERVICE_UNAVAILABLE');
+  const trace = page.getByTestId('overview-summary-trace-id');
+  await expect(trace).toContainText(LONG_TRACE_ID);
+  const m = await trace.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+  expect(m.scrollWidth, `traceId 被裁切:內容寬 ${m.scrollWidth}px > 可視寬 ${m.clientWidth}px`).toBeLessThanOrEqual(m.clientWidth);
+  const box = await trace.boundingBox();
+  expect(box, 'traceId 應有版面').not.toBeNull();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(clientWidth);
+});

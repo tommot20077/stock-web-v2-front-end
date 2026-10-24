@@ -208,6 +208,7 @@
          U-27:位於資產配置之後、觀察清單之前;API mode span 8(配置旁),mock mode span 12。 -->
     <div
       class="card trades-card"
+      data-testid="overview-recent-trades"
       :class="[live ? 'col-12' : 'col-8 stack-narrow', { 'block-refreshing': tradesRefreshing }]"
       style="padding: 20px"
       :aria-busy="tradesRefreshing"

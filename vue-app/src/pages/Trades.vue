@@ -37,7 +37,7 @@
       >{{ c }}</button>
     </div>
 
-    <div class="card" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
+    <div class="card" data-testid="trades-table" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
       <!-- U-05 / U-06:重讀期間保留整張表格,只在區塊頂端加一條指示列 -->
       <div v-if="!live && tradesRefreshing" class="refresh-note" data-testid="trades-refreshing">
         {{ t(lang, 'portfolioRefreshing') }}
