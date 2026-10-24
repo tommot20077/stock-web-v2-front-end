@@ -15,7 +15,7 @@
     <div v-else-if="!live && summaryRefreshError" class="refresh-strip" :style="{ gridColumn: 'span 12' }">
       <!-- role="status" 而非 alert:交易已經成功,這不是需要打斷使用者的錯誤(U-06) -->
       <div class="refresh-stale" role="status" data-testid="overview-refresh-error">
-        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div>{{ staleText }}</div>
         <div class="details">
           <span data-testid="overview-refresh-error-code">{{ summaryRefreshError.code }}</span>
           <span v-if="summaryRefreshError.traceId" data-testid="overview-refresh-trace-id">
@@ -54,6 +54,54 @@
       </button>
     </div>
     <template v-else>
+      <!--
+        基準幣工具列(D-03,API mode 才渲染)。左:缺匯率提示;右:Label + 四鍵切換。
+        不做確認框(U-02):切換是可逆的設定值,PATCH 冪等。
+      -->
+      <div v-if="!live" class="kpi-toolbar" data-testid="overview-kpi-toolbar">
+        <div v-if="summary && summary.fxExcludedCount > 0" class="toolbar-hint hint" data-testid="overview-fx-excluded">
+          <span aria-hidden="true">⚠</span>
+          {{ tf(lang, 'fxExcludedHint', { n: summary.fxExcludedCount, base: summary.baseCurrency }) }}
+        </div>
+        <div class="ccy-switch">
+          <span id="overview-base-currency-label" class="ccy-label">{{ t(lang, 'baseCurrency') }}</span>
+          <div
+            class="ccy-seg"
+            role="group"
+            aria-labelledby="overview-base-currency-label"
+            data-testid="base-currency-switch"
+          >
+            <button
+              v-for="code in BASE_CURRENCY_OPTIONS"
+              :key="code"
+              type="button"
+              class="ccy-btn"
+              :class="{ active: selectedCurrency === code }"
+              :aria-pressed="selectedCurrency === code ? 'true' : 'false'"
+              :disabled="currencyBusy"
+              :data-testid="`base-currency-option-${code}`"
+              @click="selectBaseCurrency(code)"
+            >{{ code }}</button>
+          </div>
+          <span
+            v-if="currencyPhase === 'switching'"
+            class="hint"
+            role="status"
+            aria-live="polite"
+            data-testid="base-currency-switching"
+          >{{ t(lang, 'baseCurrencySwitching') }}</span>
+        </div>
+        <div v-if="currencyError" class="ccy-error" role="alert" data-testid="base-currency-error">
+          <div class="ccy-error-msg">{{ t(lang, currencyError.messageKey) }}</div>
+          <div class="details">
+            <span data-testid="base-currency-error-code">{{ currencyError.code }}</span>
+            <span v-if="currencyError.traceId" data-testid="base-currency-trace-id">
+              {{ t(lang, 'authRequestId') }} {{ currencyError.traceId }}
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div
         v-for="(k, i) in kpiCards"
         :key="i"
@@ -69,6 +117,38 @@
           <span v-if="k.arrow" aria-hidden="true">{{ k.arrow }}</span>{{ k.s }}
         </div>
         <div v-for="n in k.notes ?? []" :key="n.testid" class="kpi-hint" :data-testid="n.testid">{{ n.text }}</div>
+        <!--
+          可用現金卡(D-07 / D-08 / D-11 / D-29)。各幣別餘額、負現金、缺匯率只在 API mode;
+          入金 / 出金鈕也只在 API mode(mock 的現金是寫死值,按了數字不會變 → 違反鐵律 6);
+          「入出金紀錄 →」兩模式都有(現金頁在 mock mode 完整可用)。
+        -->
+        <template v-if="k.isCash">
+          <template v-if="!live">
+            <div v-if="balanceListText" class="kpi-hint" data-testid="overview-kpi-cash-balances">{{ balanceListText }}</div>
+            <!-- U-07:只看各幣別,不看折算後總額;數值不變紅(U-06) -->
+            <div v-if="negativeCodes.length" class="kpi-hint" data-testid="overview-kpi-cash-negative">
+              <span aria-hidden="true">⚠</span>
+              {{ tf(lang, 'cashNegativeHint', { codes: joinCodes(negativeCodes) }) }}
+            </div>
+            <div v-if="fxExcludedCodes.length && summary" class="kpi-hint" data-testid="overview-kpi-cash-fx-excluded">
+              <span aria-hidden="true">⚠</span>
+              {{ tf(lang, 'cashFxExcludedHint', { codes: joinCodes(fxExcludedCodes), base: summary.baseCurrency }) }}
+            </div>
+          </template>
+          <div class="kpi-actions">
+            <template v-if="!live">
+              <button type="button" class="btn-ghost-sm" data-testid="overview-cash-deposit" @click="openCashDialog('DEPOSIT', $event)">
+                {{ t(lang, 'cashTypeDeposit') }}
+              </button>
+              <button type="button" class="btn-ghost-sm" data-testid="overview-cash-withdraw" @click="openCashDialog('WITHDRAWAL', $event)">
+                {{ t(lang, 'cashTypeWithdrawal') }}
+              </button>
+            </template>
+            <button type="button" class="link-btn" data-testid="overview-cash-view-entries" @click="emit('navigate', 'cash')">
+              {{ t(lang, 'cashViewEntries') }}
+            </button>
+          </div>
+        </template>
       </div>
     </template>
 
@@ -162,7 +242,7 @@
         role="status"
         data-testid="overview-refresh-error"
       >
-        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div>{{ staleText }}</div>
         <div class="details">
           <span data-testid="overview-refresh-error-code">{{ tradesRefreshError.code }}</span>
           <span v-if="tradesRefreshError.traceId" data-testid="overview-refresh-trace-id">
@@ -228,11 +308,22 @@
         </tbody>
       </table>
     </div>
+
+    <!-- D-11:Overview 自己掛載的入出金對話框(API mode)。寫入成功由對話框發出 cash 重讀訊號。 -->
+    <CashEntryDialog
+      v-if="!live"
+      :open="cashDialogOpen"
+      :lang="lang"
+      :initial-type="cashDialogType"
+      :initial-currency="cashDialogCurrency"
+      :balances="cashDialogBalances"
+      @close="onCashDialogClose"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
@@ -240,19 +331,23 @@ import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { portfolioRevision } from '../services/portfolioRevision';
+import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
+import type { CashEntryType } from '../services/cashApi';
+import { bumpPortfolioRevision, portfolioRevision, portfolioRevisionCause } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
 import Donut from '../components/Donut.vue';
+import CashEntryDialog from '../components/CashEntryDialog.vue';
 
 const props = defineProps<{ lang: Lang }>();
 const emit = defineEmits<{
   order: [];
-  navigate: [page: 'watchlist' | 'trades' | 'positions'];
+  navigate: [page: 'watchlist' | 'trades' | 'positions' | 'cash'];
 }>();
 
 // judgment §3:頁面只認 domain service,永不 import mock store。
 // 分支條件是 `live` 是否存在,不是 mode 字串(見 03-02-SUMMARY 的消費契約)。
-const api = getRuntimeApiClients().portfolio;
+const clients = getRuntimeApiClients();
+const api = clients.portfolio;
 const live = api.live;
 
 interface BlockError {
@@ -283,11 +378,18 @@ function describeError(error: unknown): BlockError {
 }
 
 // D-11:兩個區塊各自載入、各自重試,一邊失敗不影響另一邊。
+/** 遞增序號:較舊的 summary 回應(例如基準幣切換與交易重讀交疊)一律丟棄,不覆蓋較新的資料。 */
+let summarySeq = 0;
+
 async function loadSummary() {
+  const seq = ++summarySeq;
   summaryState.value = { status: 'loading' };
   try {
-    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+    const data = await api.getSummary();
+    if (seq !== summarySeq) return;
+    summaryState.value = { status: 'loaded', data };
   } catch (error) {
+    if (seq !== summarySeq) return;
     summaryState.value = { status: 'error', error: describeError(error) };
   }
 }
@@ -329,14 +431,24 @@ async function refreshSummary() {
     await loadSummary();
     return;
   }
+  const seq = ++summarySeq;
   summaryRefreshing.value = true;
   summaryRefreshError.value = null;
   try {
-    summaryState.value = { status: 'loaded', data: await api.getSummary() };
+    const data = await api.getSummary();
+    if (seq !== summarySeq) return;
+    summaryState.value = { status: 'loaded', data };
+    // 新 summary 是基準幣的真值,不再需要本地暫存的「剛儲存的值」。
+    savedCurrency.value = null;
   } catch (error) {
+    if (seq !== summarySeq) return;
     summaryRefreshError.value = describeError(error);
   } finally {
-    summaryRefreshing.value = false;
+    if (seq === summarySeq) {
+      summaryRefreshing.value = false;
+      // 基準幣切換的最後一段(重讀)結束,不論成敗,工具列解鎖。
+      if (currencyPhase.value === 'reloading') currencyPhase.value = 'idle';
+    }
   }
 }
 
@@ -368,6 +480,135 @@ watch(portfolioRevision, () => {
   void refreshRecentTrades();
 });
 
+/**
+ * U-09:重讀失敗的 stale 文案依「觸發來源」選擇,不得讓非交易的變更顯示「交易已記錄」。
+ * cause 尚未設定(理論上不會發生:能重讀就代表有人 bump 過)時退回交易文案。
+ */
+const staleText = computed(() => {
+  const cause = portfolioRevisionCause.value;
+  if (cause === 'cash') return t(props.lang, 'portfolioStaleAfterCashEntry');
+  if (cause === 'baseCurrency') return t(props.lang, 'portfolioStaleAfterBaseCurrency');
+  return t(props.lang, 'portfolioStaleAfterTrade');
+});
+
+// =============== 基準幣快速切換(D-03)===============
+/*
+ * 狀態機:idle → switching(PATCH in flight)→ reloading(PATCH 成功,summary 重讀中)→ idle;
+ * PATCH 失敗直接 switching → idle 並回到原值。switching 與 reloading 期間四鍵都 disabled。
+ * 選中值 = 被點的那顆(switching)?? 剛儲存的值(重讀期間 / 重讀失敗)?? summary.baseCurrency。
+ */
+type CurrencyPhase = 'idle' | 'switching' | 'reloading';
+const currencyPhase = ref<CurrencyPhase>('idle');
+const pendingCurrency = ref<string | null>(null);
+const savedCurrency = ref<string | null>(null);
+const currencyError = ref<{ messageKey: string; code: string; traceId: string | null } | null>(null);
+
+const selectedCurrency = computed(
+  () => pendingCurrency.value ?? savedCurrency.value ?? summary.value?.baseCurrency ?? null,
+);
+const currencyBusy = computed(() => currencyPhase.value !== 'idle');
+
+/** 儲存失敗的文案分派(同 Settings / UI-SPEC 基準幣表)。401 回傳 null:交給全域 SessionBanner,這裡不重複顯示。 */
+function currencyErrorKey(error: unknown): string | null {
+  if (!(error instanceof ApiClientError)) return 'baseCurrencyErrNetwork';
+  if (error.status === 401) return null;
+  if (error.code === 'VALIDATION_FAILED' && error.fields && 'baseCurrency' in error.fields) {
+    return 'baseCurrencyErrUnsupported';
+  }
+  if (error.code === 'AUTH_CSRF_TOKEN_INVALID' || error.code === 'AUTH_CSRF_TOKEN_MISSING') {
+    return 'baseCurrencyErrCsrf';
+  }
+  if (error.status === 403) return 'baseCurrencyErrForbidden';
+  return 'baseCurrencyErrUnknown';
+}
+
+async function selectBaseCurrency(code: string) {
+  // 點已選中者:這是「已是此值」,不發請求;進行中的切換也不重入。
+  if (currencyBusy.value || code === selectedCurrency.value) return;
+  currencyError.value = null;
+  pendingCurrency.value = code;
+  currencyPhase.value = 'switching';
+  try {
+    const updated = await clients.profile.updateBaseCurrency(code);
+    savedCurrency.value = updated.baseCurrency;
+    pendingCurrency.value = null;
+    currencyPhase.value = 'reloading';
+    // 重讀由下方 watch(portfolioRevision) 觸發;結束時 refreshSummary 把 phase 放回 idle。
+    bumpPortfolioRevision('baseCurrency');
+  } catch (error) {
+    // 失敗一律回到原值;PATCH 冪等,再點一次即重試,所以不放重試鈕。
+    pendingCurrency.value = null;
+    currencyPhase.value = 'idle';
+    const messageKey = currencyErrorKey(error);
+    const diagnostics = error instanceof ApiClientError
+      ? { code: error.code, traceId: error.requestId }
+      : { code: 'NETWORK_ERROR', traceId: null };
+    currencyError.value = messageKey ? { messageKey, ...diagnostics } : null;
+  }
+}
+
+// =============== 可用現金卡(D-07 / D-08 / D-11)===============
+/** 非零幣別,依 TWD / USD / EUR / JPY 固定順序;未知幣別排在後面。 */
+const orderedBalances = computed(() => {
+  const order = (code: string) => {
+    const at = (BASE_CURRENCY_OPTIONS as readonly string[]).indexOf(code);
+    return at === -1 ? BASE_CURRENCY_OPTIONS.length : at;
+  };
+  return (summary.value?.cashBalances ?? [])
+    .filter(balance => balance.amount !== 0)
+    .sort((a, b) => order(a.currency) - order(b.currency));
+});
+
+const balanceListText = computed(() => orderedBalances.value
+  .map(balance => `${balance.currency} ${fmtMoneyAmount(balance.amount, balance.currency)}`)
+  .join(' · '));
+
+/** U-07:只看各幣別,不看折算後總額 —— 總額可能為正而 USD 為負。 */
+const negativeCodes = computed(() => orderedBalances.value.filter(b => b.amount < 0).map(b => b.currency));
+
+const fxExcludedCodes = computed(() => {
+  const unconverted = summary.value?.unconvertedCurrencies ?? [];
+  return orderedBalances.value.filter(b => unconverted.includes(b.currency)).map(b => b.currency);
+});
+
+function joinCodes(codes: string[]): string {
+  return codes.join(props.lang === 'zh' ? '、' : ', ');
+}
+
+// =============== 入金 / 出金對話框(D-11)===============
+const cashDialogOpen = ref(false);
+const cashDialogType = ref<CashEntryType>('DEPOSIT');
+const cashDialogCurrency = ref('TWD');
+/** 出金超額提示用;summary 尚未載入時不傳。 */
+const cashDialogBalances = computed(() => summary.value?.cashBalances ?? null);
+let cashOpenerEl: HTMLElement | null = null;
+
+/** 幣別預設規則:入金 → 第一個餘額為負的幣別,沒有則基準幣;出金 → 基準幣。 */
+function defaultCashCurrency(kind: CashEntryType): string {
+  const base = summary.value?.baseCurrency ?? 'TWD';
+  if (kind === 'DEPOSIT') {
+    const negative = orderedBalances.value.find(balance => balance.amount < 0);
+    if (negative) return negative.currency;
+  }
+  return base;
+}
+
+function openCashDialog(kind: CashEntryType, event: Event) {
+  cashOpenerEl = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  cashDialogType.value = kind;
+  cashDialogCurrency.value = defaultCashCurrency(kind);
+  cashDialogOpen.value = true;
+}
+
+async function onCashDialogClose() {
+  cashDialogOpen.value = false;
+  await nextTick();
+  // 焦點回到開啟它的按鈕(按鈕在重讀期間仍在 DOM:KPI 卡保留舊值)。
+  const opener = cashOpenerEl;
+  cashOpenerEl = null;
+  if (opener && opener.isConnected) opener.focus();
+}
+
 const ranges = ['1D','1W','1M','3M','6M','1Y','All'];
 const range = ref('6M');
 
@@ -391,6 +632,8 @@ interface KpiCard {
   tone: KpiTone;
   /** 副標下方的常駐說明列(Hint)。 */
   notes?: { testid: string; text: string }[];
+  /** 可用現金卡:附加各幣別餘額、動作列與現金頁入口。 */
+  isCash?: boolean;
 }
 
 function toneColor(tone: KpiTone): string {
@@ -407,7 +650,7 @@ function signTone(text: string | null): { tone: KpiTone; arrow?: '↗' | '↘' }
 const mockKpis = computed<KpiCard[]>(() => [
   { l: t(props.lang, 'totalAssets'), v: '$' + fmtNum(last, 0), s: '+1.04% ' + t(props.lang, 'yesterday'), tone: 'up', arrow: '↗' },
   { l: t(props.lang, 'todayPnl'), v: '+$12,481', s: '+1.04%', tone: 'up', arrow: '↗' },
-  { l: t(props.lang, 'availableCash'), v: '$84,210', s: '8.4%', tone: 'dim' },
+  { l: t(props.lang, 'availableCash'), v: '$84,210', s: '8.4%', tone: 'dim', isCash: true },
   { l: t(props.lang, 'totalReturn'), v: fmtPct(ret), s: t(props.lang, 'annualized') + ' 18.4%', tone: 'up', arrow: '↗' },
 ]);
 
@@ -454,6 +697,7 @@ const apiKpis = computed<KpiCard[]>(() => {
       v: fmtMoneyAmount(s.cash, base, 0),
       ccy: base,
       tone: 'dim',
+      isCash: true,
     },
     {
       l: t(lang, 'totalReturn'),
@@ -495,6 +739,52 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
 .kpi-hint { font-size: 12px; font-weight: 400; line-height: 1.35; margin-top: 4px; color: var(--fg-dim); }
 .ttl { font-size: 16px; font-weight: 600; }
 .sub { font-size: 12px; color: var(--fg-dim); margin-top: 2px; }
+.kpi-card { container-type: inline-size; }
+.kpi-toolbar {
+  grid-column: span 12;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px 16px;
+}
+/* 會長的文字以 flex-basis: 0 / min-width: 0 參與換行(LEARNINGS 2026-10-23),不得 ellipsis */
+.toolbar-hint { flex: 1 1 0; min-width: 0; }
+.hint { font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); overflow-wrap: anywhere; }
+.ccy-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.ccy-label { font-size: 12px; font-weight: 600; line-height: 1.35; color: var(--fg-dim); }
+.ccy-seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--surface2); }
+.ccy-btn {
+  min-height: 36px; padding: 8px 12px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--fg-dim);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ccy-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.ccy-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.ccy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ccy-error { flex-basis: 100%; font-size: 12px; line-height: 1.35; }
+.ccy-error-msg { font-weight: 600; color: var(--dn); }
+.ccy-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px;
+  color: var(--fg-dim); font-weight: 400;
+}
+.ccy-error .details span { overflow-wrap: anywhere; }
+.kpi-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.btn-ghost-sm {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-ghost-sm:focus-visible, .link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.link-btn {
+  margin-left: auto; min-height: 36px; padding: 8px 0; background: transparent; border: 0;
+  color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; text-decoration: underline; cursor: pointer;
+}
+/* 窄卡:連結換到下一列並靠左(margin-left:auto 在換行後仍會靠右,所以改用容器查詢) */
+@container (max-width: 340px) {
+  .link-btn { margin-left: 0; flex-basis: 100%; text-align: left; }
+}
+@media (max-width: 639px) {
+  .toolbar-hint { flex: 1 1 100%; }
+  .ccy-switch { margin-left: 0; }
+}
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .seg { display: flex; background: var(--surface2); border-radius: 8px; padding: 2px; }
 .seg-btn {
@@ -503,7 +793,7 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
   color: var(--fg-dim);
 }
 .seg-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-.alloc-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; }
+.alloc-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 12px; }
 .wl-row { display: flex; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); gap: 12px; }
 .wl-tag {
   width: 32px; height: 32px; background: var(--surface2); border-radius: 8px;

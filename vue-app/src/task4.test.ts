@@ -143,7 +143,10 @@ describe('Task 4 trade flow', () => {
     expect(recentTrades.textContent).not.toContain('NVDA');
 
     clickButtonByText(recentTrades, 'New trade');
-    clickButtonByText(document.body, '→');
+    // 04.1-18:mock 的可用現金卡多了「Cash entries →」連結(含 →),觀察清單的連結改以全文相等定位。
+    const watchlistLink = [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === '→');
+    expect(watchlistLink, 'watchlist → link').toBeTruthy();
+    watchlistLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(events.order).toBe(1);
     expect(events.navigate).toEqual(['watchlist']);
