@@ -32,6 +32,30 @@ function unrelatedFailure(): Response {
   }, 503);
 }
 
+function failure(
+  code: string,
+  status: number,
+  options: { traceId?: string; message?: string; fields?: Record<string, string> } = {},
+): Response {
+  return jsonResponse({
+    success: false,
+    data: null,
+    error: {
+      code,
+      message: options.message ?? 'backend said no',
+      ...(options.fields ? { fields: options.fields } : {}),
+    },
+    meta: { traceId: options.traceId ?? 'trace-fail' },
+  }, status);
+}
+
+/** 手動控制何時回應的 promise,用來停在「讀取中 / 儲存中」。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
+
 interface Routes {
   me?: () => Response | Promise<Response>;
   patch?: (body: unknown) => Response | Promise<Response>;
@@ -48,6 +72,15 @@ function routedFetch(routes: Routes) {
     if (url.includes('/ai-access/')) return unrelatedFailure();
     throw new Error(`unexpected fetch: ${method} ${url}`);
   });
+}
+
+function getCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
+  return fetchMock.mock.calls.filter(call => String(call[0]).endsWith('/api/v1/me')
+    && String(call[1]?.method ?? 'GET').toUpperCase() === 'GET');
+}
+
+function byTestId(id: string): HTMLElement | null {
+  return document.body.querySelector(`[data-testid="${id}"]`);
 }
 
 function ccySelect(): HTMLSelectElement {
@@ -180,5 +213,226 @@ describe('Settings 基準幣列的文案', () => {
     expect(text).toContain(t('zh', 'baseCurrencySub'));
     expect(text).not.toContain('Default display currency');
     expect(ccySelect().getAttribute('aria-label')).toBe(t('zh', 'baseCurrency'));
+  });
+});
+
+describe('Settings 基準幣的讀取狀態(API mode)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+  });
+
+  it('讀取中:select disabled 且狀態列為「載入中…」', async () => {
+    const pending = deferred<Response>();
+    vi.stubGlobal('fetch', routedFetch({ me: () => pending.promise }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+
+    expect(ccySelect().disabled).toBe(true);
+    expect(statusLine()?.textContent).toBe(t('zh', 'loading'));
+    pending.resolve(success({ baseCurrency: 'TWD' }));
+    await flushAsync();
+    expect(ccySelect().disabled).toBe(false);
+    expect(statusLine()?.textContent ?? '').toBe('');
+  });
+
+  it('讀取失敗:select disabled、顯示 loadFailed + code + traceId + 重試;重試後重新 GET 並成功', async () => {
+    let attempt = 0;
+    const fetchMock = routedFetch({
+      me: () => {
+        attempt += 1;
+        return attempt === 1
+          ? failure('SERVICE_UNAVAILABLE', 503, { traceId: 'trace-xyz' })
+          : success({ baseCurrency: 'JPY' });
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+
+    const error = byTestId('settings-base-currency-error');
+    expect(error).not.toBeNull();
+    expect(error?.getAttribute('role')).toBe('alert');
+    expect(error?.textContent).toContain(t('zh', 'loadFailed'));
+    expect(error?.textContent).toContain('SERVICE_UNAVAILABLE');
+    expect(error?.textContent).toContain('trace-xyz');
+    expect(ccySelect().disabled).toBe(true);
+
+    const retry = byTestId('settings-base-currency-retry');
+    expect(retry).not.toBeNull();
+    expect(retry?.textContent).toContain(t('zh', 'authRetry'));
+    retry!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushAsync();
+
+    expect(getCalls(fetchMock)).toHaveLength(2);
+    expect(byTestId('settings-base-currency-error')).toBeNull();
+    expect(byTestId('settings-base-currency-retry')).toBeNull();
+    expect(ccySelect().disabled).toBe(false);
+    expect(ccySelect().value).toBe('JPY');
+  });
+
+  it('讀取失敗但沒有 traceId 時不渲染追蹤 ID', async () => {
+    vi.stubGlobal('fetch', routedFetch({
+      me: () => jsonResponse({ success: false, data: null, error: { code: 'SERVICE_UNAVAILABLE', message: 'x' } }, 503),
+    }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+
+    expect(byTestId('settings-base-currency-error-code')?.textContent).toBe('SERVICE_UNAVAILABLE');
+    expect(byTestId('settings-base-currency-trace-id')).toBeNull();
+    expect(document.body.textContent).not.toContain(t('zh', 'authRequestId'));
+  });
+});
+
+describe('Settings 基準幣的儲存狀態(API mode)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+  });
+
+  it('儲存中:select disabled 顯示新值,狀態列「儲存中…」且 role=status', async () => {
+    const pending = deferred<Response>();
+    vi.stubGlobal('fetch', routedFetch({
+      me: () => success({ baseCurrency: 'TWD' }),
+      patch: () => pending.promise,
+    }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+    await choose('USD');
+
+    expect(ccySelect().disabled).toBe(true);
+    expect(ccySelect().value).toBe('USD');
+    expect(statusLine()?.textContent).toBe(t('zh', 'settingSaving'));
+    expect(statusLine()?.getAttribute('role')).toBe('status');
+
+    pending.resolve(success({ baseCurrency: 'USD' }));
+    await flushAsync();
+    expect(statusLine()?.textContent).toBe(t('zh', 'settingSaved'));
+  });
+
+  it('400 VALIDATION_FAILED(fields.baseCurrency):回到已儲存值、role=alert、診斷列含 code、無重試鈕,後端訊息不入 DOM', async () => {
+    vi.stubGlobal('fetch', routedFetch({
+      me: () => success({ baseCurrency: 'TWD' }),
+      patch: () => failure('VALIDATION_FAILED', 400, {
+        traceId: 'trace-patch',
+        message: 'BACKEND-MESSAGE-CANARY',
+        fields: { baseCurrency: 'unsupported currency' },
+      }),
+    }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+    await choose('EUR');
+
+    expect(ccySelect().value).toBe('TWD');
+    expect(ccySelect().disabled).toBe(false);
+    const error = byTestId('settings-base-currency-error');
+    expect(error?.getAttribute('role')).toBe('alert');
+    expect(error?.textContent).toContain(t('zh', 'baseCurrencyErrUnsupported'));
+    expect(byTestId('settings-base-currency-error-code')?.textContent).toBe('VALIDATION_FAILED');
+    expect(byTestId('settings-base-currency-trace-id')?.textContent).toContain('trace-patch');
+    expect(byTestId('settings-base-currency-retry')).toBeNull();
+    expect(statusLine()?.textContent ?? '').toBe('');
+
+    const dom = document.body.innerHTML;
+    expect(dom).not.toContain('BACKEND-MESSAGE-CANARY');
+    expect(dom).not.toContain('unsupported currency');
+  });
+
+  it('失敗後再選一次即重試,成功時清掉錯誤', async () => {
+    let attempt = 0;
+    vi.stubGlobal('fetch', routedFetch({
+      me: () => success({ baseCurrency: 'TWD' }),
+      patch: body => {
+        attempt += 1;
+        return attempt === 1
+          ? failure('INTERNAL_ERROR', 500)
+          : success({ baseCurrency: (body as { baseCurrency: string }).baseCurrency });
+      },
+    }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+    await choose('EUR');
+    expect(byTestId('settings-base-currency-error')).not.toBeNull();
+
+    await choose('EUR');
+    expect(byTestId('settings-base-currency-error')).toBeNull();
+    expect(ccySelect().value).toBe('EUR');
+    expect(statusLine()?.textContent).toBe(t('zh', 'settingSaved'));
+  });
+
+  const ERROR_CASES: Array<{ name: string; patch: () => Response | Promise<Response>; key: string }> = [
+    { name: '403 AUTH_CSRF_TOKEN_INVALID', patch: () => failure('AUTH_CSRF_TOKEN_INVALID', 403), key: 'baseCurrencyErrCsrf' },
+    { name: '403 AUTH_CSRF_TOKEN_MISSING', patch: () => failure('AUTH_CSRF_TOKEN_MISSING', 403), key: 'baseCurrencyErrCsrf' },
+    { name: '403 AUTH_FORBIDDEN', patch: () => failure('AUTH_FORBIDDEN', 403), key: 'baseCurrencyErrForbidden' },
+    { name: '網路失敗(fetch reject)', patch: () => Promise.reject(new TypeError('offline')), key: 'baseCurrencyErrNetwork' },
+    { name: '500 INTERNAL_ERROR', patch: () => failure('INTERNAL_ERROR', 500), key: 'baseCurrencyErrUnknown' },
+    { name: '400 VALIDATION_FAILED 但沒有 fields.baseCurrency', patch: () => failure('VALIDATION_FAILED', 400), key: 'baseCurrencyErrUnknown' },
+  ];
+
+  for (const c of ERROR_CASES) {
+    it(`錯誤分派:${c.name} → ${c.key}`, async () => {
+      vi.stubGlobal('fetch', routedFetch({ me: () => success({ baseCurrency: 'TWD' }), patch: c.patch }));
+
+      mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+      await flushAsync();
+      await openDisplayTab();
+      await choose('USD');
+
+      const error = byTestId('settings-base-currency-error');
+      expect(error?.textContent).toContain(t('zh', c.key));
+      expect(ccySelect().value).toBe('TWD');
+      expect(byTestId('settings-base-currency-retry')).toBeNull();
+    });
+  }
+
+  it('401:回到已儲存值,但不在這裡顯示錯誤(交給全域 SessionBanner)', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/api/v1/me') && method === 'GET') return success({ baseCurrency: 'TWD' });
+      if (url.includes('/ai-access/')) return unrelatedFailure();
+      if (url.endsWith('/api/v1/me/preferences') || url.endsWith('/api/v1/auth/refresh')) {
+        return failure('AUTH_UNAUTHORIZED', 401);
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+    await choose('USD');
+
+    expect(ccySelect().value).toBe('TWD');
+    expect(byTestId('settings-base-currency-error')).toBeNull();
+  });
+});
+
+describe('Settings 頁頂的示範資料標示', () => {
+  it('API mode 顯示基準幣例外行', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+    vi.stubGlobal('fetch', routedFetch({ me: () => success({ baseCurrency: 'TWD' }) }));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+
+    const exception = byTestId('mock-data-notice-exception');
+    expect(exception).not.toBeNull();
+    expect(exception?.textContent).toContain(t('zh', 'mockDataNoticeExceptBaseCurrency'));
+    // 既有標示不變:仍標示其餘區塊是示範資料
+    expect(byTestId('mock-data-notice')?.textContent).toContain('示範資料');
   });
 });
