@@ -4,7 +4,7 @@ import Positions from './Positions.vue';
 // 原始碼字面(Vite ?raw):用來斷言 Positions 沒有 import mock store(PORT-04 / judgment §3)。
 // 不走 node:fs —— 本專案 tsconfig 未含 @types/node,且本 plan 不得新增套件(沿用 03-03 的手法)。
 import positionsSource from './Positions.vue?raw';
-import { fmtNum, fmtPct } from '../data';
+import { fmtPct } from '../data';
 import { fmtMoneyAmount, fmtSignedMoneyAmount } from '../moneyFormat';
 import { t } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';

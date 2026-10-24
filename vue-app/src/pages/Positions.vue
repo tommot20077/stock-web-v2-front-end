@@ -192,27 +192,36 @@
     </div>
 
     <!--
-      Sector breakdown:HoldingDto 無 sector,API mode 全部持倉會歸 'Other' 等同假資料
-      → 隱藏(D-01 更正 + D-16)。mock mode 照舊。
+      Sector breakdown(04.1-16 / PORT-12 / D-19):兩模式共用同一份模板,吃 view-model `sectorRows`。
+      mock 由既有 sectorStats 映射;API mode 由 summary.sectorAllocation 映射(Phase 3 因 HoldingDto 無 sector
+      而隱藏,現在後端提供分組,資料來源是真的)。summary 載入中 / 失敗時不渲染 —— 單一重試點在頂端錯誤區塊(U-19)。
     -->
-    <div v-if="live" class="card" style="grid-column: span 12; padding: 20px">
+    <div v-if="live || summary" class="card" style="grid-column: span 12; padding: 20px" data-testid="positions-sector">
       <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'sectorBreakdown') }}</div>
-      <div class="sectors">
-        <div v-for="(s, i) in sectorStats" :key="s.name" class="sector">
-          <div class="row-between" style="margin-bottom:6px">
+      <div v-if="!sectorRows.length" class="block-state" style="padding:0" data-testid="positions-sector-empty">
+        {{ t(lang, 'noHoldings') }}
+      </div>
+      <div v-else class="sectors">
+        <div
+          v-for="s in sectorRows"
+          :key="s.key"
+          class="sector"
+          :data-testid="s.uncategorized ? 'positions-sector-uncategorized' : undefined"
+        >
+          <div class="row-between" style="margin-bottom:8px">
             <div style="display:flex;align-items:center;gap:8px;font-size:13px">
-              <span :style="{ width: '8px', height: '8px', background: sectorColor(i), borderRadius: '2px' }" />
-              <span style="font-weight:500">{{ s.name }}</span>
-              <span style="color:var(--fg-mute);font-size:11px">{{ s.count }}</span>
+              <span class="sec-swatch" :style="{ background: s.color }" />
+              <span style="font-weight:600">{{ s.label }}</span>
+              <span style="color:var(--fg-dim);font-size:12px">{{ s.count }}</span>
             </div>
-            <div class="num" style="font-size:13px;font-weight:500">${{ fmtNum(s.value, 0) }}</div>
+            <div class="num" style="font-size:13px;font-weight:600">{{ s.valueText }}</div>
           </div>
           <div class="sec-bar">
-            <div class="sec-fill" :style="{ width: s.weight + '%', background: sectorColor(i) }" />
+            <div class="sec-fill" :style="{ width: s.weight + '%', background: s.color }" />
           </div>
-          <div class="row-between" style="font-size:11px;color:var(--fg-dim);margin-top:4px">
-            <span>{{ s.weight.toFixed(1) }}%</span>
-            <span :style="{ color: s.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.pnlPct) }}</span>
+          <div class="row-between" style="font-size:12px;color:var(--fg-dim);margin-top:4px">
+            <span>{{ s.weightText }}</span>
+            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up)' : 'var(--dn)' }">{{ s.pnlText }}</span>
           </div>
         </div>
       </div>
@@ -362,7 +371,7 @@
               <!-- D-03:行情來自快取可能延遲,顯示時間讓使用者知道資料新鮮度 -->
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
-            <td class="num" style="text-align:right;font-weight:500">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
             <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
               <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
               <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
@@ -403,7 +412,7 @@
 <script setup lang="ts">
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t, tf } from '../i18n';
-import { fmtMoneyAmount, fmtRatioPct, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
+import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
@@ -732,7 +741,7 @@ const apiTopMovers = computed(() => {
 
 const movers = computed(() => (live ? mockTopMovers.value : apiTopMovers.value));
 
-// Sector breakdown(mock only)
+// Sector breakdown 的分類色輪替與 mock 的 sectorStats(API mode 走 summary.sectorAllocation,見 sectorRows)
 const SECTOR_COLORS = ['var(--accent)', '#3b82f6', '#a855f7', '#f59e0b', '#94a3b8', '#10b981'];
 function sectorColor(i: number) { return SECTOR_COLORS[i % SECTOR_COLORS.length]; }
 
@@ -755,6 +764,66 @@ const sectorStats = computed(() => {
       pnlPct: safePct(x.value - x.cost, x.cost),
     }))
     .sort((a, b) => b.value - a.value);
+});
+
+/**
+ * 產業卡的 view-model(兩模式共用模板)。weight 是 0..100 的 bar 寬度,weightText 是已格式化的標籤。
+ * mock:既有 sectorStats 原樣映射(美元金額、損益 %,輸出與改寫前逐字相同)。
+ * API:summary.sectorAllocation —— 金額與損益都是後端的基準幣值,前端不換匯(D-21);
+ *     損益只顯示金額、不顯示 %(比率要由前端以 pnl / (value − pnl) 推導,違反 Phase 3 D-04「不平行重算」)。
+ */
+interface SectorRow {
+  key: string;
+  label: string;
+  color: string;
+  count: number;
+  valueText: string;
+  weight: number;
+  weightText: string;
+  pnlText: string;
+  pnlUp: boolean;
+  uncategorized: boolean;
+}
+
+const UNCATEGORIZED_COLOR = 'var(--fg-dim)';
+
+const sectorRows = computed<SectorRow[]>(() => {
+  if (live) {
+    return sectorStats.value.map((x, i) => ({
+      key: x.name,
+      label: x.name,
+      color: sectorColor(i),
+      count: x.count,
+      valueText: '$' + fmtNum(x.value, 0),
+      weight: x.weight,
+      weightText: x.weight.toFixed(1) + '%',
+      pnlText: fmtPct(x.pnlPct),
+      pnlUp: x.pnl >= 0,
+      uncategorized: false,
+    }));
+  }
+  const s = summary.value;
+  if (!s) return [];
+  const base = s.baseCurrency;
+  // 後端已依 value 降冪、null 最後;這裡再做一次穩定分割,不把「未分類排最後」押在後端順序上。
+  const classified = s.sectorAllocation.filter(x => x.sector !== null);
+  const unclassified = s.sectorAllocation.filter(x => x.sector === null);
+  return [...classified, ...unclassified].map((x, i) => {
+    const uncategorized = x.sector === null;
+    return {
+      key: uncategorized ? '__uncategorized__' : (x.sector as string),
+      label: uncategorized ? t(props.lang, 'sectorUncategorized') : (x.sector as string),
+      // 未分類固定色、不參與輪替:有分類的組別依序取色,不因為 null 佔掉一格
+      color: uncategorized ? UNCATEGORIZED_COLOR : sectorColor(i),
+      count: x.holdingCount,
+      valueText: fmtMoney(x.value, base, 0),
+      weight: Number.isFinite(x.weight) ? Math.max(0, Math.min(100, x.weight * 100)) : 0,
+      weightText: fmtWeightPct(x.weight),
+      pnlText: fmtSignedMoney(x.unrealizedPnl, base, 0),
+      pnlUp: x.unrealizedPnl >= 0,
+      uncategorized,
+    };
+  });
 });
 
 // Sortable holdings
@@ -930,7 +999,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .stat-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .stat-d { font-size: 11px; margin-top: 2px; color: var(--fg-mute); }
 .chart { padding: 20px; }
-.ttl { font-size: 14px; font-weight: 600; }
+.ttl { font-size: 16px; font-weight: 600; }
 
 /* Top movers */
 .mover { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
@@ -942,7 +1011,10 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 }
 
 /* Sector breakdown */
-.sectors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px 24px; }
+.sectors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px 24px; }
+@media (max-width: 899px) { .sectors { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 559px) { .sectors { grid-template-columns: 1fr; } }
+.sec-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .sec-bar { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
 .sec-fill { height: 100%; transition: width .4s cubic-bezier(.2,.8,.2,1); }
 
