@@ -967,3 +967,107 @@ describe('Positions — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () =
     expect(allTestids('positions-fresh-badge')).toHaveLength(0);
   });
 });
+
+// =====================================================================================
+// 04.1-16 Task 1(tracer):API mode 持倉表「今日損益」欄(D-14 / D-17 / D-26、U-13)。
+// 單檔值是原幣(沒有匯率參與),所以列層級不放「不含匯差」;null 一律排最後。
+// =====================================================================================
+
+/** 兩列:A 有今日損益(原幣 125、+4.35%),B 缺前收 → dayPricePnl null。 */
+function dayPnlFixture(): HoldingDto[] {
+  return [
+    holding({ symbol: 'AAA', marketValue: 30, marketValueInBase: 30, dayPricePnl: 125, dayPricePnlRatio: 0.04347826 }),
+    holding({ symbol: 'BBB', marketValue: 20, marketValueInBase: 20, dayPricePnl: null, dayPricePnlRatio: null }),
+  ];
+}
+
+function dayPnlCells(): HTMLElement[] {
+  return allTestids('positions-day-pnl');
+}
+
+describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
+  it('API mode 每列顯示原幣帶號金額 + 比率第二行,正值帶 up 色 class,無 $ 無代碼', async () => {
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+
+    const cells = dayPnlCells();
+    expect(cells).toHaveLength(2);
+    const lines = [...cells[0].children].map(el => el.textContent?.trim());
+    expect(lines).toEqual(['+125', '+4.35%']);
+    expect(cells[0].textContent).not.toContain('$');
+    expect(cells[0].textContent).not.toContain('TWD');
+    expect(cells[0].classList.contains('day-up')).toBe(true);
+    expect(cells[0].classList.contains('day-dn')).toBe(false);
+  });
+
+  it('負值帶 dn 色 class 與負號', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'NEG', dayPricePnl: -40, dayPricePnlRatio: -0.0123 })],
+      summaryWith({ totalMarketValue: 1, holdingCount: 1 }),
+    );
+
+    const cell = dayPnlCells()[0];
+    expect([...cell.children].map(el => el.textContent?.trim())).toEqual(['-40', '-1.23%']);
+    expect(cell.classList.contains('day-dn')).toBe(true);
+  });
+
+  it('dayPricePnl 為 null:— 為 aria-hidden,螢幕閱讀器讀「未計入」文字,色 fg-dim,不渲染比率行', async () => {
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+
+    const cell = dayPnlCells()[1];
+    const dash = cell.querySelector('[aria-hidden="true"]');
+    expect(dash?.textContent).toBe('—');
+    const sr = cell.querySelector('.sr-only');
+    expect(sr?.textContent).toBe(t('en', 'dayPnlUnavailable'));
+    expect(cell.classList.contains('day-na')).toBe(true);
+    expect(cell.classList.contains('day-up')).toBe(false);
+    expect(cell.classList.contains('day-dn')).toBe(false);
+    expect(cell.textContent).not.toMatch(/%|NaN/);
+  });
+
+  it('表頭可排序(依比率):升冪與降冪 null 列都在最後', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'NUL', marketValue: 40, dayPricePnl: null, dayPricePnlRatio: null }),
+        holding({ symbol: 'LOW', marketValue: 30, dayPricePnl: -10, dayPricePnlRatio: -0.02 }),
+        holding({ symbol: 'HIG', marketValue: 20, dayPricePnl: 50, dayPricePnlRatio: 0.05 }),
+      ],
+      summaryWith({ totalMarketValue: 90, holdingCount: 3 }),
+    );
+
+    click(headerCell(t('en', 'todayPnl')));
+    await nextTick();
+    expect(rowSymbols()).toEqual(['HIG', 'LOW', 'NUL']); // 首次點擊 → 降冪
+
+    click(headerCell(t('en', 'todayPnl')));
+    await nextTick();
+    expect(rowSymbols()).toEqual(['LOW', 'HIG', 'NUL']); // 升冪,null 仍在最後
+  });
+
+  it('mock mode:表頭不含今日損益,表頭與每列 td 數量維持 8', async () => {
+    mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    const heads = [...document.body.querySelectorAll('thead th')];
+    expect(heads).toHaveLength(8);
+    expect(heads.map(th => th.textContent)).not.toContain(t('en', 'todayPnl'));
+    expect(dayPnlCells()).toHaveLength(0);
+    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(8);
+  });
+
+  it('API mode:表頭 9 欄、每列 td 9 個,今日損益在 P&L 與權重之間', async () => {
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+
+    const heads = [...document.body.querySelectorAll('thead th')].map(th => th.textContent?.trim() ?? '');
+    expect(heads).toHaveLength(9);
+    expect(heads[6]).toMatch(/^P&L/);
+    expect(heads[7]).toMatch(new RegExp(`^${t('en', 'todayPnl').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(heads[8]).toMatch(new RegExp(`^${t('en', 'weight')}`));
+    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(9);
+  });
+
+  it('styles.css 提供標準 .sr-only 工具類', async () => {
+    const css = (await import('../styles.css?raw')).default;
+    expect(css).toMatch(/\.sr-only\s*\{[^}]*position:\s*absolute/);
+    expect(css).toMatch(/\.sr-only\s*\{[^}]*clip:\s*rect\(0,\s*0,\s*0,\s*0\)/);
+  });
+});
