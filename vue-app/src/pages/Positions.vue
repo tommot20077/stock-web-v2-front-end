@@ -231,7 +231,7 @@
     <div
       class="card"
       data-testid="positions-table"
-      style="grid-column: span 12; overflow-x: auto"
+      style="grid-column: span 12; overflow-x: auto; position: relative"
       :class="{ 'block-refreshing': holdingsRefreshing }"
       :aria-busy="holdingsRefreshing"
     >
@@ -999,6 +999,9 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .stat-v { font-size: 20px; font-weight: 600; margin-top: 6px; letter-spacing: -0.2px; }
 .stat-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .stat-d { font-size: 11px; margin-top: 2px; color: var(--fg-mute); }
+/* 六張統計卡:span 2 在窄螢幕放不下 9 位數金額 + 幣別代碼,會把 main 撐出水平捲動(04.1-19 L5 抓到) */
+@media (max-width: 1279px) { .stat { grid-column: span 4; } }
+@media (max-width: 639px) { .stat { grid-column: span 12; } }
 .chart { padding: 20px; }
 .ttl { font-size: 16px; font-weight: 600; }
 
