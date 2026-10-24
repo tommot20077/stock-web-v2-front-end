@@ -27,7 +27,12 @@
         <!-- FORM -->
         <div v-if="step === 'form'" class="body">
           <div id="cash-type-label" class="lab">{{ t(lang, 'type') }}</div>
-          <div class="type-toggle" role="group" aria-labelledby="cash-type-label">
+          <div
+            class="type-toggle"
+            role="group"
+            aria-labelledby="cash-type-label"
+            :aria-describedby="describedBy('type')"
+          >
             <button
               type="button"
               :class="['type-btn', { active: type === 'DEPOSIT' }]"
@@ -45,9 +50,21 @@
               @click="type = 'WITHDRAWAL'"
             >{{ t(lang, 'cashTypeWithdrawal') }}</button>
           </div>
+          <!-- 欄位級錯誤節點不加 role="alert":多個欄位同時出錯會連續朗讀,語意由 aria-describedby 承擔 -->
+          <p
+            v-if="fieldErrorText('type')"
+            :id="fieldErrorId('type')"
+            class="field-error"
+            data-testid="cash-field-error-type"
+          >{{ fieldErrorText('type') }}</p>
 
           <div id="cash-currency-label" class="lab">{{ t(lang, 'cashCurrency') }}</div>
-          <div class="ccy-seg" role="group" aria-labelledby="cash-currency-label">
+          <div
+            class="ccy-seg"
+            role="group"
+            aria-labelledby="cash-currency-label"
+            :aria-describedby="describedBy('currency')"
+          >
             <button
               v-for="code in BASE_CURRENCY_OPTIONS"
               :key="code"
@@ -59,6 +76,12 @@
               @click="currency = code"
             >{{ code }}</button>
           </div>
+          <p
+            v-if="fieldErrorText('currency')"
+            :id="fieldErrorId('currency')"
+            class="field-error"
+            data-testid="cash-field-error-currency"
+          >{{ fieldErrorText('currency') }}</p>
 
           <label class="lab" for="cash-amount">{{ t(lang, 'cashAmount') }}</label>
           <input
@@ -70,10 +93,25 @@
             autocomplete="off"
             class="inp big"
             data-testid="cash-amount"
-            aria-describedby="cash-amount-hint"
+            :aria-invalid="invalidAttr('amount')"
+            :aria-describedby="describedBy('amount', 'cash-amount-hint', overBalance ? 'cash-over-balance-hint' : '')"
             :disabled="submitting"
+            @blur="touched.amount = true"
           />
           <p id="cash-amount-hint" class="hint">{{ t(lang, 'cashAmountHint') }}</p>
+          <!-- 出金大於該幣別目前餘額:資訊,不是錯誤,不阻擋(D-01 / U-16);前端只比較大小,不做會計 -->
+          <p
+            v-if="overBalance"
+            id="cash-over-balance-hint"
+            class="hint"
+            data-testid="cash-withdraw-over-balance"
+          >{{ tf(lang, 'cashWithdrawOverBalance', { code: currency }) }}</p>
+          <p
+            v-if="fieldErrorText('amount')"
+            :id="fieldErrorId('amount')"
+            class="field-error"
+            data-testid="cash-field-error-amount"
+          >{{ fieldErrorText('amount') }}</p>
 
           <label class="lab" for="cash-occurred-at">{{ t(lang, 'cashOccurredAt') }}</label>
           <input
@@ -82,11 +120,19 @@
             type="datetime-local"
             class="inp"
             data-testid="cash-occurred-at"
-            aria-describedby="cash-occurred-at-hint"
+            :aria-invalid="invalidAttr('occurredAt')"
+            :aria-describedby="describedBy('occurredAt', 'cash-occurred-at-hint')"
             :max="maxOccurredAt"
             :disabled="submitting"
+            @blur="touched.occurredAt = true"
           />
           <p id="cash-occurred-at-hint" class="hint">{{ t(lang, 'cashOccurredAtHint') }}</p>
+          <p
+            v-if="fieldErrorText('occurredAt')"
+            :id="fieldErrorId('occurredAt')"
+            class="field-error"
+            data-testid="cash-field-error-occurredAt"
+          >{{ fieldErrorText('occurredAt') }}</p>
 
           <label class="lab" for="cash-note">{{ t(lang, 'notes') }}</label>
           <textarea
@@ -96,12 +142,27 @@
             maxlength="500"
             class="inp"
             data-testid="cash-note"
+            :aria-invalid="invalidAttr('note')"
+            :aria-describedby="describedBy('note')"
             :disabled="submitting"
           />
+          <p
+            v-if="fieldErrorText('note')"
+            :id="fieldErrorId('note')"
+            class="field-error"
+            data-testid="cash-field-error-note"
+          >{{ fieldErrorText('note') }}</p>
 
           <!-- 常駐揭露:這裡只記帳(D-01),寫入後不可改(append-only,錯了只能沖銷) -->
           <p class="hint note-first">{{ t(lang, 'cashLedgerOnlyNote') }}</p>
           <p class="hint">{{ t(lang, 'cashIrreversibleNote') }}</p>
+          <p
+            v-if="submitting"
+            class="submitting-note"
+            role="status"
+            aria-live="polite"
+            data-testid="cash-submitting-status"
+          >{{ t(lang, 'recordingTrade') }}</p>
         </div>
 
         <!-- RESULT:只渲染後端回傳的 CashEntryDto,不顯示表單值(D-09) -->
@@ -139,7 +200,7 @@
 
         <!-- 送出錯誤:body 與 footer 之間的單一區域;診斷列只露 code 與 traceId,絕不露後端 message -->
         <div
-          v-if="submitError"
+          v-if="submitError && !hasFieldLevelErrors"
           class="form-error submit-error"
           role="alert"
           data-testid="cash-error"
@@ -188,8 +249,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
-import { t } from '../i18n';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyCashEntryCreated } from '../services/portfolioRevision';
@@ -229,6 +290,9 @@ const occurredAt = ref('');
 const maxOccurredAt = ref('');
 const note = ref('');
 
+/** 欄位被使用者離開過才算「碰過」:空欄位在 blur 前不提早罵人。 */
+const touched = reactive({ amount: false, occurredAt: false });
+
 const submitting = ref(false);
 const recorded = ref<CashEntryDto | null>(null);
 
@@ -262,6 +326,8 @@ function resetForm() {
   occurredAt.value = toLocalInputValue(now);
   maxOccurredAt.value = toLocalInputValue(now);
   recorded.value = null;
+  touched.amount = false;
+  touched.occurredAt = false;
   submitError.value = null;
   currentKey.value = null;
   dirtySinceSubmit.value = false;
@@ -301,8 +367,103 @@ const resultSubText = computed(() => {
   return fmtSignedMoney(signed, entry.currency, minorUnits(entry.currency));
 });
 
+// =================== 前端自檢(UI-SPEC §3 欄位契約) ===================
+// 後端 `@DecimalMax` / `@Digits` 才是權威;這裡只是在送出前把「必定被拒」的輸入擋下並說明原因。
+// 上限與小數位數與 `cashErrAmount` 的靜態文案一致(文案不從錯誤訊息解析)。
+const AMOUNT_MAX = 1_000_000_000_000;
+const AMOUNT_MAX_DECIMALS = 8;
+const AMOUNT_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
+
 const parsedAmount = computed(() => Number(amount.value.trim()));
-const canSubmit = computed(() => parsedAmount.value > 0);
+
+const amountValid = computed(() => {
+  const text = amount.value.trim();
+  if (!AMOUNT_PATTERN.test(text)) return false;
+  const decimals = text.includes('.') ? text.split('.')[1].length : 0;
+  if (decimals > AMOUNT_MAX_DECIMALS) return false;
+  const value = Number(text);
+  return Number.isFinite(value) && value > 0 && value <= AMOUNT_MAX;
+});
+
+/** 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。 */
+function isOccurredAtValid(): boolean {
+  if (!occurredAt.value) return false;
+  const time = new Date(occurredAt.value).getTime();
+  return Number.isFinite(time) && time <= Date.now();
+}
+const occurredAtValid = computed(() => isOccurredAtValid());
+
+const canSubmit = computed(() => amountValid.value && occurredAtValid.value);
+
+/** 出金超過該幣別目前餘額 —— 只決定提示是否顯示,不顯示差額,前端不做會計。 */
+const overBalance = computed(() => {
+  if (type.value !== 'WITHDRAWAL' || !props.balances || !amountValid.value) return false;
+  const balance = props.balances.find(b => b.currency === currency.value)?.amount ?? 0;
+  return parsedAmount.value > balance;
+});
+
+// =================== 欄位級錯誤(後端 fields + 前端自檢共用同一組節點) ===================
+/**
+ * `fields` 的 key → 前端自己的 i18n 文案。
+ * **只用 key 判斷「哪個欄位錯了」** —— value 是 Bean Validation 的英文預設訊息,絕不入 DOM。
+ */
+const FIELD_ERROR_COPY: Record<string, string> = {
+  type: 'cashErrType',
+  currency: 'cashErrCurrency',
+  amount: 'cashErrAmount',
+  occurredAt: 'cashErrOccurredAt',
+  note: 'tradeErrNote',
+};
+
+const serverFieldKeys = computed(() => Object.keys(submitError.value?.fields ?? {}));
+
+/**
+ * `fields` 至少有一個 key 對得到輸入框,才算「欄位級」呈現。
+ * 一個都對不到(例如 `Idempotency-Key` 這類 header)時退回底部的一般驗證錯誤 —— 否則按了送出卻什麼都看不到。
+ */
+const hasFieldLevelErrors = computed(() => serverFieldKeys.value.some(field => field in FIELD_ERROR_COPY));
+
+function fieldErrorId(field: string): string {
+  return `cash-${field}-error`;
+}
+
+function localFieldInvalid(field: string): boolean {
+  if (field === 'amount') return !amountValid.value && (touched.amount || amount.value !== '');
+  if (field === 'occurredAt') return !occurredAtValid.value && (touched.occurredAt || occurredAt.value !== '');
+  return false;
+}
+
+function fieldErrorText(field: string): string {
+  const key = FIELD_ERROR_COPY[field];
+  if (!key) return '';
+  if (serverFieldKeys.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
+  return '';
+}
+
+/** 多個 id 以空白分隔;沒有任何關聯節點時回 undefined(不渲染空屬性)。 */
+function describedBy(field: string, ...hintIds: string[]): string | undefined {
+  const ids = hintIds.filter(Boolean);
+  if (fieldErrorText(field)) ids.push(fieldErrorId(field));
+  return ids.length ? ids.join(' ') : undefined;
+}
+
+function invalidAttr(field: string): 'true' | undefined {
+  return fieldErrorText(field) ? 'true' : undefined;
+}
+
+/**
+ * 任何欄位變動都會讓下一次送出換新 key,並清掉上一次的送出錯誤。
+ * `flush: 'sync'` 是刻意的:使用者改完欄位可能**立刻**按送出,
+ * 預設的 pre-flush 會讓那一次仍沿用舊 key。
+ */
+watch(
+  () => [type.value, currency.value, amount.value, occurredAt.value, note.value],
+  () => {
+    dirtySinceSubmit.value = true;
+    submitError.value = null;
+  },
+  { flush: 'sync' },
+);
 
 /**
  * key 在「按下送出」時產生,且必須是 CSPRNG(`crypto.randomUUID()`)。
@@ -319,7 +480,12 @@ function ensureIdempotencyKey(): string {
 async function submitEntry() {
   if (submitting.value) return;
   submitError.value = null;
-  if (!canSubmit.value) return;
+  if (!canSubmit.value || !isOccurredAtValid()) {
+    // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時讓欄位錯誤可見,不得靜默。
+    touched.amount = true;
+    touched.occurredAt = true;
+    return;
+  }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
   try {
@@ -350,14 +516,47 @@ async function submitEntry() {
   }
 }
 
+/** 底部錯誤依 `error.code` 分派(不假設錯誤順序);每個 code 對應 UI-SPEC 的一條文案。 */
+const SUBMIT_ERROR_COPY: Record<string, string> = {
+  VALIDATION_FAILED: 'cashErrValidation',
+  CASH_IDEMPOTENCY_KEY_REUSED: 'cashErrKeyReused',
+  AUTH_CSRF_TOKEN_INVALID: 'cashErrCsrf',
+  // 前端合成(`apiClient` 的 `ensureCsrfToken`:bootstrap 後仍拿不到 cookie),後端不會送。
+  AUTH_CSRF_TOKEN_MISSING: 'cashErrCsrf',
+  AUTH_FORBIDDEN: 'cashErrForbidden',
+  // 前端合成的診斷碼:後端不會回這個值,所以與「後端回了未知 code」可明確區分。
+  NETWORK_ERROR: 'cashErrNetwork',
+};
+
+const submitErrorMessage = computed(() => {
+  const error = submitError.value;
+  if (!error) return '';
+  const key = SUBMIT_ERROR_COPY[error.code] ?? (error.status === 403 ? 'cashErrForbidden' : 'cashErrUnknown');
+  return t(props.lang, key);
+});
+
+/**
+ * 送出失敗的統一落點。
+ *
+ * **key 的處置:預設一律保留** —— 「這次沒寫入(或結果未知),但意圖沒變」,沿用同一把重送是安全且正確的
+ * (這正是 `cashErrNetwork` 敢寫「直接再送出一次不會重複記錄」的前提)。
+ * 網路失敗、5xx、`VALIDATION_FAILED`、CSRF / 403 都走這條。
+ *
+ * **例外是 `CASH_IDEMPOTENCY_KEY_REUSED`:必須丟棄 key。** 否則使用者照文案「確認欄位後重新送出」
+ * 會用同一把 key 再吃一次 409,形成無出路的迴圈。
+ */
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
     ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
     : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
-  submitError.value = described;
-}
 
-const submitErrorMessage = computed(() => (submitError.value ? t(props.lang, 'cashErrUnknown') : ''));
+  // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
+  // key 保留:登入回來後重送的是同一個意圖。
+  if (described.status === 401) return;
+
+  submitError.value = described;
+  if (described.code === 'CASH_IDEMPOTENCY_KEY_REUSED') currentKey.value = null;
+}
 
 async function recordAnother() {
   resetForm();
@@ -374,6 +573,14 @@ function onClose() {
   if (submitting.value) return;
   emit('close');
 }
+
+function onKeydown(event: KeyboardEvent) {
+  if (!props.open || event.key !== 'Escape') return;
+  onClose();
+}
+
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <style scoped>
@@ -430,6 +637,13 @@ function onClose() {
 .inp.big { font-size: 20px; font-weight: 600; line-height: 1.25; padding: 12px 16px; min-height: 44px; }
 .inp:disabled { opacity: .5; cursor: not-allowed; }
 textarea.inp { resize: vertical; }
+
+/* 欄位級錯誤:輸入框下方 12px --dn 文字 */
+.field-error {
+  margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
+  color: var(--dn); overflow-wrap: anywhere;
+}
+.submitting-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 
 /* 類型:OrderTicket .side-btn 的形狀,選中態為中性(損益顏色語意不屬於入出金) */
 .type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
