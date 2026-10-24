@@ -221,7 +221,65 @@ describe('portfolioApi mock adapter reads', () => {
       totalPnl: 300,
       roi: 0.3,
       holdingCount: 2,
+      // 04.1-11:Phase 04.1 新增的 11 個欄位(mock 自洽值,不含亂數)
+      baseCurrency: 'USD',
+      fxExcludedCount: 0,
+      unconvertedCurrencies: [],
+      dayPricePnl: null,
+      dayPricePnlRatio: null,
+      dayPnlExcludedCount: 2,
+      cash: 0,
+      totalEquity: 1300,
+      cashBalances: [],
+      allocation: [{ category: 'STOCK', value: 1300, weight: 1 }],
+      sectorAllocation: [{ sector: 'Tech', value: 1300, weight: 1, holdingCount: 2, unrealizedPnl: 300 }],
     });
+  });
+
+  it('groups sectorAllocation by position sector: weights sum to 1, sorted by value descending', async () => {
+    const api = createMockPortfolioApi();
+    useMockPortfolioStore().positions = [
+      { sym: 'AAA', name: 'Alpha', qty: 10, avg: 80, price: 100, sector: 'Tech' },
+      { sym: 'CCC', name: 'Gamma', qty: 1, avg: 400, price: 500, sector: 'Crypto' },
+      { sym: 'BBB', name: 'Beta', qty: 5, avg: 40, price: 60, sector: 'Tech' },
+    ];
+
+    const summary = await api.getSummary();
+
+    expect(summary.sectorAllocation.map(slice => slice.sector)).toEqual(['Tech', 'Crypto']);
+    expect(summary.sectorAllocation[0]).toMatchObject({ value: 1300, holdingCount: 2, unrealizedPnl: 300 });
+    expect(summary.sectorAllocation[1]).toMatchObject({ value: 500, holdingCount: 1, unrealizedPnl: 100 });
+    const weightSum = summary.sectorAllocation.reduce((sum, slice) => sum + slice.weight, 0);
+    expect(weightSum).toBeCloseTo(1, 10);
+    expect(summary.allocation).toEqual([{ category: 'STOCK', value: 1800, weight: 1 }]);
+    expect(summary.totalEquity).toBe(summary.totalMarketValue);
+    expect(summary.dayPnlExcludedCount).toBe(summary.holdingCount);
+  });
+
+  it('returns empty allocation lists when there are no positions', async () => {
+    const api = createMockPortfolioApi();
+    useMockPortfolioStore().positions = [];
+
+    const summary = await api.getSummary();
+
+    expect(summary.holdingCount).toBe(0);
+    expect(summary.allocation).toEqual([]);
+    expect(summary.sectorAllocation).toEqual([]);
+  });
+
+  it('does not leak mutable mock state: consecutive summaries never share array references', async () => {
+    const api = createMockPortfolioApi();
+    useMockPortfolioStore().positions = [{ sym: 'AAA', name: 'Alpha', qty: 1, avg: 1, price: 2, sector: 'Tech' }];
+
+    const first = await api.getSummary();
+    const second = await api.getSummary();
+
+    expect(first.allocation).not.toBe(second.allocation);
+    expect(first.sectorAllocation).not.toBe(second.sectorAllocation);
+    expect(first.cashBalances).not.toBe(second.cashBalances);
+    expect(first.unconvertedCurrencies).not.toBe(second.unconvertedCurrencies);
+    first.sectorAllocation[0].value = 999;
+    expect((await api.getSummary()).sectorAllocation[0].value).toBe(2);
   });
 
   it('derives holding DTOs from live store positions', async () => {
@@ -243,6 +301,15 @@ describe('portfolioApi mock adapter reads', () => {
       realizedPnl: 0,
       unrealizedPnl: 200,
       roi: 0.25,
+      // 04.1-11:Phase 04.1 新增的 8 個欄位(mock 宇宙為美股報價 → USD)
+      currency: 'USD',
+      assetType: 'STOCK',
+      sector: 'Tech',
+      baseCurrency: 'USD',
+      marketValueInBase: 1000,
+      previousClose: null,
+      dayPricePnl: null,
+      dayPricePnlRatio: null,
     });
   });
 
@@ -261,6 +328,8 @@ describe('portfolioApi mock adapter reads', () => {
       price: 100,
       fee: 1,
       note: 'a',
+      // mock `Trade` 沒有幣別,不猜測(UI-SPEC U-29)
+      currency: null,
       executedAt: '2026-03-01T00:00:00Z',
       createdAt: '2026-03-01T00:00:00Z',
     });
