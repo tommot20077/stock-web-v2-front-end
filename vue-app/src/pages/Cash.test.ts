@@ -252,7 +252,8 @@ describe('Cash page — list rendering (API mode)', () => {
     const first = rows()[0]!;
     expect(first.querySelector('b')).toBeNull();
     expect(first.textContent).toContain('<b>bold</b> & more');
-    expect(first.querySelector('[title="<b>bold</b> & more"]')).toBeTruthy();
+    const titled = [...first.querySelectorAll('[title]')].map(el => el.getAttribute('title'));
+    expect(titled).toContain('<b>bold</b> & more');
     expect(rows()[1]!.textContent).toContain('—');
   });
 });

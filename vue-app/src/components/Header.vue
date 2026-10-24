@@ -96,6 +96,7 @@ const navItems = computed(() => {
     { k: 'backtest', l: t(props.lang, 'backtest') },
     { k: 'analytics', l: t(props.lang, 'analytics') },
     { k: 'trades', l: t(props.lang, 'trades') },
+    { k: 'cash', l: t(props.lang, 'cash') },
     { k: 'alerts', l: t(props.lang, 'alerts') },
     { k: 'notifications', l: t(props.lang, 'notifications') },
     { k: 'settings', l: t(props.lang, 'settings') },

@@ -39,6 +39,7 @@
       <Positions v-else-if="page === 'positions'" :lang="tweaks.lang" @order="openTicket" />
       <Analytics v-else-if="page === 'analytics'" :lang="tweaks.lang" @order="openTicket" @toast="showToast" />
       <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" @order="openTicket" />
+      <Cash v-else-if="page === 'cash'" :lang="tweaks.lang" />
       <Alerts v-else-if="page === 'alerts'" :lang="tweaks.lang" />
       <Notifications v-else-if="page === 'notifications'" :lang="tweaks.lang" />
       <Settings v-else-if="page === 'settings'" :lang="tweaks.lang" :theme="tweaks.theme" @set-tweak="onSettingsTweak" @toast="showToast" />
@@ -89,6 +90,7 @@ import Chart from './pages/Chart.vue';
 import Positions from './pages/Positions.vue';
 import Analytics from './pages/Analytics.vue';
 import Trades from './pages/Trades.vue';
+import Cash from './pages/Cash.vue';
 import Notifications from './pages/Notifications.vue';
 import Settings from './pages/Settings.vue';
 import Ops from './pages/Ops.vue';
