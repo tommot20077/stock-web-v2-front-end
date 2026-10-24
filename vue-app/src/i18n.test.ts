@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { I18N, t } from './i18n';
+import { I18N, t, tf } from './i18n';
 
 // Phase 3 portfolio 頁面(Positions / Trades / Overview)共用的狀態文案。
 // `retry` 刻意不新增:既有 authRetry(重試 / Retry)語意與文案完全相同,直接複用。
@@ -16,6 +16,131 @@ const PORTFOLIO_STATE_KEYS = [
   'totalPnlLabel',
   'costBasis',
 ];
+
+// Phase 04.1 入出金、基準幣、KPI 與配置的全部新文案(81 個),權威來源是
+// `.planning/phases/04.1-.../04.1-UI-SPEC.md` §Copywriting Contract。
+const PHASE41_KEYS = [
+  // 動作與標題(18)
+  'cashRecordDeposit',
+  'cashRecordWithdrawal',
+  'cashRecordReversal',
+  'cashDialogTitleReversal',
+  'cashDepositRecorded',
+  'cashWithdrawalRecorded',
+  'cashReversalRecorded',
+  'cashDone',
+  'closeCashDialog',
+  'cashTypeDeposit',
+  'cashTypeWithdrawal',
+  'cashReverseThis',
+  'cashReverseThisAria',
+  'cashIrreversibleNote',
+  'cash',
+  'cashViewEntries',
+  'cashReversalNote',
+  'cashLedgerOnlyNote',
+  // 欄位與說明(19)
+  'cashCurrency',
+  'cashAmount',
+  'cashAmountHint',
+  'cashOccurredAt',
+  'cashOccurredAtHint',
+  'cashWithdrawOverBalance',
+  'cashReversalOriginal',
+  'cashReversalWillRecord',
+  'cashEntryId',
+  'baseCurrency',
+  'baseCurrencySub',
+  'currencyNameTWD',
+  'currencyNameUSD',
+  'currencyNameEUR',
+  'currencyNameJPY',
+  'settingSaving',
+  'settingSaved',
+  'baseCurrencySwitching',
+  'mockDataNoticeExceptBaseCurrency',
+  // KPI / 配置 / 持倉 / 列表(21)
+  'dayPnlNote',
+  'dayPnlExcluded',
+  'dayPnlUnavailable',
+  'fxExcludedHint',
+  'cashFxExcludedHint',
+  'cashNegativeHint',
+  'assetTypeStock',
+  'assetTypeCrypto',
+  'assetTypeBond',
+  'assetTypeFx',
+  'assetTypeCash',
+  'assetTypeOther',
+  'allocationNegativeCash',
+  'sectorUncategorized',
+  'holdingsCurrencyNote',
+  'tradesCurrencyNote',
+  'cashEntries',
+  'cashColStatus',
+  'cashReversed',
+  'cashReversalOf',
+  'cashEntryNotInView',
+  // 空狀態(3)
+  'cashEntriesEmpty',
+  'cashEntriesEmptyBody',
+  'allocationEmpty',
+  // 對話框錯誤(13)
+  'cashErrType',
+  'cashErrCurrency',
+  'cashErrAmount',
+  'cashErrOccurredAt',
+  'cashErrValidation',
+  'cashErrKeyReused',
+  'cashErrAlreadyReversed',
+  'cashErrNotReversible',
+  'cashErrOriginalNotFound',
+  'cashErrForbidden',
+  'cashErrCsrf',
+  'cashErrNetwork',
+  'cashErrUnknown',
+  // 基準幣錯誤(5)
+  'baseCurrencyErrUnsupported',
+  'baseCurrencyErrForbidden',
+  'baseCurrencyErrCsrf',
+  'baseCurrencyErrNetwork',
+  'baseCurrencyErrUnknown',
+  // 重讀失敗(2)
+  'portfolioStaleAfterCashEntry',
+  'portfolioStaleAfterBaseCurrency',
+];
+
+// 含佔位符的鍵:zh 與 en 兩版都必須出現相同的佔位符集合(語序不同,不能字串串接)。
+const PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
+  cashReverseThisAria: ['amount', 'date', 'type'],
+  cashWithdrawOverBalance: ['code'],
+  dayPnlExcluded: ['n'],
+  fxExcludedHint: ['base', 'n'],
+  cashFxExcludedHint: ['base', 'codes'],
+  cashNegativeHint: ['codes'],
+  holdingsCurrencyNote: ['base'],
+  cashReversalOf: ['date'],
+};
+
+// 入出金對話框「送出之後」的底部錯誤:除網路失敗外,都必須明說紀錄沒有寫入。
+// 欄位級錯誤(cashErrType / Currency / Amount / OccurredAt)綁在輸入框旁,不屬於這一組。
+const CASH_SUBMIT_ERROR_KEYS = [
+  'cashErrValidation',
+  'cashErrKeyReused',
+  'cashErrAlreadyReversed',
+  'cashErrNotReversible',
+  'cashErrOriginalNotFound',
+  'cashErrForbidden',
+  'cashErrCsrf',
+  'cashErrUnknown',
+];
+
+const PHASE41_FORBIDDEN_ZH = ['帳戶餘額', '轉帳', '撥款', '可下單金額', '凍結'];
+const PHASE41_FORBIDDEN_EN = ['account balance', 'transfer', 'funding', 'buying power'];
+
+function placeholdersOf(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]))].sort();
+}
 
 // Phase 4 手動記錄交易的全部新文案(42 個),權威來源是
 // `.planning/phases/04-.../04-UI-SPEC.md` §Copywriting Contract。
@@ -161,5 +286,102 @@ describe('i18n phase 4 trade copy', () => {
   it('promises no duplicate trade when the network outcome is unknown', () => {
     expect(I18N.zh.tradeErrNetwork).toContain('不會建立重複交易');
     expect(I18N.en.tradeErrNetwork.toLowerCase()).toContain('will not create a duplicate');
+  });
+});
+
+describe('i18n phase 04.1 copy', () => {
+  it('provides every phase 04.1 key in both languages', () => {
+    for (const key of PHASE41_KEYS) {
+      expect(I18N.zh[key], `zh.${key}`).toBeTruthy();
+      expect(I18N.en[key], `en.${key}`).toBeTruthy();
+      expect(t('zh', key), `t(zh, ${key})`).not.toBe(key);
+      expect(t('en', key), `t(en, ${key})`).not.toBe(key);
+    }
+  });
+
+  it('lists each phase 04.1 key only once', () => {
+    expect(new Set(PHASE41_KEYS).size).toBe(PHASE41_KEYS.length);
+  });
+
+  it('keeps the same placeholders in zh and en', () => {
+    for (const [key, expected] of Object.entries(PLACEHOLDERS_BY_KEY)) {
+      expect(placeholdersOf(I18N.zh[key]), `zh.${key}`).toEqual(expected);
+      expect(placeholdersOf(I18N.en[key]), `en.${key}`).toEqual(expected);
+    }
+    // 沒有登記的鍵不得偷帶佔位符(否則呼叫端不會替換,畫面會露出 {x})。
+    for (const key of PHASE41_KEYS.filter(candidate => !(candidate in PLACEHOLDERS_BY_KEY))) {
+      expect(placeholdersOf(I18N.zh[key]), `zh.${key}`).toEqual([]);
+      expect(placeholdersOf(I18N.en[key]), `en.${key}`).toEqual([]);
+    }
+  });
+
+  it('tf replaces every placeholder and leaves unsupplied ones untouched', () => {
+    const zh = tf('zh', 'dayPnlExcluded', { n: 2 });
+    expect(zh.startsWith('2')).toBe(true);
+    expect(zh).not.toContain('{n}');
+
+    const partial = tf('en', 'fxExcludedHint', { n: 3 });
+    expect(partial.startsWith('3')).toBe(true);
+    expect(partial).toContain('{base}');
+
+    const aria = tf('en', 'cashReverseThisAria', { date: '2026-10-01', type: 'Deposit', amount: '500 TWD' });
+    expect(aria).toBe('Reverse Deposit of 500 TWD on 2026-10-01');
+
+    // 同一個佔位符出現多次也要全數替換;未知鍵退回 key 本身,與 t() 一致。
+    expect(tf('en', 'no-such-key', { n: 1 })).toBe('no-such-key');
+  });
+
+  it('keeps forbidden ledger vocabulary out of every phase 04.1 string', () => {
+    for (const key of PHASE41_KEYS) {
+      const zh = I18N.zh[key];
+      const en = I18N.en[key].toLowerCase();
+      for (const term of PHASE41_FORBIDDEN_ZH) {
+        expect(zh.includes(term), `zh.${key} 含禁止用語「${term}」:${zh}`).toBe(false);
+      }
+      for (const term of PHASE41_FORBIDDEN_EN) {
+        expect(en.includes(term), `en.${key} contains forbidden term "${term}": ${en}`).toBe(false);
+      }
+      // 'holdings' 不受影響;只擋獨立單字 hold(凍結 / 預扣的意思)。
+      expect(/\bhold\b/i.test(en), `en.${key} contains the standalone word "hold": ${en}`).toBe(false);
+    }
+  });
+
+  it('states that nothing was recorded on every post-submit cash error except the network one', () => {
+    for (const key of CASH_SUBMIT_ERROR_KEYS) {
+      expect(I18N.zh[key], `zh.${key} 必須明說未寫入`).toMatch(/未寫入|沒有寫入新紀錄/);
+      expect(I18N.en[key].toLowerCase(), `en.${key} must say nothing was recorded`)
+        .toMatch(/nothing was recorded|nothing new was recorded/);
+    }
+  });
+
+  it('promises no duplicate only on the network error', () => {
+    expect(I18N.zh.cashErrNetwork).toContain('不會重複記錄');
+    expect(I18N.en.cashErrNetwork.toLowerCase()).toContain('will not create a duplicate');
+    for (const key of PHASE41_KEYS.filter(candidate => candidate !== 'cashErrNetwork')) {
+      expect(I18N.zh[key], `zh.${key}`).not.toContain('不會重複記錄');
+      expect(I18N.en[key].toLowerCase(), `en.${key}`).not.toContain('will not create a duplicate');
+    }
+  });
+
+  it('never calls the reused idempotency key a duplicate request', () => {
+    expect(I18N.zh.cashErrKeyReused).not.toContain('重複的請求');
+    expect(I18N.en.cashErrKeyReused.toLowerCase()).not.toContain('duplicate');
+  });
+
+  it('keeps the cash page key equal to its Page value and leaves the legacy currency key alone', () => {
+    // CmdK 以 t(lang, page) 取頁名,所以 key 必須逐字等於 Page 值 'cash'。
+    expect(I18N.zh.cash).toBe('現金');
+    expect(I18N.en.cash).toBe('Cash');
+    // 既有 `currency` 是「預設貨幣」,對話框的幣別欄位用 cashCurrency。
+    expect(I18N.zh.cashCurrency).toBe('幣別');
+    expect(I18N.zh.currency).not.toBe(I18N.zh.cashCurrency);
+  });
+
+  it('states the cash amount range exactly as the backend validates it', () => {
+    // 後端 @DecimalMax(1e12) / @Digits(13, 8):文案靜態寫出範圍,不從錯誤訊息解析。
+    expect(I18N.zh.cashErrAmount).toContain('1,000,000,000,000');
+    expect(I18N.zh.cashErrAmount).toContain('8');
+    expect(I18N.en.cashErrAmount).toContain('1,000,000,000,000');
+    expect(I18N.en.cashErrAmount).toContain('8 decimals');
   });
 });
