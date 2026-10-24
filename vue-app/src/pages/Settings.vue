@@ -51,8 +51,22 @@
                 </button>
               </div>
             </SettingRow>
-            <SettingRow :label="t(lang, 'currency')" sub="Default display currency">
-              <select class="select"><option>USD</option><option>TWD</option><option>EUR</option></select>
+            <SettingRow :label="t(lang, 'baseCurrency')" :sub="t(lang, 'baseCurrencySub')">
+              <div class="ccy-field">
+                <select
+                  class="ccy-select"
+                  data-testid="settings-base-currency"
+                  :aria-label="t(lang, 'baseCurrency')"
+                  :value="ccySelected"
+                  :disabled="ccyBusy"
+                  @change="onBaseCurrencyChange"
+                >
+                  <option v-for="code in BASE_CURRENCY_OPTIONS" :key="code" :value="code">
+                    {{ code }} · {{ t(lang, 'currencyName' + code) }}
+                  </option>
+                </select>
+                <span class="ccy-status" data-testid="settings-base-currency-status" role="status">{{ ccyStatusText }}</span>
+              </div>
             </SettingRow>
             <SettingRow :label="t(lang, 'numFormat')" sub="Decimal &amp; thousand separators">
               <span class="num">1,234.56</span>
@@ -188,12 +202,15 @@
 
 <script setup lang="ts">
 import MockDataNotice from '../components/MockDataNotice.vue';
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { t } from '../i18n';
 import type { Lang, NotificationPrefs, Theme } from '../types';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
 import { useAiAccessSettings } from '../composables/useAiAccessSettings';
 import SettingRow from '../components/SettingRow.vue';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
+import { bumpPortfolioRevision } from '../services/portfolioRevision';
 import SettingsAiAccess from '../components/settings/SettingsAiAccess.vue';
 import SettingsBrokers from '../components/settings/SettingsBrokers.vue';
 import SettingsDataSources from '../components/settings/SettingsDataSources.vue';
@@ -277,8 +294,59 @@ const profile = [
   ['Timezone', 'Asia/Taipei (UTC+8)'], [t(props.lang, 'language'), props.lang === 'zh' ? '繁體中文' : 'English'],
 ];
 
+// ───────────────────── 基準幣(PORT-09,D-03) ─────────────────────
+// 這欄原本是靜默 no-op 的 <select>(鐵律 6)。現在經 profileApi 讀寫:API mode 走 GET /me 與
+// PATCH /me/preferences,mock mode 走模組內狀態(選了會保留、零網路)。元件不碰 mock store、不自行 fetch。
+const clients = getRuntimeApiClients();
+
+type CurrencyPhase = 'loading' | 'idle' | 'saving' | 'saved';
+const ccyPhase = ref<CurrencyPhase>('loading');
+/** 後端(或 mock)確認過的值;未設定時後端預設 TWD,所以讀取完成前先以 TWD 顯示並 disabled。 */
+const ccySaved = ref<string>(BASE_CURRENCY_OPTIONS[0]);
+/** select 目前顯示的值:儲存中是使用者剛選的新值,失敗時回到 ccySaved。 */
+const ccySelected = ref<string>(BASE_CURRENCY_OPTIONS[0]);
+
+const ccyBusy = computed(() => ccyPhase.value === 'loading' || ccyPhase.value === 'saving');
+const ccyStatusText = computed(() => {
+  if (ccyPhase.value === 'loading') return t(props.lang, 'loading');
+  if (ccyPhase.value === 'saving') return t(props.lang, 'settingSaving');
+  if (ccyPhase.value === 'saved') return t(props.lang, 'settingSaved');
+  return '';
+});
+
+async function loadBaseCurrency() {
+  ccyPhase.value = 'loading';
+  try {
+    const preferences = await clients.profile.getPreferences();
+    ccySaved.value = preferences.baseCurrency;
+    ccySelected.value = preferences.baseCurrency;
+    ccyPhase.value = 'idle';
+  } catch {
+    ccyPhase.value = 'idle';
+  }
+}
+
+async function onBaseCurrencyChange(event: Event) {
+  const next = (event.target as HTMLSelectElement).value;
+  if (next === ccySaved.value) return;
+  ccySelected.value = next;
+  ccyPhase.value = 'saving';
+  try {
+    const updated = await clients.profile.updateBaseCurrency(next);
+    ccySaved.value = updated.baseCurrency;
+    ccySelected.value = updated.baseCurrency;
+    ccyPhase.value = 'saved';
+    // 已掛載且顯示金額的頁會依此重讀(Settings 自己通常是唯一掛載的頁,故多半是無害的 no-op)。
+    bumpPortfolioRevision('baseCurrency');
+  } catch {
+    ccySelected.value = ccySaved.value;
+    ccyPhase.value = 'idle';
+  }
+}
+
 onMounted(() => {
   void loadAiAccessData();
+  void loadBaseCurrency();
 });
 </script>
 
@@ -345,6 +413,18 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .seg-pill button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 .seg-pill button:disabled { opacity: .45; cursor: not-allowed; }
 .select { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: inherit; }
+
+/* 基準幣欄位(UI-SPEC §8):select + 狀態列直排、靠右 */
+.ccy-field { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 280px; }
+.ccy-select {
+  min-height: 36px; padding: 8px 12px; background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-weight: 400;
+  color: inherit; font-family: inherit;
+}
+.ccy-select:disabled { opacity: .6; cursor: not-allowed; }
+.ccy-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ccy-status { font-size: 12px; color: var(--fg-dim); }
+.ccy-status:empty { display: none; }
 
 .inp {
   width: 100%; background: var(--surface2); border: 1px solid var(--border);
