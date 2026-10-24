@@ -273,6 +273,8 @@
             <th @click="sort('price')" :class="{ s: sortKey === 'price' }" style="text-align:right">{{ t(lang, 'price') }}<SortArrow :k="'price'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('value')" :class="{ s: sortKey === 'value' }" style="text-align:right">{{ t(lang, 'mktValue') }}<SortArrow :k="'value'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('pnl')" :class="{ s: sortKey === 'pnl' }" style="text-align:right">P&amp;L<SortArrow :k="'pnl'" :sk="sortKey" :sd="sortDir" /></th>
+            <!-- 04.1-16:今日損益(原幣,PORT-11)。mock 沒有此資料 → 只在 API mode 出現,mock 欄數不變 -->
+            <th v-if="!live" @click="sort('dayPnl')" :class="{ s: sortKey === 'dayPnl' }" style="text-align:right">{{ t(lang, 'todayPnl') }}<SortArrow :k="'dayPnl'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('weight')" :class="{ s: sortKey === 'weight' }" style="text-align:right;padding-right:16px">{{ t(lang, 'weight') }}<SortArrow :k="'weight'" :sk="sortKey" :sd="sortDir" /></th>
           </tr>
         </thead>
@@ -349,12 +351,32 @@
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(h.marketValue, 0) }}</td>
             <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
               <div>{{ signedMoney(h.unrealizedPnl) }}</div>
-              <div style="font-size:11px">{{ fmtPct(h.roi * 100) }}</div>
+              <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
+            </td>
+            <!--
+              04.1-16(D-14 / D-17 / D-26、U-13):單檔今日損益是原幣價格損益,沒有匯率參與,
+              所以列層級不放「不含匯差」。dayPricePnl 為 null(缺前收或最新價)→ — + 螢幕閱讀器文字。
+            -->
+            <td
+              v-if="!live"
+              class="num"
+              :class="dayPnlClass(h)"
+              style="text-align:right"
+              data-testid="positions-day-pnl"
+            >
+              <template v-if="h.dayPricePnl === null">
+                <span aria-hidden="true">—</span>
+                <span class="sr-only">{{ t(lang, 'dayPnlUnavailable') }}</span>
+              </template>
+              <template v-else>
+                <div>{{ fmtSignedMoneyAmount(h.dayPricePnl, h.currency, 0) }}</div>
+                <div v-if="fmtRatioPct(h.dayPricePnlRatio) !== null" style="font-size:12px">{{ fmtRatioPct(h.dayPricePnlRatio) }}</div>
+              </template>
             </td>
             <td style="text-align:right;padding-right:16px">
               <div style="display:inline-flex;align-items:center;gap:8px">
                 <div class="bar"><div class="bar-fill" :style="{ width: holdingWeightWidth(h) }" /></div>
-                <span data-testid="positions-weight" style="font-size:11px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
+                <span data-testid="positions-weight" style="font-size:12px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
               </div>
             </td>
           </tr>
@@ -367,6 +389,7 @@
 <script setup lang="ts">
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t } from '../i18n';
+import { fmtRatioPct, fmtSignedMoneyAmount } from '../moneyFormat';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
@@ -532,6 +555,12 @@ function holdingWeight(holding: HoldingDto): number | null {
   if (!s || !Number.isFinite(s.totalMarketValue) || s.totalMarketValue === 0) return null;
   if (!Number.isFinite(holding.marketValue)) return null;
   return holding.marketValue / s.totalMarketValue * 100;
+}
+
+/** 今日損益格的色彩 class:null → fg-dim;其餘依正負(0 視為 up,與同列 P&L 一致)。 */
+function dayPnlClass(holding: HoldingDto): string {
+  if (holding.dayPricePnl === null) return 'day-na';
+  return holding.dayPricePnl >= 0 ? 'day-up' : 'day-dn';
 }
 
 function holdingWeightLabel(holding: HoldingDto): string {
@@ -702,7 +731,7 @@ const sectorStats = computed(() => {
 });
 
 // Sortable holdings
-type SortKey = 'sym' | 'qty' | 'avg' | 'price' | 'value' | 'pnl' | 'weight';
+type SortKey = 'sym' | 'qty' | 'avg' | 'price' | 'value' | 'pnl' | 'dayPnl' | 'weight';
 const sortKey = ref<SortKey | ''>('value');
 const sortDir = ref<'asc' | 'desc'>('desc');
 
@@ -746,7 +775,14 @@ const sortedHoldings = computed(() => {
       case 'price': va = a.marketPrice; vb = b.marketPrice; break;
       case 'value': va = a.marketValue; vb = b.marketValue; break;
       case 'pnl': va = a.unrealizedPnl; vb = b.unrealizedPnl; break;
-      case 'weight': va = holdingWeight(a) ?? 0; vb = holdingWeight(b) ?? 0; break;
+      // 跨幣別可比的是比率,不是原幣金額;null(缺資料)不論升降冪一律排最後。
+      case 'dayPnl': va = a.dayPricePnlRatio; vb = b.dayPricePnlRatio; break;
+      case 'weight': va = holdingWeight(a); vb = holdingWeight(b); break;
+    }
+    if (k === 'dayPnl' || k === 'weight') {
+      const aMissing = va === null || !Number.isFinite(va);
+      const bMissing = vb === null || !Number.isFinite(vb);
+      if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1;
     }
     if (typeof va === 'number') return (va - vb) * dir;
     return String(va).localeCompare(String(vb)) * dir;
@@ -901,6 +937,9 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   100% { background: transparent; }
 }
 tbody td { padding: 12px 0; }
+.day-up { color: var(--up); }
+.day-dn { color: var(--dn); }
+.day-na { color: var(--fg-dim); }
 .bar { width: 60px; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--accent); transition: width .3s; }
 

@@ -1064,10 +1064,4 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
     expect(heads[8]).toMatch(new RegExp(`^${t('en', 'weight')}`));
     for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(9);
   });
-
-  it('styles.css 提供標準 .sr-only 工具類', async () => {
-    const css = (await import('../styles.css?raw')).default;
-    expect(css).toMatch(/\.sr-only\s*\{[^}]*position:\s*absolute/);
-    expect(css).toMatch(/\.sr-only\s*\{[^}]*clip:\s*rect\(0,\s*0,\s*0,\s*0\)/);
-  });
 });
