@@ -407,13 +407,29 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     }
   });
 
-  it('隱藏 sector 卡、權益曲線 + range 選擇器、時光機(D-01 更正 / D-16)', async () => {
-    await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+  /*
+   * ⚠️ DP-10(04.1-16 反轉既有斷言,不是默默刪除):
+   * 舊名:「隱藏 sector 卡、權益曲線 + range 選擇器、時光機(D-01 更正 / D-16)」。
+   * 舊斷言:API mode `body.not.toContain(sectorBreakdown)`、`.sec-fill` 為 null。
+   * 為何反轉:Phase 3 隱藏 sector 卡,是因為 HoldingDto 沒有 sector、全歸 Other 等同假資料;
+   *   Phase 04.1(D-19 / PORT-12)後端提供 summary.sectorAllocation,資料來源變成真的,
+   *   所以產業卡要在 API mode 顯示 —— 測試意圖本身改變。權益曲線 / range / 時光機仍然隱藏(D-16),斷言原樣保留。
+   * 以 mock 不存在的產業名 `Semiconductors-API` 證明資料來自 API(T-04.1-51)。
+   */
+  it('API mode 顯示 summary.sectorAllocation 的產業卡;權益曲線 + range 選擇器、時光機仍隱藏(D-19 / D-16)', async () => {
+    await mountApiWith(
+      [TRUTH_HOLDING],
+      {
+        ...TRUTH_SUMMARY,
+        sectorAllocation: [{ sector: 'Semiconductors-API', value: 4242, weight: 1, holdingCount: 1, unrealizedPnl: 1111 }],
+      },
+    );
 
     const body = document.body.textContent ?? '';
-    // Sector breakdown(HoldingDto 無 sector,全部會歸 Other 等同假資料)
-    expect(body).not.toContain(t('en', 'sectorBreakdown'));
-    expect(document.body.querySelector('.sec-fill')).toBeNull();
+    // Sector breakdown:由後端分組資料渲染
+    expect(body).toContain(t('en', 'sectorBreakdown'));
+    expect(requireTestid('positions-sector').textContent).toContain('Semiconductors-API');
+    expect(document.body.querySelector('.sec-fill')).not.toBeNull();
     // 權益曲線與 range 選擇器
     expect(body).not.toContain(t('en', 'assetTrend'));
     expect(document.body.querySelector('.seg-btn')).toBeNull();
@@ -1213,5 +1229,130 @@ describe('Positions — 窄螢幕卡內捲動(04.1-16 Task 2)', () => {
     const card = rows()[0].closest('.card') as HTMLElement;
     expect(card.style.overflowX).toBe('auto');
     expect(card.style.overflow).not.toBe('hidden');
+  });
+});
+
+// =====================================================================================
+// 04.1-16 Task 3:產業分布卡以 summary.sectorAllocation 渲染(PORT-12、D-19、U-19 / U-20)。
+// =====================================================================================
+
+function sectorCard(): HTMLElement {
+  return requireTestid('positions-sector');
+}
+
+function sectorCells(): HTMLElement[] {
+  return [...sectorCard().querySelectorAll<HTMLElement>('.sector')];
+}
+
+const NBSP = '\u00a0';
+
+describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
+  const SECTOR_SUMMARY = summaryWith({
+    totalMarketValue: 100000,
+    holdingCount: 4,
+    sectorAllocation: [
+      // 後端已排序(value 降冪、null 最後);第一組刻意放 null 且最大,驗證前端仍把未分類擺最後
+      { sector: null, value: 70000, weight: 0.7, holdingCount: 1, unrealizedPnl: -500 },
+      { sector: 'Semiconductors-API', value: 20000, weight: 0.2, holdingCount: 2, unrealizedPnl: 1200 },
+      { sector: 'Banks-API', value: 10000, weight: 0.1, holdingCount: 1, unrealizedPnl: 0 },
+    ],
+  });
+
+  it('每格:名稱、檔數、基準幣金額、bar 寬 = weight×100%、底列左權重右未實現損益(帶號,不顯示 %)', async () => {
+    await mountApiWith([TRUTH_HOLDING], SECTOR_SUMMARY);
+
+    const cells = sectorCells();
+    expect(cells).toHaveLength(3);
+    const semi = cells.find(c => c.textContent?.includes('Semiconductors-API'))!;
+    const text = semi.textContent ?? '';
+    expect(text).toContain('2'); // 檔數
+    expect(text).toContain(`20,000${NBSP}TWD`);
+    expect(text).toContain('20.0%'); // fmtWeightPct(0.2)
+    expect(text).toContain(`+1,200${NBSP}TWD`); // fmtSignedMoney(unrealizedPnl, base, 0)
+    expect(semi.querySelector<HTMLElement>('.sec-fill')!.style.width).toBe('20%');
+    // U-20:API mode 不顯示損益 %(比率需要前端推導,違反 Phase 3 D-04「不平行重算」)
+    expect(text.match(/%/g)).toHaveLength(1);
+    expect(text).not.toContain('$');
+    // 損益為 0:無號,不上正負色以外的符號
+    const banks = cells.find(c => c.textContent?.includes('Banks-API'))!;
+    expect(banks.textContent).toContain(`0${NBSP}TWD`);
+    expect(banks.textContent).not.toContain('+0');
+  });
+
+  it('sector 為 null 顯示「未分類」、色 fg-dim、排在最後(即使金額最大)', async () => {
+    await mountApiWith([TRUTH_HOLDING], SECTOR_SUMMARY);
+
+    const labels = sectorCells().map(c => c.textContent ?? '');
+    expect(labels[2]).toContain(t('en', 'sectorUncategorized'));
+    expect(labels[0]).toContain('Semiconductors-API');
+    expect(labels[1]).toContain('Banks-API');
+
+    const uncategorized = requireTestid('positions-sector-uncategorized');
+    expect(uncategorized.textContent).toContain(t('en', 'sectorUncategorized'));
+    expect(allTestids('positions-sector-uncategorized')).toHaveLength(1);
+    // 固定色,不參與 SECTOR_COLORS 輪替:色塊與 bar 都用 --fg-dim
+    const dim = (el: Element) => el.getAttribute('style') ?? '';
+    expect(dim(uncategorized.querySelector('.sec-swatch')!)).toContain('var(--fg-dim)');
+    expect(dim(uncategorized.querySelector('.sec-fill')!)).toContain('var(--fg-dim)');
+    // 有分類的第 0 組仍用 accent(輪替不被 null 佔掉一格)
+    expect(dim(sectorCells()[0].querySelector('.sec-fill')!)).toContain('var(--accent)');
+  });
+
+  it('損益為負用 dn 色,為正用 up 色', async () => {
+    await mountApiWith([TRUTH_HOLDING], SECTOR_SUMMARY);
+
+    const pnlOf = (name: string) =>
+      sectorCells().find(c => c.textContent?.includes(name))!.querySelector<HTMLElement>('.sec-pnl')!;
+    expect(pnlOf('Semiconductors-API').getAttribute('style')).toContain('var(--up)');
+    expect(pnlOf(t('en', 'sectorUncategorized')).getAttribute('style')).toContain('var(--dn)');
+    expect(pnlOf(t('en', 'sectorUncategorized')).textContent).toContain(`-500${NBSP}TWD`);
+  });
+
+  it('sectorAllocation 為空:卡內顯示 noHoldings,沒有格子、沒有 NaN', async () => {
+    await mountApiWith([], summaryWith());
+
+    expect(sectorCard()).toBeTruthy();
+    expect(requireTestid('positions-sector-empty').textContent).toContain(t('en', 'noHoldings'));
+    expect(sectorCells()).toHaveLength(0);
+    expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('summary 讀取失敗:產業卡不渲染(單一重試點在頂端錯誤區塊,U-19)', async () => {
+    await mountApiPositions(routedFetch({
+      summary: () => failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-summary-down'),
+      holdings: () => success([TRUTH_HOLDING]),
+    }));
+
+    expect(testid('positions-summary-error')).not.toBeNull();
+    expect(testid('positions-sector')).toBeNull();
+    expect(document.body.textContent).not.toContain(t('en', 'sectorBreakdown'));
+  });
+
+  it('summary 載入中:產業卡尚未渲染', async () => {
+    const pending: Handler = () => new Promise<Response>(() => {});
+    await mountApiPositions(routedFetch({ summary: pending, holdings: pending }));
+
+    expect(testid('positions-sector')).toBeNull();
+  });
+
+  it('mock mode:沿用既有 sectorStats(美元金額 + 損益 %),共用同一份模板', async () => {
+    mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    const cells = sectorCells();
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      const text = cell.textContent ?? '';
+      expect(text).toContain('$');
+      expect(text).toMatch(/\d%/);
+      expect(text).not.toMatch(/TWD|USD/);
+    }
+    expect(testid('positions-sector-uncategorized')).toBeNull();
+  });
+
+  it('響應式:3 欄,< 900px 兩欄,< 560px 一欄', () => {
+    expect(positionsSource).toMatch(/\.sectors\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*1fr\)/);
+    expect(positionsSource).toMatch(/@media \(max-width: 899px\)[\s\S]*?\.sectors\s*\{[^}]*repeat\(2,\s*1fr\)/);
+    expect(positionsSource).toMatch(/@media \(max-width: 559px\)[\s\S]*?\.sectors\s*\{[^}]*grid-template-columns:\s*1fr/);
   });
 });
