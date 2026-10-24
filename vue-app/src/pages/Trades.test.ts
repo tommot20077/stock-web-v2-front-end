@@ -658,12 +658,12 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
     const lines = csv.split('\n');
-    expect(lines[0]).toBe('date,type,symbol,qty,price,total,fee,note');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
     expect(lines).toHaveLength(251);
     expect(csv).not.toContain('SELL');
     expect(csv).not.toContain('sell 0');
     // 匯出=當前條件的完整資料集,不只當前頁(第 100+ 筆也在)
-    expect(csv).toContain('2026-05-17,BUY,B100,101,10,1010,1,buy 100');
+    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,buy 100');
     expect(dl.downloads[0]).toBe(`trades-buy-${new Date().toISOString().slice(0, 10)}.csv`);
   });
 
@@ -722,7 +722,45 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('2026-02-03,BUY,ESC,2,5,10,0,"a,b ""quoted""\nnext"');
+    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,"a,b ""quoted""\nnext"');
+  });
+
+  it('csvHasCurrencyColumn:API 匯出第 4 欄為 trade.currency,缺值為空字串,數值欄維持原始數字(T-04.1-45)', async () => {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+
+    const items = [
+      trade({ id: 'usd', symbol: 'AAPL', currency: 'USD', quantity: 3, price: 188.5, fee: 1.25, note: 'n1', executedAt: '2026-03-02T10:00:00Z' }),
+      trade({ id: 'none', symbol: 'OLD', currency: null, quantity: 2, price: 5, fee: 0, note: null, executedAt: '2026-03-01T10:00:00Z' }),
+    ];
+    const fetchMock = scriptedFetch(() => success(page({ items, totalElements: 2, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,n1');
+    expect(lines[2].split(',')[3], 'currency 缺值 → 空字串,不猜測').toBe('');
+    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,');
+  });
+
+  it('currencyNoteShownInApiMode:API mode 表格上方有 tradesCurrencyNote', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'a' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    const note = requireTestid('trades-currency-note');
+    expect(note.textContent?.trim()).toBe(t('en', 'tradesCurrencyNote'));
+    const table = document.body.querySelector('table')!;
+    expect(
+      note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+      '說明列必須在表格之前',
+    ).toBeTruthy();
   });
 });
 
@@ -837,11 +875,42 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
 
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('date,type,symbol,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
+    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
+    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+
+  it('mockCsvCurrencyColumnIsEmpty:mock 匯出表頭同 API,第 4 欄為空字串(不填 USD 之類的猜測值)', async () => {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    click(requireTestid('trades-export'));
+    await flushAsync();
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines).toHaveLength(4);
+    for (const line of lines.slice(1)) {
+      expect(line.split(',')[3], `mock 列第 4 欄應為空字串:${line}`).toBe('');
+    }
+    expect(lines.join('\n')).not.toMatch(/USD|TWD/);
+  });
+
+  it('currencyNoteHiddenInMockMode:mock mode 不渲染 trades-currency-note', async () => {
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    expect(rows()).toHaveLength(3);
+    expect(testid('trades-currency-note')).toBeNull();
   });
 });
 

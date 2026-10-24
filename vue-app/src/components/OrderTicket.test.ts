@@ -1751,6 +1751,62 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
 // PR #9 合併前 review 修正(AGENTS.md 鐵律 6:可見的控制不得靜默 no-op)。
 // =====================================================================================
 
+describe('OrderTicket review 步驟 — 標的幣別(04.1-14 / D-28 補充 / UI-SPEC §Interaction 10)', () => {
+  const TSMC: AssetDto = {
+    ...CONTRADICTORY,
+    uuid: 'asset-2330',
+    symbol: '2330.TW',
+    name: 'TSMC',
+    market: 'TW',
+    currency: 'TWD',
+    latestPrice: 945,
+  };
+
+  function reviewText(): string {
+    const review = document.body.querySelector<HTMLElement>('.body.review');
+    expect(review, '.body.review').toBeTruthy();
+    return flat(review!.textContent);
+  }
+
+  async function mountTsmcReview(asset: AssetDto = TSMC) {
+    document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
+    await mountApiTicket(ticketFetch({ assets: () => assetPageResponse([asset]) }), { sym: '2330.TW' });
+    await setInput(requireInput('ticket-fee'), '20');
+    await gotoReview();
+  }
+
+  it('reviewUsesSelectedAssetCurrency:選 2330.TW(TWD)→ 價格 / 手續費 / 預估總額帶 TWD,review 區不含 $', async () => {
+    await mountTsmcReview();
+
+    const text = reviewText();
+    expect(text).toContain('945.00 TWD');
+    expect(text).toContain('20.00 TWD');
+    // 預估總額 = 10 × 945,dp 2(UI-SPEC §Money)。
+    expect(text).toContain('9,450.00 TWD');
+    expect(text).not.toContain('$');
+  });
+
+  it('reviewWithoutCurrencyShowsBareNumber:標的幣別缺值 → 只顯示數字,不退回 $', async () => {
+    await mountTsmcReview({ ...TSMC, currency: '' });
+
+    const text = reviewText();
+    expect(text).toContain('945.00');
+    expect(text).toContain('9,450.00');
+    expect(text).not.toContain('$');
+    expect(text).not.toMatch(/TWD|USD|undefined|null/);
+  });
+
+  it('mockModeReviewKeepsOriginalFormat:mock mode review 維持既有 $ 呈現(含 cashAfter)', async () => {
+    await mountTicket();
+    await click(requireTestid('ticket-review-advance'));
+
+    const text = reviewText();
+    expect(text).toMatch(/\$\d[\d,]*\.\d{2}/);
+    expect(text).toContain(t('en', 'cashAfter'));
+    expect(text).not.toMatch(/\b(USD|TWD|JPY|EUR)\b/);
+  });
+});
+
 describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
   it('Test 51:holdings 在進入 review 後才落地且不足時,review 步驟必須顯示錯誤、送出鈕 disabled、不得送出', async () => {
     stubUuids();
