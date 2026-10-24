@@ -4,9 +4,8 @@ import Overview from './Overview.vue';
 // 原始碼字面(Vite ?raw):用來斷言 Overview 沒有 import mock store(PORT-04)。
 // 不走 node:fs —— 本專案 tsconfig 未含 @types/node,且本 plan 不得新增套件。
 import overviewSource from './Overview.vue?raw';
-import { fmtNum } from '../data';
 import { t, tf } from '../i18n';
-import { fmtRatioPct, fmtSignedMoney } from '../moneyFormat';
+import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtWeightPct } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
@@ -324,7 +323,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(totalReturn.querySelector('.kpi-s')!.getAttribute('style')).toContain('var(--dn)');
   });
 
-  it('仍隱藏無後端資料來源的合成/寫死區塊;今日損益 / 可用現金不再隱藏(D-14 / D-16,04.1-18 反轉)', async () => {
+  it('仍隱藏資產走勢(無後端日級歷史);今日損益 / 可用現金 / 資產配置不再隱藏(D-14 / D-16,04.1-18 反轉)', async () => {
     const fetchMock = routedFetch({
       summary: () => success(SUMMARY),
       trades: () => tradePage(API_TRADES),
@@ -337,9 +336,9 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(body).toContain(t('en', 'availableCash'));
     expect(body).not.toContain('+$12,481');
     expect(body).not.toContain('$84,210');
-    // 資產配置 donut
-    expect(body).not.toContain(t('en', 'allocation'));
-    expect(document.body.querySelector('.alloc-row')).toBeNull();
+    // 資產配置 donut 在 04.1-18 起改由 summary.allocation 渲染(只有一塊 STOCK)
+    expect(body).toContain(t('en', 'allocation'));
+    expect(document.body.querySelectorAll('.alloc-row')).toHaveLength(1);
     // 資產走勢圖與 range 切換
     expect(body).not.toContain(t('en', 'assetTrend'));
     expect(document.body.querySelector('.seg-btn')).toBeNull();
@@ -369,8 +368,12 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     // executedAt 只取日期部分
     expect(rows[0].textContent).toContain('2026-06-05');
     expect(rows[0].textContent).not.toContain('T09:30');
-    // total = quantity × price
-    expect(rows[0].textContent).toContain(`$${fmtNum(10 * 11.5, 0)}`);
+    // total = quantity × price;04.1-18(D-28):不再寫死 `$`,金額格只放數字,幣別以標的後的標籤表示一次
+    const cells = rows[0].querySelectorAll('td');
+    expect(cells[4].textContent?.trim()).toBe(fmtMoneyAmount(11.5, 'TWD'));
+    expect(cells[5].textContent?.trim()).toBe(fmtMoneyAmount(10 * 11.5, 'TWD', 0));
+    expect(cells[5].textContent?.trim()).toBe('115');
+    expect(rows[0].textContent).not.toContain('$');
     // 沒有任何 mock store 的交易漏進來
     expect(card.textContent).not.toContain('NVDA');
     expect(card.textContent).not.toContain('TSLA');
@@ -1182,5 +1185,299 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
     const stale = requireTestid('overview-refresh-error');
     expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
     expect(stale.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+});
+
+
+// =====================================================================================
+// 04.1-18 Task 3:資產配置 donut(D-18)、近期交易幣別(D-28)、格線重排。
+// =====================================================================================
+
+const ALLOCATION = [
+  { category: 'CASH', value: 35164, weight: 0.35164 },
+  { category: 'CRYPTO', value: 32418, weight: 0.32418 },
+  { category: 'STOCK', value: 32418, weight: 0.32418 },
+];
+
+function allocationCard(): HTMLElement {
+  return requireTestid('overview-allocation');
+}
+
+function plain(text: string | null | undefined): string {
+  return (text ?? '').replace(/[\s\u00a0]+/g, ' ').trim();
+}
+
+async function mountAllocation(overrides: Partial<PortfolioSummaryDto>) {
+  setCookie();
+  const fetchMock = routedFetch({
+    summary: () => success(summaryWith(overrides)),
+    trades: () => tradePage(API_TRADES),
+  });
+  await mountApiOverview(fetchMock);
+  return fetchMock;
+}
+
+describe('Overview — 資產配置(D-18,API mode)', () => {
+  it('以 summary.allocation 渲染:ul / li 三列,每列可讀出類別、金額、權重', async () => {
+    await mountAllocation({ baseCurrency: 'TWD', cash: 35164, allocation: ALLOCATION });
+
+    const card = allocationCard();
+    expect(card.textContent).toContain(t('en', 'allocation'));
+    const list = card.querySelector('ul');
+    expect(list, 'legend ul').toBeTruthy();
+    const rows = allTestids('overview-allocation-row');
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.tagName).toBe('LI');
+      expect(list!.contains(row)).toBe(true);
+    }
+    expect(plain(rows[0].textContent)).toBe('Cash 35,164 TWD 35.2%');
+    expect(plain(rows[1].textContent)).toBe('Crypto 32,418 TWD 32.4%');
+    expect(plain(rows[2].textContent)).toBe('Stocks 32,418 TWD 32.4%');
+    expect(plain(rows[0].textContent)).toContain(plain(fmtMoney(35164, 'TWD', 0)));
+    expect(plain(rows[0].textContent)).toContain(fmtWeightPct(0.35164));
+    // 分類色映射(常數,兩模式一致)
+    expect(rows[0].querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe('#94a3b8');
+    expect(rows[1].querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe('#3b82f6');
+    expect(rows[2].querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe('var(--accent)');
+    // 有真實分塊,不是 empty / negative-cash
+    expect(testid('overview-allocation-empty')).toBeNull();
+    expect(testid('overview-allocation-negative-cash')).toBeNull();
+  });
+
+  it('Donut 的 SVG aria-hidden="true"(語意由 legend 承擔)', async () => {
+    await mountAllocation({ allocation: ALLOCATION });
+    const svg = allocationCard().querySelector('svg');
+    expect(svg, 'donut svg').toBeTruthy();
+    expect(svg!.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('金額帶 summary.baseCurrency,不寫死 TWD', async () => {
+    await mountAllocation({ baseCurrency: 'JPY', allocation: [{ category: 'STOCK', value: 1500000, weight: 1 }] });
+    const row = requireTestid('overview-allocation-row');
+    expect(plain(row.textContent)).toBe('Stocks 1,500,000 JPY 100.0%');
+  });
+
+  it.each([
+    ['STOCK', 'Stocks', 'var(--accent)'],
+    ['CRYPTO', 'Crypto', '#3b82f6'],
+    ['FX', 'FX', '#a855f7'],
+    ['BOND', 'Bonds', '#f59e0b'],
+    ['CASH', 'Cash', '#94a3b8'],
+  ])('已知類別 %s → 標籤 %s、色 %s', async (category, label, color) => {
+    await mountAllocation({ allocation: [{ category, value: 100, weight: 1 }] });
+    const row = requireTestid('overview-allocation-row');
+    expect(plain(row.textContent)).toContain(label);
+    expect(row.querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe(color);
+  });
+
+  it('未知類別(WARRANT):標籤 assetTypeOther、色 --fg-dim,不崩潰也不外露原始字串', async () => {
+    await mountAllocation({
+      allocation: [{ category: 'WARRANT', value: 500, weight: 0.5 }, { category: 'STOCK', value: 500, weight: 0.5 }],
+    });
+    const rows = allTestids('overview-allocation-row');
+    expect(rows).toHaveLength(2);
+    expect(plain(rows[0].textContent)).toContain(t('en', 'assetTypeOther'));
+    expect(rows[0].textContent).not.toContain('WARRANT');
+    expect(rows[0].querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe('var(--fg-dim)');
+  });
+
+  it('只有一類:donut 單色環 + legend 一列', async () => {
+    await mountAllocation({ allocation: [{ category: 'STOCK', value: 100, weight: 1 }] });
+    expect(allTestids('overview-allocation-row')).toHaveLength(1);
+    expect(allocationCard().querySelectorAll('svg circle').length).toBe(2); // 軌道 + 一段
+  });
+
+  it('allocation 為空:不畫 donut,顯示 allocationEmpty', async () => {
+    await mountAllocation({ allocation: [] });
+    const card = allocationCard();
+    expect(card.querySelector('svg')).toBeNull();
+    expect(allTestids('overview-allocation-row')).toHaveLength(0);
+    expect(requireTestid('overview-allocation-empty').textContent).toContain(t('en', 'allocationEmpty'));
+  });
+
+  it('cash < 0:legend 下方顯示 allocationNegativeCash', async () => {
+    await mountAllocation({
+      cash: -1200,
+      cashBalances: [{ currency: 'TWD', amount: -1200 }],
+      allocation: [{ category: 'STOCK', value: 100, weight: 1 }],
+    });
+    expect(requireTestid('overview-allocation-negative-cash').textContent)
+      .toContain(t('en', 'allocationNegativeCash'));
+    expect(allTestids('overview-allocation-row')).toHaveLength(1);
+  });
+
+  it('cash < 0 且 allocation 為空:兩個提示都在', async () => {
+    await mountAllocation({ cash: -5, allocation: [] });
+    expect(testid('overview-allocation-empty')).not.toBeNull();
+    expect(testid('overview-allocation-negative-cash')).not.toBeNull();
+  });
+
+  it('summary 載入中:卡內顯示載入中…;summary 失敗:資產配置卡不渲染(U-19)', async () => {
+    const pending: Handler = () => new Promise<Response>(() => {});
+    await mountApiOverview(routedFetch({ summary: pending, trades: pending }));
+    expect(requireTestid('overview-allocation-loading').textContent).toContain(t('en', 'loading'));
+    expect(testid('overview-allocation')).toBeNull();
+    cleanupMounted();
+
+    await mountApiOverview(routedFetch({
+      summary: () => failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-down'),
+      trades: () => tradePage(API_TRADES),
+    }));
+    expect(testid('overview-allocation')).toBeNull();
+    expect(testid('overview-allocation-loading')).toBeNull();
+    expect(testid('overview-allocation-empty')).toBeNull();
+    expect(document.body.textContent).not.toContain(t('en', 'allocation'));
+  });
+
+  it('重讀後 legend 跟著新的 summary 更新', async () => {
+    let allocation = ALLOCATION;
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ allocation })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+    expect(allTestids('overview-allocation-row')).toHaveLength(3);
+
+    allocation = [{ category: 'STOCK', value: 1, weight: 1 }];
+    bumpPortfolioRevision('trade');
+    await flushAsync();
+    expect(allTestids('overview-allocation-row')).toHaveLength(1);
+  });
+});
+
+describe('Overview — mock mode 的資產配置(共用模板)', () => {
+  it('donut 與 5 列 legend 照舊,legend 只有百分比、沒有金額', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+
+    const card = allocationCard();
+    expect(card.querySelector('svg')).toBeTruthy();
+    expect(card.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
+    const rows = allTestids('overview-allocation-row');
+    expect(rows).toHaveLength(5);
+    expect(document.body.querySelectorAll('.alloc-row')).toHaveLength(5);
+    expect(plain(rows[0].textContent)).toBe('Equity 52.0%');
+    expect(card.querySelectorAll('.alloc-amt')).toHaveLength(0);
+    expect(card.textContent).not.toContain('TWD');
+    expect(testid('overview-allocation-negative-cash')).toBeNull();
+    expect(testid('overview-allocation-empty')).toBeNull();
+  });
+});
+
+describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
+  function trade(overrides: Partial<TradeDto>): TradeDto {
+    return { ...API_TRADES[0], ...overrides };
+  }
+
+  async function mountTrades(items: TradeDto[]) {
+    const fetchMock = routedFetch({ summary: () => success(SUMMARY), trades: () => tradePage(items) });
+    await mountApiOverview(fetchMock);
+    return [...recentTradesCard().querySelectorAll<HTMLElement>('[data-testid="overview-trade-row"]')];
+  }
+
+  it('標的後一個 overview-trade-ccy-tag = trade.currency;價格 / 總額為裸數字,整列無 $', async () => {
+    const rows = await mountTrades([
+      trade({ id: 'a', symbol: 'ZZA', currency: 'USD', quantity: 10, price: 12.5 }),
+      trade({ id: 'b', symbol: 'ZZB', currency: 'JPY', quantity: 3, price: 150 }),
+      trade({ id: 'c', symbol: 'ZZC', currency: 'TWD', quantity: 10, price: 11.5 }),
+    ]);
+
+    expect(rows).toHaveLength(3);
+    const tags = rows.map(row => row.querySelector('[data-testid="overview-trade-ccy-tag"]')?.textContent);
+    expect(tags).toEqual(['USD', 'JPY', 'TWD']);
+    expect(allTestids('overview-trade-ccy-tag')).toHaveLength(3);
+    // 標籤在標的格內、symbol 之後
+    const symbolCell = rows[0].querySelectorAll('td')[2];
+    expect(symbolCell.contains(rows[0].querySelector('[data-testid="overview-trade-ccy-tag"]'))).toBe(true);
+    expect(symbolCell.textContent).toContain('ZZA');
+
+    const usd = rows[0].querySelectorAll('td');
+    expect(usd[4].textContent?.trim()).toBe('12.50');
+    expect(usd[5].textContent?.trim()).toBe('125');
+    // JPY 沒有輔幣:價格 0 位小數
+    const jpy = rows[1].querySelectorAll('td');
+    expect(jpy[4].textContent?.trim()).toBe('150');
+    expect(jpy[5].textContent?.trim()).toBe('450');
+    for (const row of rows) expect(row.textContent).not.toContain('$');
+  });
+
+  it('currency 缺值:不渲染標籤、金額仍顯示裸數字,不出現 $ 或 undefined / null', async () => {
+    const rows = await mountTrades([trade({ id: 'n', symbol: 'ZZN', currency: null, quantity: 3, price: 100 })]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector('[data-testid="overview-trade-ccy-tag"]')).toBeNull();
+    const cells = rows[0].querySelectorAll('td');
+    expect(cells[4].textContent?.trim()).toBe('100.00');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(rows[0].textContent).not.toContain('$');
+    expect(rows[0].textContent).not.toContain('undefined');
+    expect(rows[0].textContent).not.toContain('null');
+  });
+
+  it('API tbody 的原始碼不再有 `${{`(不寫死 $)', () => {
+    const tbody = overviewSource.slice(overviewSource.indexOf('<tbody v-else'), overviewSource.indexOf('</tbody>', overviewSource.indexOf('<tbody v-else')));
+    expect(tbody).not.toMatch(/\$\{\{/);
+    expect(tbody).toContain('overview-trade-ccy-tag');
+  });
+
+  it('mock tbody 不變:仍是 $ 前綴、沒有幣別標籤', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    const card = recentTradesCard();
+    expect(card.textContent).toContain('$');
+    expect(card.querySelector('[data-testid="overview-trade-ccy-tag"]')).toBeNull();
+  });
+
+  it('表格容器可在卡內水平捲動(overflow-x: auto)', () => {
+    expect(overviewSource).toMatch(/\.trades-scroll\s*\{[^}]*overflow-x:\s*auto/);
+    expect(overviewSource).toContain('class="trades-scroll"');
+  });
+});
+
+describe('Overview — 格線重排(U-27)', () => {
+  function titleOrder(): string[] {
+    return [...document.body.querySelectorAll('.ttl')].map(el => el.textContent?.trim() ?? '');
+  }
+
+  it('API mode:資產配置 → 近期交易 → 觀察清單 → 新聞(資產走勢隱藏)', async () => {
+    await mountAllocation({ allocation: ALLOCATION });
+    expect(titleOrder()).toEqual([
+      t('en', 'allocation'),
+      t('en', 'recentTrades'),
+      `★ ${t('en', 'watchlist')}`,
+      t('en', 'news'),
+    ]);
+  });
+
+  it('mock mode:資產走勢 → 資產配置 → 近期交易 → 觀察清單 → 新聞', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    expect(titleOrder()).toEqual([
+      t('en', 'assetTrend'),
+      t('en', 'allocation'),
+      t('en', 'recentTrades'),
+      `★ ${t('en', 'watchlist')}`,
+      t('en', 'news'),
+    ]);
+  });
+
+  it('API mode:資產配置 span 4、近期交易 span 8;mock mode:近期交易 span 12', async () => {
+    await mountAllocation({ allocation: ALLOCATION });
+    expect(allocationCard().classList.contains('col-4')).toBe(true);
+    expect(recentTradesCard().classList.contains('col-8')).toBe(true);
+    cleanupMounted();
+
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    expect(recentTradesCard().classList.contains('col-12')).toBe(true);
+    expect(recentTradesCard().classList.contains('col-8')).toBe(false);
+  });
+
+  it('響應式斷點:640–1099px KPI span 6、配置與交易 span 12;< 640px KPI span 12(原始碼)', () => {
+    const at1099 = overviewSource.slice(overviewSource.indexOf('@media (max-width: 1099px)'));
+    expect(at1099).toMatch(/@media \(max-width: 1099px\)\s*\{[^}]*\.kpi-card\s*\{\s*grid-column:\s*span 6/);
+    expect(at1099).toMatch(/\.stack-narrow\s*\{\s*grid-column:\s*span 12/);
+    expect(overviewSource).toMatch(/@media \(max-width: 639px\)\s*\{[^}]*\.kpi-card\s*\{\s*grid-column:\s*span 12/);
   });
 });
