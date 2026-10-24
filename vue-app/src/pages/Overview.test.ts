@@ -9,7 +9,13 @@ import { t, tf } from '../i18n';
 import { fmtRatioPct, fmtSignedMoney } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
-import { bumpPortfolioRevision, resetPortfolioRevisionForTests } from '../services/portfolioRevision';
+import {
+  bumpPortfolioRevision,
+  notifyCashEntryCreated,
+  notifyTradeCreated,
+  portfolioRevisionCause,
+  resetPortfolioRevisionForTests,
+} from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import type { Trade } from '../types';
@@ -63,11 +69,16 @@ function success(data: unknown): Response {
   return jsonResponse({ success: true, data, error: null, meta: { traceId: 'trace-ok' } });
 }
 
-function failure(code: string, traceId: string, status = 503): Response {
+function failure(
+  code: string,
+  traceId: string,
+  status = 503,
+  fields?: Record<string, string>,
+): Response {
   return jsonResponse({
     success: false,
     data: null,
-    error: { code, message: 'backend said no' },
+    error: { code, message: 'backend said no', ...(fields ? { fields } : {}) },
     meta: { traceId },
   }, status);
 }
@@ -78,9 +89,13 @@ function tradePage(items: TradeDto[]): Response {
 
 type Handler = () => Response | Promise<Response>;
 
-function routedFetch(handlers: { summary: Handler; trades: Handler }) {
-  return vi.fn(async (input: RequestInfo | URL) => {
+function routedFetch(handlers: { summary: Handler; trades: Handler; patch?: (body: unknown) => Response | Promise<Response> }) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/me/preferences') && String(init?.method ?? 'GET').toUpperCase() === 'PATCH') {
+      if (!handlers.patch) throw new Error('unexpected PATCH /me/preferences');
+      return handlers.patch(JSON.parse(String(init?.body)));
+    }
     if (url.includes('/portfolio/summary')) return handlers.summary();
     if (url.includes('/trades')) return handlers.trades();
     throw new Error(`unexpected fetch: ${url}`);
@@ -93,6 +108,10 @@ function callUrls(fetchMock: ReturnType<typeof routedFetch>): string[] {
 
 function callsMatching(fetchMock: ReturnType<typeof routedFetch>, fragment: string): string[] {
   return callUrls(fetchMock).filter(url => url.includes(fragment));
+}
+
+function patchCalls(fetchMock: ReturnType<typeof routedFetch>) {
+  return fetchMock.mock.calls.filter(call => String(call[1]?.method ?? 'GET').toUpperCase() === 'PATCH');
 }
 
 async function mountApiOverview(
@@ -542,8 +561,9 @@ describe('Overview — mock mode 回歸鎖定', () => {
     expect(addTrade, 'New trade button').toBeTruthy();
     click(addTrade!);
 
+    // 04.1-18:mock 的可用現金卡多了「Cash entries →」連結,觀察清單的 → 改以全文相等定位。
     const navButton = [...document.body.querySelectorAll('button')]
-      .find(b => b.textContent?.includes('→'));
+      .find(b => b.textContent?.trim() === '→');
     expect(navButton, 'navigate button').toBeTruthy();
     click(navButton!);
 
@@ -673,5 +693,494 @@ describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', (
     expect(callsMatching(fetchMock, '/trades')).toHaveLength(3);
     expect(testid('overview-refresh-error')).toBeNull();
     expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
+  });
+});
+
+
+// =====================================================================================
+// 04.1-18 Task 2:基準幣工具列(D-03)、可用現金卡(D-07 / D-08 / D-11 / D-29)、
+// 依觸發來源選重讀失敗文案(U-09)。
+// =====================================================================================
+
+const CSRF_TOKEN = 'csrf-overview';
+
+function button(id: string): HTMLButtonElement {
+  return requireTestid(id) as HTMLButtonElement;
+}
+
+function setCookie() {
+  document.cookie = `XSRF-TOKEN=${CSRF_TOKEN}; path=/`;
+}
+
+function ccyPressed(): string[] {
+  return ['TWD', 'USD', 'EUR', 'JPY']
+    .filter(code => button(`base-currency-option-${code}`).getAttribute('aria-pressed') === 'true');
+}
+
+async function setValue(el: HTMLInputElement, value: string) {
+  el.value = value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  await flushAsync(1);
+}
+
+describe('Overview — 基準幣工具列(D-03,API mode)', () => {
+  it('四個基準幣鍵依 TWD / USD / EUR / JPY 排列,選中者 aria-pressed 來自 summary.baseCurrency', async () => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ baseCurrency: 'EUR' })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    const group = requireTestid('base-currency-switch');
+    expect(group.getAttribute('role')).toBe('group');
+    const labelledBy = group.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(labelledBy!)?.textContent).toBe(t('en', 'baseCurrency'));
+    expect([...group.querySelectorAll('button')].map(b => b.textContent?.trim()))
+      .toEqual(['TWD', 'USD', 'EUR', 'JPY']);
+    expect(ccyPressed()).toEqual(['EUR']);
+    // 工具列在 KPI 卡之前(D-03:KPI 上方)
+    const cards = allTestids('overview-kpi');
+    expect(group.compareDocumentPosition(cards[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(testid('base-currency-switching')).toBeNull();
+    expect(testid('base-currency-error')).toBeNull();
+  });
+
+  it('點 USD:恰一次 PATCH、期間四鍵 disabled 並顯示切換中…,成功後以 baseCurrency 重讀 summary', async () => {
+    setCookie();
+    const patchGate = deferred<Response>();
+    let summaryBase = 'TWD';
+    let summaryGate: ReturnType<typeof deferred<Response>> | null = null;
+    const fetchMock = routedFetch({
+      summary: () => (summaryGate ? summaryGate.promise : success(summaryWith({ baseCurrency: summaryBase }))),
+      trades: () => tradePage(API_TRADES),
+      patch: () => patchGate.promise,
+    });
+    await mountApiOverview(fetchMock);
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+
+    click(button('base-currency-option-USD'));
+    await flushAsync();
+
+    // PATCH in flight
+    const patches = patchCalls(fetchMock);
+    expect(patches).toHaveLength(1);
+    expect(String(patches[0][0])).toBe('/api/v1/me/preferences');
+    expect(String(patches[0][1]?.body)).toBe('{"baseCurrency":"USD"}');
+    expect(new Headers(patches[0][1]?.headers).get('X-XSRF-TOKEN')).toBe(CSRF_TOKEN);
+    for (const code of ['TWD', 'USD', 'EUR', 'JPY']) {
+      expect(button(`base-currency-option-${code}`).disabled, code).toBe(true);
+    }
+    const switching = requireTestid('base-currency-switching');
+    expect(switching.getAttribute('role')).toBe('status');
+    expect(switching.textContent).toContain(t('en', 'baseCurrencySwitching'));
+    expect(ccyPressed()).toEqual(['USD']);
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+
+    // PATCH 成功 → cause = baseCurrency → summary 重讀;重讀期間仍 disabled
+    summaryBase = 'USD';
+    summaryGate = deferred<Response>();
+    patchGate.resolve(success({ baseCurrency: 'USD' }));
+    await flushAsync();
+
+    expect(portfolioRevisionCause.value).toBe('baseCurrency');
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+    expect(button('base-currency-option-TWD').disabled).toBe(true);
+    expect(testid('base-currency-switching')).toBeNull();
+    expect(requireTestid('overview-refreshing').textContent).toContain(t('en', 'portfolioRefreshing'));
+    expect(ccyPressed()).toEqual(['USD']);
+
+    summaryGate.resolve(success(summaryWith({ baseCurrency: 'USD' })));
+    summaryGate = null;
+    await flushAsync();
+
+    expect(button('base-currency-option-TWD').disabled).toBe(false);
+    expect(ccyPressed()).toEqual(['USD']);
+    // 新 summary 的 baseCurrency 顯示在卡片代碼
+    expect(kpiCcy(allTestids('overview-kpi')[0])).toBe('USD');
+    // 整個流程只有一次 PATCH,沒有確認框
+    expect(patchCalls(fetchMock)).toHaveLength(1);
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('點已選中的幣別:不發任何請求', async () => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => tradePage(API_TRADES),
+      patch: () => success({ baseCurrency: 'TWD' }),
+    });
+    await mountApiOverview(fetchMock);
+
+    click(button('base-currency-option-TWD'));
+    await flushAsync();
+
+    expect(patchCalls(fetchMock)).toHaveLength(0);
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+    expect(ccyPressed()).toEqual(['TWD']);
+  });
+
+  it('PATCH 失敗(VALIDATION_FAILED + fields.baseCurrency):回原值、role=alert 文案 + code / traceId,無重試鈕,不重讀', async () => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => tradePage(API_TRADES),
+      patch: () => failure('VALIDATION_FAILED', 'trace-ccy-bad', 400, { baseCurrency: 'unsupported secret-detail' }),
+    });
+    await mountApiOverview(fetchMock);
+
+    click(button('base-currency-option-USD'));
+    await flushAsync();
+
+    expect(ccyPressed()).toEqual(['TWD']);
+    for (const code of ['TWD', 'USD', 'EUR', 'JPY']) {
+      expect(button(`base-currency-option-${code}`).disabled, code).toBe(false);
+    }
+    const error = requireTestid('base-currency-error');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain(t('en', 'baseCurrencyErrUnsupported'));
+    expect(requireTestid('base-currency-error-code').textContent).toContain('VALIDATION_FAILED');
+    expect(requireTestid('base-currency-trace-id').textContent).toContain('trace-ccy-bad');
+    // 後端 message / fields value 不外洩
+    expect(document.body.textContent).not.toContain('backend said no');
+    expect(document.body.textContent).not.toContain('secret-detail');
+    // 無重試鈕:錯誤區塊內沒有 button
+    expect(error.querySelector('button')).toBeNull();
+    expect(testid('base-currency-switching')).toBeNull();
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+    expect(portfolioRevisionCause.value).toBeNull();
+
+    // 再點一次即重試;成功後錯誤消失
+    // (這裡只證明再點會再送出,不是第二個 PATCH 的成功路徑)
+    click(button('base-currency-option-USD'));
+    await flushAsync();
+    expect(patchCalls(fetchMock)).toHaveLength(2);
+  });
+
+  it.each([
+    ['AUTH_CSRF_TOKEN_INVALID', 403, 'baseCurrencyErrCsrf'],
+    ['AUTH_FORBIDDEN', 403, 'baseCurrencyErrForbidden'],
+    ['INTERNAL_ERROR', 500, 'baseCurrencyErrUnknown'],
+  ])('PATCH 失敗 %s(%i)顯示 %s', async (code, status, key) => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => tradePage(API_TRADES),
+      patch: () => failure(code, 'trace-x', status),
+    });
+    await mountApiOverview(fetchMock);
+
+    click(button('base-currency-option-JPY'));
+    await flushAsync();
+
+    expect(requireTestid('base-currency-error').textContent).toContain(t('en', key));
+    expect(ccyPressed()).toEqual(['TWD']);
+  });
+
+  it('網路失敗:顯示 baseCurrencyErrNetwork 並回原值', async () => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => tradePage(API_TRADES),
+      patch: () => { throw new TypeError('Failed to fetch'); },
+    });
+    await mountApiOverview(fetchMock);
+
+    click(button('base-currency-option-EUR'));
+    await flushAsync();
+
+    expect(requireTestid('base-currency-error').textContent).toContain(t('en', 'baseCurrencyErrNetwork'));
+    expect(ccyPressed()).toEqual(['TWD']);
+  });
+
+  it('PATCH 成功但重讀失敗:顯示 portfolioStaleAfterBaseCurrency,選中新值,金額仍帶舊代碼', async () => {
+    setCookie();
+    let summaryFails = false;
+    const fetchMock = routedFetch({
+      summary: () => (summaryFails ? failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-stale') : success(SUMMARY)),
+      trades: () => tradePage(API_TRADES),
+      patch: () => { summaryFails = true; return success({ baseCurrency: 'USD' }); },
+    });
+    await mountApiOverview(fetchMock);
+
+    click(button('base-currency-option-USD'));
+    await flushAsync();
+
+    const stale = requireTestid('overview-refresh-error');
+    expect(stale.getAttribute('role')).toBe('status');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterBaseCurrency'));
+    expect(stale.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+    expect(ccyPressed()).toEqual(['USD']);
+    // 每個金額自帶代碼 → 不會出現「標示 USD、實為 TWD」的無聲錯誤
+    expect(kpiCcy(allTestids('overview-kpi')[0])).toBe('TWD');
+    // 重讀失敗後工具列不被鎖死
+    expect(button('base-currency-option-EUR').disabled).toBe(false);
+  });
+
+  it('fxExcludedCount > 0:工具列顯示缺匯率提示;為 0 時不渲染', async () => {
+    setCookie();
+    const withExcluded = routedFetch({
+      summary: () => success(summaryWith({ fxExcludedCount: 1 })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(withExcluded);
+    const hint = requireTestid('overview-fx-excluded');
+    expect(hint.textContent).toContain(tf('en', 'fxExcludedHint', { n: 1, base: 'TWD' }));
+    expect(hint.textContent).not.toContain('{');
+    cleanupMounted();
+
+    const without = routedFetch({ summary: () => success(SUMMARY), trades: () => tradePage(API_TRADES) });
+    await mountApiOverview(without);
+    expect(testid('overview-fx-excluded')).toBeNull();
+    expect(testid('base-currency-switch')).not.toBeNull();
+  });
+
+  it('summary 載入中 / 失敗時不渲染工具列與 KPI', async () => {
+    const pending: Handler = () => new Promise<Response>(() => {});
+    await mountApiOverview(routedFetch({ summary: pending, trades: pending }));
+    expect(testid('base-currency-switch')).toBeNull();
+    expect(allTestids('overview-kpi')).toHaveLength(0);
+    cleanupMounted();
+
+    await mountApiOverview(routedFetch({
+      summary: () => failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-down'),
+      trades: () => tradePage(API_TRADES),
+    }));
+    expect(testid('base-currency-switch')).toBeNull();
+    expect(allTestids('overview-kpi')).toHaveLength(0);
+  });
+
+  it('mock mode 不渲染工具列', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    expect(testid('base-currency-switch')).toBeNull();
+    expect(testid('overview-fx-excluded')).toBeNull();
+  });
+});
+
+describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () => {
+  const MIXED = [
+    { currency: 'USD', amount: -1200 },
+    { currency: 'TWD', amount: 50000 },
+    { currency: 'JPY', amount: 0 },
+  ];
+
+  async function mountCash(overrides: Partial<PortfolioSummaryDto>, props: Record<string, unknown> = {}) {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith(overrides)),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock, props);
+    return { fetchMock, card: allTestids('overview-kpi')[2] };
+  }
+
+  it('各幣別餘額:非零、TWD / USD / EUR / JPY 固定順序、以 · 連接,JPY 0 不列', async () => {
+    const { card } = await mountCash({ cashBalances: MIXED });
+    const balances = card.querySelector('[data-testid="overview-kpi-cash-balances"]');
+    expect(balances, 'balances row').toBeTruthy();
+    expect(balances!.textContent?.replace(/\s+/g, ' ').trim()).toBe('TWD 50,000.00 · USD -1,200.00');
+    expect(balances!.textContent).not.toContain('JPY');
+  });
+
+  it('JPY 餘額 0 位小數、EUR 排在 USD 之後', async () => {
+    const { card } = await mountCash({
+      cashBalances: [{ currency: 'JPY', amount: 1500 }, { currency: 'EUR', amount: 10.5 }, { currency: 'USD', amount: 3 }],
+    });
+    expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')!.textContent?.trim())
+      .toBe('USD 3.00 · EUR 10.50 · JPY 1,500');
+  });
+
+  it('全為 0:不渲染各幣別餘額列', async () => {
+    const { card } = await mountCash({ cashBalances: [{ currency: 'TWD', amount: 0 }, { currency: 'USD', amount: 0 }] });
+    expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')).toBeNull();
+    expect(card.querySelector('[data-testid="overview-kpi-cash-negative"]')).toBeNull();
+  });
+
+  it('任一幣別為負:顯示「USD cash is negative…」,⚠ aria-hidden,數值不變紅;總額為正仍提示', async () => {
+    const { card } = await mountCash({ cash: 84210.5, cashBalances: MIXED });
+    const negative = requireTestid('overview-kpi-cash-negative');
+    expect(negative.textContent).toContain(tf('en', 'cashNegativeHint', { codes: 'USD' }));
+    expect(negative.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚠');
+    // 數值維持 --fg,不得用 --dn(U-06)
+    expect(card.querySelector('.kpi-v')!.getAttribute('style') ?? '').not.toContain('--dn');
+    expect(negative.getAttribute('style') ?? '').not.toContain('--dn');
+    expect(kpiValue(card)).toBe('84,211');
+  });
+
+  it('多個負值幣別以 ", " 連接(zh 為「、」)', async () => {
+    const cashBalances = [{ currency: 'USD', amount: -5 }, { currency: 'TWD', amount: -9 }];
+    const en = await mountCash({ cashBalances });
+    expect(requireTestid('overview-kpi-cash-negative').textContent)
+      .toContain(tf('en', 'cashNegativeHint', { codes: 'TWD, USD' }));
+    expect(en.card).toBeTruthy();
+    cleanupMounted();
+
+    await mountCash({ cashBalances }, { lang: 'zh' });
+    expect(requireTestid('overview-kpi-cash-negative').textContent)
+      .toContain(tf('zh', 'cashNegativeHint', { codes: 'TWD、USD' }));
+  });
+
+  it('總額為負(已折算)也顯示帶 - 號的數值,不夾成 0', async () => {
+    const { card } = await mountCash({ cash: -1200, cashBalances: [{ currency: 'USD', amount: -1200 }] });
+    expect(kpiValue(card)).toBe('-1,200');
+  });
+
+  it('現金幣別缺匯率:顯示 cashFxExcludedHint;該幣別餘額為 0 時不提示', async () => {
+    const { card } = await mountCash({
+      unconvertedCurrencies: ['EUR'],
+      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 20 }],
+    });
+    expect(card.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')!.textContent)
+      .toContain(tf('en', 'cashFxExcludedHint', { codes: 'EUR', base: 'TWD' }));
+    cleanupMounted();
+
+    const { card: other } = await mountCash({
+      unconvertedCurrencies: ['EUR'],
+      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 0 }],
+    });
+    expect(other.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')).toBeNull();
+  });
+
+  it('入金鈕:開啟對話框,預設類型 DEPOSIT、幣別為第一個為負的幣別(USD)', async () => {
+    await mountCash({ cashBalances: MIXED });
+    click(button('overview-cash-deposit'));
+    await flushAsync();
+
+    requireTestid('cash-dialog');
+    expect(requireTestid('cash-type-deposit').getAttribute('aria-pressed')).toBe('true');
+    expect(requireTestid('cash-currency-USD').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('入金鈕:沒有負值幣別時預設基準幣', async () => {
+    await mountCash({ baseCurrency: 'EUR', cashBalances: [{ currency: 'TWD', amount: 10 }] });
+    click(button('overview-cash-deposit'));
+    await flushAsync();
+
+    expect(requireTestid('cash-currency-EUR').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('出金鈕:預設類型 WITHDRAWAL、幣別為基準幣,並把 cashBalances 傳給對話框(超額提示)', async () => {
+    await mountCash({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: 100 }, { currency: 'TWD', amount: -50 }] });
+    click(button('overview-cash-withdraw'));
+    await flushAsync();
+
+    expect(requireTestid('cash-type-withdrawal').getAttribute('aria-pressed')).toBe('true');
+    expect(requireTestid('cash-currency-USD').getAttribute('aria-pressed')).toBe('true');
+    await setValue(requireTestid('cash-amount') as HTMLInputElement, '250');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+  });
+
+  it('兩顆動作鈕不是 accent,且是 type=button', async () => {
+    await mountCash({ cashBalances: MIXED });
+    for (const id of ['overview-cash-deposit', 'overview-cash-withdraw', 'overview-cash-view-entries']) {
+      expect(button(id).getAttribute('type'), id).toBe('button');
+    }
+    expect(button('overview-cash-deposit').className).toContain('btn-ghost-sm');
+    expect(button('overview-cash-deposit').className).not.toContain('btn-accent');
+    expect(button('overview-cash-view-entries').textContent).toContain(t('en', 'cashViewEntries'));
+  });
+
+  it('入金成功後以 cause=cash 重讀 summary(不借用交易通知)', async () => {
+    setCookie();
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ cashBalances: MIXED })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(1);
+
+    notifyCashEntryCreated({ id: 'e-1' });
+    await flushAsync();
+
+    expect(portfolioRevisionCause.value).toBe('cash');
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+  });
+
+  it('「入出金紀錄 →」:點擊 emit navigate("cash")', async () => {
+    const navigate: string[] = [];
+    await mountCash({ cashBalances: MIXED }, { onNavigate: (page: string) => navigate.push(page) });
+    click(button('overview-cash-view-entries'));
+    expect(navigate).toEqual(['cash']);
+  });
+});
+
+describe('Overview — mock mode 的可用現金卡(鐵律 6:不得有無效果的控制)', () => {
+  it('不渲染入金 / 出金鈕與各幣別餘額,但仍有「入出金紀錄 →」並 emit navigate("cash")', async () => {
+    const navigate: string[] = [];
+    mountWithPinia(Overview, { lang: 'en', onNavigate: (page: string) => navigate.push(page) });
+    await flushAsync();
+
+    expect(allTestids('overview-kpi')).toHaveLength(4);
+    expect(testid('overview-cash-deposit')).toBeNull();
+    expect(testid('overview-cash-withdraw')).toBeNull();
+    expect(testid('overview-kpi-cash-balances')).toBeNull();
+    expect(testid('overview-kpi-cash-negative')).toBeNull();
+    expect(document.body.querySelector('[data-testid="cash-dialog"]')).toBeNull();
+
+    const link = button('overview-cash-view-entries');
+    expect(link.textContent).toContain(t('en', 'cashViewEntries'));
+    // 只有第 3 張卡(可用現金)有這個連結
+    expect(allTestids('overview-kpi')[2].contains(link)).toBe(true);
+    click(link);
+    expect(navigate).toEqual(['cash']);
+  });
+});
+
+describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () => {
+  const TRADE_FOR_NOTIFY: TradeDto = {
+    id: 'tr-n', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null,
+    currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z',
+  };
+
+  async function staleTextAfter(trigger: () => void): Promise<string> {
+    let summaryFails = false;
+    const fetchMock = routedFetch({
+      summary: () => (summaryFails ? failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-stale') : success(SUMMARY)),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+    summaryFails = true;
+    trigger();
+    await flushAsync();
+    const stale = requireTestid('overview-refresh-error');
+    expect(stale.getAttribute('role')).toBe('status');
+    return stale.textContent ?? '';
+  }
+
+  it('交易 → portfolioStaleAfterTrade', async () => {
+    const text = await staleTextAfter(() => notifyTradeCreated(TRADE_FOR_NOTIFY));
+    expect(text).toContain(t('en', 'portfolioStaleAfterTrade'));
+    expect(text).not.toContain(t('en', 'portfolioStaleAfterCashEntry'));
+    expect(text).not.toContain(t('en', 'portfolioStaleAfterBaseCurrency'));
+  });
+
+  it('入出金 → portfolioStaleAfterCashEntry(不得說「交易」)', async () => {
+    const text = await staleTextAfter(() => notifyCashEntryCreated({ id: 'e-2' }));
+    expect(text).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+    expect(text).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+
+  it('基準幣 → portfolioStaleAfterBaseCurrency', async () => {
+    const text = await staleTextAfter(() => bumpPortfolioRevision('baseCurrency'));
+    expect(text).toContain(t('en', 'portfolioStaleAfterBaseCurrency'));
+    expect(text).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+
+  it('近期交易區塊重讀失敗的 stale 提示同樣依來源選文案', async () => {
+    let tradesFail = false;
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => (tradesFail ? failure('TRADE_LIST_UNAVAILABLE', 'trace-t') : tradePage(API_TRADES)),
+    });
+    await mountApiOverview(fetchMock);
+    tradesFail = true;
+    notifyCashEntryCreated({ id: 'e-3' });
+    await flushAsync();
+
+    const stale = requireTestid('overview-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+    expect(stale.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
   });
 });
