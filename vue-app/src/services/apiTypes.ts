@@ -51,6 +51,58 @@ export interface PortfolioSummaryDto {
   /** 比值(非百分比):0.0117 = 1.17%。顯示時 ×100,那是格式化不是重算(D-04)。 */
   roi: number;
   holdingCount: number;
+  /** Phase 04.1:基準幣 ISO 代碼(預設 `TWD`);本 DTO 所有金額欄位(除 cashBalances)皆為此幣別。 */
+  baseCurrency: string;
+  /** Phase 04.1:因缺匯率而未納入基準幣總額的持倉數。 */
+  fxExcludedCount: number;
+  /** Phase 04.1:缺匯率的原幣代碼清單(`fxExcludedCount` > 0 時才有值)。 */
+  unconvertedCurrencies: string[];
+  /** Phase 04.1:今日價差損益(基準幣);無前收盤可比時為 null。 */
+  dayPricePnl: number | null;
+  /** Phase 04.1:今日價差損益比值(非百分比,0.0104 = 1.04%);無可比基準時為 null。 */
+  dayPricePnlRatio: number | null;
+  /** Phase 04.1:因缺前收盤而未納入今日損益的持倉數。 */
+  dayPnlExcludedCount: number;
+  /** Phase 04.1:現金合計(基準幣);可為負(D-08,不得被夾成 0)。 */
+  cash: number;
+  /** Phase 04.1:總權益(基準幣)= 持倉市值 + 現金。 */
+  totalEquity: number;
+  /** Phase 04.1:各幣別現金餘額(原幣,非基準幣)。 */
+  cashBalances: CashBalanceDto[];
+  /** Phase 04.1:依資產類別的配置(基準幣金額 + 權重比值)。 */
+  allocation: AllocationSliceDto[];
+  /** Phase 04.1:依產業的配置(基準幣金額 + 權重比值)。 */
+  sectorAllocation: SectorAllocationDto[];
+}
+
+/** 對應後端 CashBalanceDto:單一幣別的現金餘額(原幣,可為負)。 */
+export interface CashBalanceDto {
+  /** ISO 4217 代碼,宣告為 string:後端新增幣別不應讓前端型別檢查變紅。 */
+  currency: string;
+  amount: number;
+}
+
+/** 對應後端 AllocationSliceDto:資產類別配置的一塊。 */
+export interface AllocationSliceDto {
+  /** 資產類別(enum 型欄位宣告為 string,沿用 AssetDto 的既有裁決;RESEARCH Q10)。 */
+  category: string;
+  /** 基準幣金額 */
+  value: number;
+  /** 比值(非百分比):0.52 = 52%。顯示時 ×100 是格式化不是重算。 */
+  weight: number;
+}
+
+/** 對應後端 SectorAllocationDto:產業配置的一塊。 */
+export interface SectorAllocationDto {
+  /** 產業名稱;資產沒有產業資料時為 null(畫面以「未分類」呈現)。 */
+  sector: string | null;
+  /** 基準幣金額 */
+  value: number;
+  /** 比值(非百分比),同 AllocationSliceDto.weight。 */
+  weight: number;
+  holdingCount: number;
+  /** 該產業未實現損益(基準幣) */
+  unrealizedPnl: number;
 }
 
 /** 對應後端 HoldingResponse。 */
@@ -70,6 +122,22 @@ export interface HoldingDto {
   /** ISO-8601;行情時間,D-03 要顯示。 */
   priceTime: string | null;
   lastUpdated: string | null;
+  /** Phase 04.1:持倉原幣 ISO 代碼(本列的 marketPrice / avgCost / marketValue 等皆為此幣別);缺值為 null,畫面不得猜測。 */
+  currency: string | null;
+  /** Phase 04.1:資產類別(宣告為 string,後端新增 enum 值不讓前端型別變紅)。 */
+  assetType: string | null;
+  /** Phase 04.1:產業;資產沒有產業資料時為 null。 */
+  sector: string | null;
+  /** Phase 04.1:基準幣 ISO 代碼,與 PortfolioSummaryDto.baseCurrency 同值。 */
+  baseCurrency: string;
+  /** Phase 04.1:市值換算為基準幣的金額;缺匯率時為 null(該列不計入 summary 總額)。 */
+  marketValueInBase: number | null;
+  /** Phase 04.1:前收盤價(原幣);無資料時為 null。 */
+  previousClose: number | null;
+  /** Phase 04.1:今日價差損益(原幣);無前收盤時為 null。 */
+  dayPricePnl: number | null;
+  /** Phase 04.1:今日價差損益比值(非百分比);無前收盤時為 null。 */
+  dayPricePnlRatio: number | null;
 }
 
 /** 對應後端 TradeResponse。 */

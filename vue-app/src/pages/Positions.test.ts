@@ -44,6 +44,15 @@ const TRUTH_HOLDING: HoldingDto = {
   roi: 0.0117,
   priceTime: '2026-07-24T13:45:00Z',
   lastUpdated: '2026-07-24T13:46:00Z',
+  // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設)
+  currency: 'TWD',
+  assetType: 'STOCK',
+  sector: 'Tech',
+  baseCurrency: 'TWD',
+  marketValueInBase: 999,
+  previousClose: 90,
+  dayPricePnl: 100,
+  dayPricePnlRatio: 0.0111,
 };
 
 /**
@@ -58,6 +67,18 @@ const TRUTH_SUMMARY: PortfolioSummaryDto = {
   totalPnl: 1333,
   roi: 0.4258,
   holdingCount: 7,
+  // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設,讓後續 plan 的「資料來自 API」斷言可沿用)
+  baseCurrency: 'TWD',
+  fxExcludedCount: 0,
+  unconvertedCurrencies: [],
+  dayPricePnl: 4321,
+  dayPricePnlRatio: 0.0104,
+  dayPnlExcludedCount: 0,
+  cash: 84210.5,
+  totalEquity: 4242,
+  cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
+  allocation: [{ category: 'STOCK', value: 4242, weight: 1 }],
+  sectorAllocation: [{ sector: 'Tech', value: 4242, weight: 1, holdingCount: 1, unrealizedPnl: 1111 }],
 };
 
 function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
@@ -74,6 +95,14 @@ function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
     roi: 0,
     priceTime: '2026-07-24T13:45:00Z',
     lastUpdated: '2026-07-24T13:46:00Z',
+    currency: 'TWD',
+    assetType: 'STOCK',
+    sector: 'Tech',
+    baseCurrency: 'TWD',
+    marketValueInBase: 1,
+    previousClose: null,
+    dayPricePnl: null,
+    dayPricePnlRatio: null,
     ...over,
   };
 }
@@ -87,6 +116,17 @@ function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryD
     totalPnl: 0,
     roi: 0,
     holdingCount: 0,
+    baseCurrency: 'TWD',
+    fxExcludedCount: 0,
+    unconvertedCurrencies: [],
+    dayPricePnl: null,
+    dayPricePnlRatio: null,
+    dayPnlExcludedCount: 0,
+    cash: 0,
+    totalEquity: 0,
+    cashBalances: [],
+    allocation: [],
+    sectorAllocation: [],
     ...over,
   };
 }

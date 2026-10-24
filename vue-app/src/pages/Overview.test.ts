@@ -27,6 +27,18 @@ const SUMMARY: PortfolioSummaryDto = {
   totalPnl: 135802.46,
   roi: 0.1234,
   holdingCount: 3,
+  // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設,讓後續 plan 的「資料來自 API」斷言可沿用)
+  baseCurrency: 'TWD',
+  fxExcludedCount: 0,
+  unconvertedCurrencies: [],
+  dayPricePnl: 4321,
+  dayPricePnlRatio: 0.0104,
+  dayPnlExcludedCount: 0,
+  cash: 84210.5,
+  totalEquity: 1319778.39,
+  cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
+  allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
+  sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
 };
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。

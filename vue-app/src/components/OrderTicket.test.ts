@@ -985,6 +985,15 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     roi: -999,
     priceTime: null,
     lastUpdated: null,
+    // Phase 04.1 欄位:只補型別(OrderTicket 不讀;斷言改寫屬 04.1-14)
+    currency: 'USD',
+    assetType: 'STOCK',
+    sector: null,
+    baseCurrency: 'TWD',
+    marketValueInBase: null,
+    previousClose: null,
+    dayPricePnl: null,
+    dayPricePnlRatio: null,
   };
 }
 

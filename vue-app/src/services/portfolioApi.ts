@@ -1,10 +1,12 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type {
+  AllocationSliceDto,
   HoldingDto,
   PaginatedResponse,
   PortfolioSummaryDto,
   RuntimeDataMode,
+  SectorAllocationDto,
   TradeDto,
 } from './apiTypes';
 import type { Position, Trade } from '../types';
@@ -56,6 +58,35 @@ export interface PortfolioApi {
 const DEFAULT_PAGE = 0;
 const DEFAULT_SIZE = 20;
 
+/**
+ * mock 宇宙(data.ts)是美股報價,故 mock 持倉幣別與基準幣皆為 USD —— 與 mock 畫面的 `$` 呈現一致。
+ * mock 畫面不讀這些欄位(mock tbody / KPI 逐字不變);它們只為了讓 mock `PortfolioApi`
+ * 與 API mode 同形、型別檢查通過。
+ */
+const MOCK_CURRENCY = 'USD';
+
+/** 依產業分組,value 降冪(同值以產業名稱穩定排序,不含亂數);權重加總為 1。 */
+function sectorAllocationFrom(positions: Position[], totalMarketValue: number): SectorAllocationDto[] {
+  const bySector = new Map<string, SectorAllocationDto>();
+  for (const position of positions) {
+    const value = position.qty * position.price;
+    const unrealizedPnl = value - position.qty * position.avg;
+    const slice = bySector.get(position.sector);
+    if (slice) {
+      slice.value += value;
+      slice.holdingCount += 1;
+      slice.unrealizedPnl += unrealizedPnl;
+    } else {
+      bySector.set(position.sector, { sector: position.sector, value, weight: 0, holdingCount: 1, unrealizedPnl });
+    }
+  }
+  const slices = [...bySector.values()];
+  for (const slice of slices) {
+    slice.weight = totalMarketValue === 0 ? 0 : slice.value / totalMarketValue;
+  }
+  return slices.sort((a, b) => b.value - a.value || String(a.sector).localeCompare(String(b.sector)));
+}
+
 function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   const totalMarketValue = positions.reduce((sum, p) => sum + p.qty * p.price, 0);
   const totalCostBasis = positions.reduce((sum, p) => sum + p.qty * p.avg, 0);
@@ -71,6 +102,21 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
     totalPnl,
     roi: totalCostBasis === 0 ? 0 : totalPnl / totalCostBasis,
     holdingCount: positions.length,
+    baseCurrency: MOCK_CURRENCY,
+    fxExcludedCount: 0,
+    unconvertedCurrencies: [],
+    // mock 沒有前收盤:今日損益為 null,所有持倉都算「未納入」。
+    dayPricePnl: null,
+    dayPricePnlRatio: null,
+    dayPnlExcludedCount: positions.length,
+    // mock 沒有現金帳本。
+    cash: 0,
+    totalEquity: totalMarketValue,
+    cashBalances: [],
+    allocation: positions.length === 0
+      ? []
+      : ([{ category: 'STOCK', value: totalMarketValue, weight: 1 }] satisfies AllocationSliceDto[]),
+    sectorAllocation: sectorAllocationFrom(positions, totalMarketValue),
   };
 }
 
@@ -92,6 +138,14 @@ function holdingFrom(position: Position): HoldingDto {
     roi: costBasis === 0 ? 0 : unrealizedPnl / costBasis,
     priceTime: null,
     lastUpdated: null,
+    currency: MOCK_CURRENCY,
+    assetType: 'STOCK',
+    sector: position.sector,
+    baseCurrency: MOCK_CURRENCY,
+    marketValueInBase: marketValue,
+    previousClose: null,
+    dayPricePnl: null,
+    dayPricePnlRatio: null,
   };
 }
 
