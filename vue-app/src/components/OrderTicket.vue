@@ -507,7 +507,7 @@
           <h2 ref="resultTitle" class="result-ttl" tabindex="-1">{{ t(lang, 'tradeRecorded') }}</h2>
           <div class="result-sub">
             {{ recorded?.type === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }}
-            {{ recorded?.quantity }} {{ recorded?.symbol }} @ ${{ fmtNum(recorded?.price ?? Number.NaN) }}
+            {{ recorded?.quantity }} {{ recorded?.symbol }} @ {{ resultMoney(recorded?.price ?? Number.NaN, recordedDp) }}
           </div>
           <div class="rev-grid">
             <div class="span-2">
@@ -516,20 +516,20 @@
             </div>
             <div>
               <span>{{ t(lang, 'price') }}</span>
-              <b class="num" data-testid="ticket-result-price">${{ fmtNum(recorded?.price ?? Number.NaN) }}</b>
+              <b class="num" data-testid="ticket-result-price">{{ resultMoney(recorded?.price ?? Number.NaN, recordedDp) }}</b>
             </div>
             <div>
               <span>{{ t(lang, 'qty') }}</span>
               <b class="num" data-testid="ticket-result-qty">{{ recorded?.quantity }}</b>
             </div>
-            <div><span>{{ t(lang, 'fee') }}</span><b class="num">${{ fmtNum(recorded?.fee ?? Number.NaN) }}</b></div>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ resultMoney(recorded?.fee ?? Number.NaN, recordedDp) }}</b></div>
             <div>
               <span>{{ t(lang, 'tradeExecutedAt') }}</span>
               <b class="num trade-id" data-testid="ticket-result-executed-at">{{ recorded?.executedAt }}</b>
             </div>
             <div class="span-2 highlight">
               <span>{{ t(lang, 'estTotal') }}</span>
-              <b class="num">${{ fmtNum((recorded?.quantity ?? 0) * (recorded?.price ?? 0), 2) }}</b>
+              <b class="num">{{ resultMoney((recorded?.quantity ?? 0) * (recorded?.price ?? 0), 2) }}</b>
             </div>
           </div>
         </div>
@@ -606,6 +606,7 @@ import { t } from '../i18n';
 // 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
 // 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
 import { fmtNum, fmtPct } from '../data';
+import { fmtMoney, minorUnits } from '../moneyFormat';
 import LineChart from './LineChart.vue';
 import { ApiClientError } from '../services/apiClient';
 // closeSeries 是 KlineDto.close(JSON string)→ number[] 的**唯一**轉換點(04-06 已單測鎖住)。
@@ -676,6 +677,15 @@ const maxExecutedAt = ref('');
 const submitting = ref(false);
 const orderError = ref('');
 const recorded = ref<TradeDto | null>(null);
+
+// 04.1-14(D-28 補充 / UI-SPEC §Interaction 10):API mode 的成功畫面用**後端回傳**的
+// `recorded.currency`,不是 review 時的 `selected.currency`(Phase 4 U-12:成功畫面用後端值)。
+// 缺值時只顯示數字,不帶代碼、不退回 `$`(U-29)。mock mode(`live` 存在)畫面維持原樣。
+const recordedDp = computed(() => minorUnits(recorded.value?.currency));
+function resultMoney(value: number, dp: number): string {
+  if (live.value) return `$${fmtNum(value, dp)}`;
+  return fmtMoney(value, recorded.value?.currency ?? null, dp);
+}
 
 // =================== D-14:idempotency key 的生命週期 ===================
 // 兩條規則就蓋完所有情境:
