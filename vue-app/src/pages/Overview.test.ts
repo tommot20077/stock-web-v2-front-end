@@ -1296,6 +1296,12 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
     expect(requireTestid('overview-allocation-empty').textContent).toContain(t('en', 'allocationEmpty'));
   });
 
+  it('舊形狀 summary(沒有 allocation 欄位):視為空、不崩潰', async () => {
+    await mountAllocation({ allocation: undefined as unknown as PortfolioSummaryDto['allocation'] });
+    expect(requireTestid('overview-allocation-empty').textContent).toContain(t('en', 'allocationEmpty'));
+    expect(allTestids('overview-allocation-row')).toHaveLength(0);
+  });
+
   it('cash < 0:legend 下方顯示 allocationNegativeCash', async () => {
     await mountAllocation({
       cash: -1200,
@@ -1462,12 +1468,13 @@ describe('Overview — 格線重排(U-27)', () => {
     ]);
   });
 
-  it('API mode:資產配置 span 4、近期交易 span 8;mock mode:近期交易 span 12', async () => {
+  it('API mode:資產配置 span 4、近期交易 span 8', async () => {
     await mountAllocation({ allocation: ALLOCATION });
     expect(allocationCard().classList.contains('col-4')).toBe(true);
     expect(recentTradesCard().classList.contains('col-8')).toBe(true);
-    cleanupMounted();
+  });
 
+  it('mock mode:近期交易 span 12', async () => {
     mountWithPinia(Overview, { lang: 'en' });
     await flushAsync();
     expect(recentTradesCard().classList.contains('col-12')).toBe(true);

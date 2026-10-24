@@ -168,64 +168,48 @@
       </div>
     </div>
 
-    <!-- 資產配置 donut:寫死陣列,需資產分類 → API mode 隱藏(D-14) -->
-    <div v-if="live" class="card" style="grid-column: span 4; padding: 20px">
-      <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'allocation') }}</div>
-      <div style="display:flex;justify-content:center;margin-bottom:16px">
-        <Donut :size="150" :thickness="22" :slices="alloc.map(a => ({ value: a.v, color: a.c }))" />
-      </div>
-      <div>
-        <div v-for="a in alloc" :key="a.n" class="alloc-row">
-          <span style="display:flex;align-items:center;gap:8px">
-            <span :style="{ width: '8px', height: '8px', background: a.c, borderRadius: '2px' }" />{{ a.n }}
-          </span>
-          <span class="num" style="color:var(--fg-dim)">{{ a.v }}%</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="grid-column: span 6; padding: 20px">
-      <div class="row-between" style="margin-bottom:12px">
-        <div class="ttl">★ {{ t(lang, 'watchlist') }}</div>
-        <button class="link" @click="emit('navigate', 'watchlist')">→</button>
-      </div>
-      <div v-for="s in watchlist" :key="s.sym" class="wl-row">
-        <div class="wl-tag">{{ s.sym.slice(0, 2) }}</div>
-        <div style="flex:1">
-          <div style="font-weight:500">{{ s.sym }}</div>
-          <div style="font-size:11px;color:var(--fg-dim)">{{ s.name }}</div>
-        </div>
-        <div style="width:70px;height:24px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
-          <LineChart :data="genSeries(20, s.price, 0.02, s.sym.charCodeAt(0))" />
-        </div>
-        <div style="text-align:right;min-width:90px">
-          <div class="num" style="font-weight:500">{{ fmtNum(s.price) }}</div>
-          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="grid-column: span 6; padding: 20px">
-      <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'news') }}</div>
-      <div v-for="(n, i) in NEWS" :key="i" class="news-row">
-        <div class="news-thumb" />
-        <div style="flex:1">
-          <div class="news-meta">
-            <span style="font-weight:500">{{ n.src }}</span>
-            <span class="news-bullet" />
-            <span>{{ n.time }}</span>
-            <span class="news-tag">{{ n.tag }}</span>
-          </div>
-          <div style="font-size:13px;line-height:1.4">{{ n.t }}</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 近期交易。API mode 走 GET /trades?page=0&size=5(D-09),與交易頁不共用狀態。 -->
+    <!--
+      資產配置 donut(D-18)。兩模式共用 view-model 模板:mock 由既有 alloc 映射(legend 只有百分比),
+      API mode 由 summary.allocation 映射(legend 帶基準幣金額)。summary 失敗時整張卡不渲染
+      (單一重試點是 KPI 區的 summary 錯誤區塊,U-19);載入中卡內顯示 載入中…。
+    -->
     <div
-      class="card"
-      style="grid-column: span 12; padding: 20px"
-      :class="{ 'block-refreshing': tradesRefreshing }"
+      v-if="live || !summaryError"
+      class="card alloc-card"
+      :class="live ? 'col-4' : 'col-4 stack-narrow'"
+      style="padding: 20px"
+      :data-testid="!live && summaryLoading ? 'overview-allocation-loading' : 'overview-allocation'"
+    >
+      <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'allocation') }}</div>
+      <div v-if="!live && summaryLoading" class="hint">{{ t(lang, 'loading') }}</div>
+      <template v-else>
+        <div v-if="allocRows.length" style="display:flex;justify-content:center;margin-bottom:16px">
+          <Donut aria-hidden="true" :size="150" :thickness="22" :slices="allocRows.map(a => ({ value: a.value, color: a.color }))" />
+        </div>
+        <div v-else class="hint" data-testid="overview-allocation-empty">{{ t(lang, 'allocationEmpty') }}</div>
+        <ul v-if="allocRows.length" class="alloc-list">
+          <li v-for="a in allocRows" :key="a.key" class="alloc-row" data-testid="overview-allocation-row">
+            <span class="alloc-name">
+              <span class="alloc-swatch" :style="{ background: a.color }" :data-color="a.color" />{{ a.label }}
+            </span>{{ ' ' }}
+            <span class="alloc-vals">
+              <span v-if="a.amount" class="alloc-amt num">{{ a.amount }}</span>{{ ' ' }}
+              <span class="alloc-w num">{{ a.weightText }}</span>
+            </span>
+          </li>
+        </ul>
+        <div v-if="allocNegativeCash" class="hint alloc-note" data-testid="overview-allocation-negative-cash">
+          {{ t(lang, 'allocationNegativeCash') }}
+        </div>
+      </template>
+    </div>
+
+    <!-- 近期交易。API mode 走 GET /trades?page=0&size=5(D-09),與交易頁不共用狀態。
+         U-27:位於資產配置之後、觀察清單之前;API mode span 8(配置旁),mock mode span 12。 -->
+    <div
+      class="card trades-card"
+      :class="[live ? 'col-12' : 'col-8 stack-narrow', { 'block-refreshing': tradesRefreshing }]"
+      style="padding: 20px"
       :aria-busy="tradesRefreshing"
     >
       <div class="row-between" style="margin-bottom:12px">
@@ -271,7 +255,8 @@
       <div v-else-if="!live && !recentTrades.length" class="block-state" data-testid="overview-trades-empty">
         {{ t(lang, 'noTrades') }}
       </div>
-      <table v-else>
+      <div v-else class="trades-scroll">
+      <table>
         <thead>
           <tr>
             <th>{{ t(lang, 'date') }}</th>
@@ -300,13 +285,55 @@
           <tr v-for="tr in recentTrades" :key="tr.id" data-testid="overview-trade-row">
             <td style="color:var(--fg-dim)">{{ tradeDate(tr) }}</td>
             <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
-            <td style="font-weight:500">{{ tr.symbol }}</td>
+            <td style="font-weight:600">
+              {{ tr.symbol }}
+              <!-- D-28:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
+              <span v-if="tr.currency" class="ccy-tag" data-testid="overview-trade-ccy-tag">{{ tr.currency }}</span>
+            </td>
             <td class="num" style="text-align:right">{{ tr.quantity }}</td>
-            <td class="num" style="text-align:right">${{ fmtNum(tr.price) }}</td>
-            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.quantity * tr.price, 0) }}</td>
+            <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity * tr.price, tr.currency, 0) }}</td>
           </tr>
         </tbody>
       </table>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 6; padding: 20px">
+      <div class="row-between" style="margin-bottom:12px">
+        <div class="ttl">★ {{ t(lang, 'watchlist') }}</div>
+        <button class="link" @click="emit('navigate', 'watchlist')">→</button>
+      </div>
+      <div v-for="s in watchlist" :key="s.sym" class="wl-row">
+        <div class="wl-tag">{{ s.sym.slice(0, 2) }}</div>
+        <div style="flex:1">
+          <div style="font-weight:500">{{ s.sym }}</div>
+          <div style="font-size:11px;color:var(--fg-dim)">{{ s.name }}</div>
+        </div>
+        <div style="width:70px;height:24px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
+          <LineChart :data="genSeries(20, s.price, 0.02, s.sym.charCodeAt(0))" />
+        </div>
+        <div style="text-align:right;min-width:90px">
+          <div class="num" style="font-weight:500">{{ fmtNum(s.price) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 6; padding: 20px">
+      <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'news') }}</div>
+      <div v-for="(n, i) in NEWS" :key="i" class="news-row">
+        <div class="news-thumb" />
+        <div style="flex:1">
+          <div class="news-meta">
+            <span style="font-weight:500">{{ n.src }}</span>
+            <span class="news-bullet" />
+            <span>{{ n.time }}</span>
+            <span class="news-tag">{{ n.tag }}</span>
+          </div>
+          <div style="font-size:13px;line-height:1.4">{{ n.t }}</div>
+        </div>
+      </div>
     </div>
 
     <!-- D-11:Overview 自己掛載的入出金對話框(API mode)。寫入成功由對話框發出 cash 重讀訊號。 -->
@@ -326,7 +353,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
-import { fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
+import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
@@ -710,10 +737,58 @@ const apiKpis = computed<KpiCard[]>(() => {
 
 const kpiCards = computed(() => (live ? mockKpis.value : apiKpis.value));
 
-const alloc = [
+// =============== 資產配置(D-18)===============
+/** 兩模式共用的 legend / donut view-model。amount 缺省時(mock)該 span 不渲染。 */
+interface AllocRow {
+  key: string;
+  label: string;
+  color: string;
+  /** Donut 切片的相對大小(只看比例)。 */
+  value: number;
+  amount: string | null;
+  weightText: string;
+}
+
+/** 分類色與標籤 key(UI-SPEC §Color,兩模式一致,寫成常數);未知 enum 值走 assetTypeOther + --fg-dim。 */
+const ALLOCATION_CATEGORIES: Record<string, { color: string; labelKey: string }> = {
+  STOCK: { color: 'var(--accent)', labelKey: 'assetTypeStock' },
+  CRYPTO: { color: '#3b82f6', labelKey: 'assetTypeCrypto' },
+  FX: { color: '#a855f7', labelKey: 'assetTypeFx' },
+  BOND: { color: '#f59e0b', labelKey: 'assetTypeBond' },
+  CASH: { color: '#94a3b8', labelKey: 'assetTypeCash' },
+};
+const UNKNOWN_CATEGORY = { color: 'var(--fg-dim)', labelKey: 'assetTypeOther' };
+
+// mock 的既有寫死 alloc(legend 只顯示百分比,沒有金額)。
+const MOCK_ALLOC = [
   { n: 'Equity', v: 52, c: 'var(--accent)' }, { n: 'Crypto', v: 22, c: '#3b82f6' },
   { n: 'FX', v: 14, c: '#a855f7' }, { n: 'Bonds', v: 8, c: '#f59e0b' }, { n: 'Cash', v: 4, c: '#94a3b8' },
 ];
+
+const allocRows = computed<AllocRow[]>(() => {
+  if (live) {
+    return MOCK_ALLOC.map(a => ({
+      key: a.n, label: a.n, color: a.c, value: a.v, amount: null, weightText: fmtWeightPct(a.v / 100),
+    }));
+  }
+  const s = summary.value;
+  if (!s) return [];
+  // 舊形狀 / 快取的 summary 可能沒有 allocation:視為空,不崩潰。
+  return (s.allocation ?? []).map(slice => {
+    const meta = ALLOCATION_CATEGORIES[slice.category] ?? UNKNOWN_CATEGORY;
+    return {
+      key: slice.category,
+      label: t(props.lang, meta.labelKey),
+      color: meta.color,
+      value: slice.value,
+      amount: fmtMoney(slice.value, s.baseCurrency, 0),
+      weightText: fmtWeightPct(slice.weight),
+    };
+  });
+});
+
+/** D-18:現金為負時後端不列 CASH 塊,legend 下方說明原因。 */
+const allocNegativeCash = computed(() => !live && summary.value != null && summary.value.cash < 0);
 
 // getter 每次存取才解析 store,reactivity 由 computed 追蹤(03-02-SUMMARY 提醒 4)。
 const mockRecentTrades = computed(() => (live ? live.trades.slice(0, 5) : []));
@@ -781,10 +856,6 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
 @container (max-width: 340px) {
   .link-btn { margin-left: 0; flex-basis: 100%; text-align: left; }
 }
-@media (max-width: 639px) {
-  .toolbar-hint { flex: 1 1 100%; }
-  .ccy-switch { margin-left: 0; }
-}
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .seg { display: flex; background: var(--surface2); border-radius: 8px; padding: 2px; }
 .seg-btn {
@@ -793,7 +864,24 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
   color: var(--fg-dim);
 }
 .seg-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-.alloc-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 12px; }
+.col-4 { grid-column: span 4; }
+.col-8 { grid-column: span 8; }
+.col-12 { grid-column: span 12; }
+.alloc-list { list-style: none; margin: 0; padding: 0; }
+.alloc-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; font-size: 12px; font-weight: 400; }
+.alloc-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.alloc-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.alloc-vals { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 4px 12px; }
+.alloc-amt { color: var(--fg-dim); }
+.alloc-w { font-weight: 600; color: var(--fg); }
+.alloc-note { margin-top: 8px; }
+.trades-scroll { overflow-x: auto; }
+/* D-28:交易列的幣別標籤。與 Trades.vue 同尺寸規格,line-height 1.2 讓它落在既有 line box 內、不改列高。 */
+.ccy-tag {
+  display: inline-block; margin-left: 8px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
+}
 .wl-row { display: flex; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); gap: 12px; }
 .wl-tag {
   width: 32px; height: 32px; background: var(--surface2); border-radius: 8px;
@@ -845,5 +933,15 @@ tbody td { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 1
 .block-refreshing { opacity: .72; transition: opacity .15s; }
 @media (prefers-reduced-motion: reduce) {
   .block-refreshing { transition: none; }
+}
+/* 響應式(U-27):只作用於本 phase 渲染的元素;宣告順序必須在 .col-* / .kpi-card 之後才能覆寫 */
+@media (max-width: 1099px) {
+  .kpi-card { grid-column: span 6; }
+  .stack-narrow { grid-column: span 12; }
+}
+@media (max-width: 639px) {
+  .kpi-card { grid-column: span 12; }
+  .toolbar-hint { flex: 1 1 100%; }
+  .ccy-switch { margin-left: 0; }
 }
 </style>
