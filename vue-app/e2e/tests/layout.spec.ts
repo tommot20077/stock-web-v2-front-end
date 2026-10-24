@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { expectNoHorizontalScroll, mockPortfolioApi } from '../support/portfolioStubs';
 
 /**
  * L:app shell header 的窄螢幕版面(todo 2026-09-04-frontend-header-rwd-320px)。
@@ -67,5 +68,39 @@ for (const width of [320, 375, 768, 1280]) {
     const popBox = await pop.boundingBox();
     expect(popBox!.x).toBeGreaterThanOrEqual(0);
     expect(popBox!.x + popBox!.width).toBeLessThanOrEqual(clientWidth);
+  });
+}
+
+/**
+ * L2:Phase 04.1 Overview(4 張 KPI + 基準幣工具列 + 資產配置 + 近期交易)。
+ * fixture 取最寬情況(portfolioStubs),量測整頁與 main 都不水平捲動,且關鍵元素右緣在視窗內。
+ */
+for (const width of [320, 375, 768, 1280]) {
+  test(`L2 ${width}px:Overview 四張 KPI、基準幣工具列、資產配置、近期交易不造成整頁或 main 水平捲動 @smoke`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await mockPortfolioApi(page);
+    await page.goto('/');
+
+    const kpis = page.getByTestId('overview-kpi');
+    await expect(kpis).toHaveCount(4);
+    await expect(page.getByTestId('overview-allocation')).toBeVisible();
+    await expect(page.getByTestId('overview-trade-ccy-tag').first()).toBeVisible();
+
+    const clientWidth = await expectNoHorizontalScroll(page);
+
+    // 不是靠隱藏解決:工具列、四幣別鍵、四張 KPI、資產配置都完整落在視窗內
+    const targets = [
+      page.getByTestId('base-currency-switch'),
+      ...['TWD', 'USD', 'EUR', 'JPY'].map((code) => page.getByTestId(`base-currency-option-${code}`)),
+      ...(await kpis.all()),
+      page.getByTestId('overview-allocation'),
+    ];
+    for (const target of targets) {
+      await expect(target).toBeVisible();
+      const box = await target.boundingBox();
+      expect(box, '元素應有版面').not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(clientWidth);
+    }
   });
 }
