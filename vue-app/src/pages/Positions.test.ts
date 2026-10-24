@@ -5,6 +5,7 @@ import Positions from './Positions.vue';
 // 不走 node:fs —— 本專案 tsconfig 未含 @types/node,且本 plan 不得新增套件(沿用 03-03 的手法)。
 import positionsSource from './Positions.vue?raw';
 import { fmtNum, fmtPct } from '../data';
+import { fmtMoneyAmount, fmtSignedMoneyAmount } from '../moneyFormat';
 import { t } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
@@ -225,8 +226,13 @@ function rows(): HTMLElement[] {
   return allTestids('positions-row');
 }
 
+/** 標的格除了 symbol 還有 .ccy-tag / .fresh-badge 兩個 span;只取 td 自己的文字節點才是 symbol。 */
 function rowSymbols(): string[] {
-  return rows().map(row => row.querySelector('td')!.textContent!.trim());
+  return rows().map(row => [...row.querySelector('td')!.childNodes]
+    .filter(node => node.nodeType === Node.TEXT_NODE)
+    .map(node => node.textContent ?? '')
+    .join('')
+    .trim());
 }
 
 function moverSymbols(): string[] {
@@ -255,50 +261,93 @@ afterEach(() => {
 });
 
 describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', () => {
-  it('持倉列的市值/損益/ROI 一律用後端欄位,不做 qty×price 之類的前端重算(D-04)', async () => {
+  /*
+   * DP-10(04.1-16 改寫既有斷言):金額改為裸數字(D-28 / D-30,幣別由 .ccy-tag 表示一次),
+   * 舊的 `$999` / `+$555` / `not.toContain('$1,000')` 全部失效。
+   * 舊:row.toContain(`$${fmtNum(999, 0)}`)、`not.toContain($1,000)`、`+$555`、`not.toContain($222 / $800)`
+   * 新:以「格」為單位比對 fmtMoneyAmount 的裸數字,否定斷言保留判別力(市值格 ≠ 1,000、損益格 ≠ 222 / 800)。
+   */
+  it('持倉列的市值/損益/ROI 一律用後端欄位,不做 qty×price 之類的前端重算(D-04),金額為裸數字', async () => {
     await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
 
     expect(rows()).toHaveLength(1);
     const row = rows()[0].textContent ?? '';
+    const cells = [...rows()[0].querySelectorAll('td')];
 
     expect(row).toContain('ZZA');
     expect(row).toContain('Zeta Alpha Corp.');
-    expect(row).toContain('10');
-    expect(row).toContain(`$${fmtNum(20)}`);
-    expect(row).toContain(`$${fmtNum(100)}`);
+    expect(cells[2].textContent?.trim()).toBe('10');
+    expect(cells[3].textContent).toContain(fmtMoneyAmount(20, 'TWD', 2));
+    expect(cells[4].textContent).toContain(fmtMoneyAmount(100, 'TWD', 2));
 
     // 市值讀 marketValue(999),不是 totalQuantity × marketPrice(1000)
-    expect(row).toContain(`$${fmtNum(999, 0)}`);
-    expect(row).not.toContain(`$${fmtNum(1000, 0)}`);
+    expect(cells[5].textContent?.trim()).toBe(fmtMoneyAmount(999, 'TWD', 0));
+    expect(cells[5].textContent).not.toContain(fmtMoneyAmount(1000, 'TWD', 0));
 
     // 未實現損益讀 unrealizedPnl(555),不是 999-777(222)也不是 1000-200(800)
-    expect(row).toContain(`+$${fmtNum(555, 0)}`);
-    expect(row).not.toContain(`$${fmtNum(222, 0)}`);
-    expect(row).not.toContain(`$${fmtNum(800, 0)}`);
+    expect(cells[6].textContent).toContain(fmtSignedMoneyAmount(555, 'TWD', 0));
+    expect(cells[6].textContent).not.toContain(fmtMoneyAmount(222, 'TWD', 0));
+    expect(cells[6].textContent).not.toContain(fmtMoneyAmount(800, 'TWD', 0));
 
     // 報酬率讀 roi × 100(1.17%),不是 unrealizedPnl / costBasis(71.43%)
     expect(row).toContain(fmtPct(0.0117 * 100));
     expect(row).not.toContain(fmtPct(555 / 777 * 100));
 
-    // weight 的分母是 summary.totalMarketValue(4242),不是本頁 holdings 的市值總和(999)
+    // 權重 = marketValueInBase(999)/ summary.totalMarketValue(4242),不是本頁 holdings 的市值總和(999)
     expect(row).toContain('23.6%');
     expect(row).not.toContain('100.0%');
+
+    // D-28:整列不再有寫死的 $
+    expect(row).not.toContain('$');
   });
 
-  it('weight 由 marketValue / summary.totalMarketValue 衍生(D-04 明文例外)', async () => {
+  /*
+   * DP-10(04.1-16 改寫既有斷言):D-05 之後 summary.totalMarketValue 是基準幣,而 marketValue 仍是原幣。
+   * 舊:marketValue(750 / 250)/ totalMarketValue(1000)→ 75.0% / 25.0%。
+   * 新:marketValueInBase / totalMarketValue。fixture 刻意讓 marketValue 與 marketValueInBase 差一個匯率,
+   *     若實作回到 marketValue 除以基準幣總額,USD 部位的權重會變成個位數 %(Pitfall 3)。
+   */
+  it('weight 由 marketValueInBase / summary.totalMarketValue 衍生,不碰原幣 marketValue(RESEARCH Q1.4)', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'BIG', marketValue: 750 }),
-        holding({ symbol: 'SML', marketValue: 250 }),
+        holding({ symbol: 'USD1', currency: 'USD', marketValue: 2000, marketValueInBase: 64836 }),
+        holding({ symbol: 'TWD1', currency: 'TWD', marketValue: 35164, marketValueInBase: 35164 }),
+        holding({ symbol: 'NOFX', currency: 'EUR', marketValue: 777, marketValueInBase: null }),
       ],
-      summaryWith({ totalMarketValue: 1000, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: 100000, holdingCount: 3, fxExcludedCount: 1 }),
     );
 
-    const weights = allTestids('positions-weight').map(el => el.textContent?.trim());
-    expect(weights).toEqual(['75.0%', '25.0%']);
+    // 預設依 marketValue 降序:TWD1(35164)、USD1(2000)、NOFX(777)
+    const bySymbol = (sym: string) => rows().find(r => rowSymbols()[rows().indexOf(r)] === sym)!;
+    const weightOf = (sym: string) => bySymbol(sym).querySelector('[data-testid="positions-weight"]')!.textContent?.trim();
+    const widthOf = (sym: string) => bySymbol(sym).querySelector<HTMLElement>('.bar-fill')!.style.width;
 
-    const widths = [...document.body.querySelectorAll<HTMLElement>('.bar-fill')].map(el => el.style.width);
-    expect(widths).toEqual(['75%', '25%']);
+    expect(weightOf('USD1')).toBe('64.8%');
+    expect(parseFloat(widthOf('USD1'))).toBeCloseTo(64.836, 3);
+    expect(weightOf('TWD1')).toBe('35.2%');
+    // 缺匯率:— 且 bar 寬 0,不編造數字
+    expect(weightOf('NOFX')).toBe('—');
+    expect(parseFloat(widthOf('NOFX'))).toBe(0);
+    expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('權重表頭排序用基準幣權重,null 不論升降冪都排最後', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'NOFX', marketValue: 900, marketValueInBase: null }),
+        holding({ symbol: 'BIG', marketValue: 5, marketValueInBase: 60000 }),
+        holding({ symbol: 'SML', marketValue: 4, marketValueInBase: 10000 }),
+      ],
+      summaryWith({ totalMarketValue: 100000, holdingCount: 3 }),
+    );
+
+    click(headerCell(t('en', 'weight')));
+    await nextTick();
+    expect(rowSymbols()).toEqual(['BIG', 'SML', 'NOFX']);
+
+    click(headerCell(t('en', 'weight')));
+    await nextTick();
+    expect(rowSymbols()).toEqual(['SML', 'BIG', 'NOFX']);
   });
 
   it('每列 price 欄顯示 priceTime 行情時間,null 時退回破折號(D-03)', async () => {
@@ -325,19 +374,29 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(stats).toHaveLength(6);
     const text = stats.map(s => s.textContent ?? '');
 
+    // DP-10(04.1-16):彙總卡改為基準幣數值 + 獨立的 .stat-ccy 代碼 span,不再有寫死的 $。
+    // 舊:`$4,242` / `+$1,111` / `+$222` / `+$1,333` / `$3,131`;新:裸數字 + summary.baseCurrency 代碼。
+    const ccyOf = (i: number) => stats[i].querySelector('.stat-ccy')?.textContent;
     expect(text[0]).toContain(t('en', 'mktValue'));
-    expect(text[0]).toContain(`$${fmtNum(TRUTH_SUMMARY.totalMarketValue, 0)}`);
+    expect(text[0]).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
+    expect(ccyOf(0)).toBe('TWD');
     expect(text[1]).toContain(t('en', 'unrealized'));
-    expect(text[1]).toContain(`+$${fmtNum(TRUTH_SUMMARY.unrealizedPnl, 0)}`);
+    expect(text[1]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.unrealizedPnl, 'TWD', 0));
+    expect(ccyOf(1)).toBe('TWD');
     expect(text[2]).toContain(t('en', 'roi'));
-    // roi 是比值,×100 純屬顯示格式化(D-04 允許)
+    // roi 是比值,×100 純屬顯示格式化(D-04 允許);比率卡沒有幣別
     expect(text[2]).toContain(fmtPct(TRUTH_SUMMARY.roi * 100));
+    expect(ccyOf(2)).toBeUndefined();
     expect(text[3]).toContain(t('en', 'realizedPnl'));
-    expect(text[3]).toContain(`+$${fmtNum(TRUTH_SUMMARY.realizedPnl, 0)}`);
+    expect(text[3]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.realizedPnl, 'TWD', 0));
+    expect(ccyOf(3)).toBe('TWD');
     expect(text[4]).toContain(t('en', 'totalPnlLabel'));
-    expect(text[4]).toContain(`+$${fmtNum(TRUTH_SUMMARY.totalPnl, 0)}`);
+    expect(text[4]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.totalPnl, 'TWD', 0));
+    expect(ccyOf(4)).toBe('TWD');
     expect(text[5]).toContain(t('en', 'costBasis'));
-    expect(text[5]).toContain(`$${fmtNum(TRUTH_SUMMARY.totalCostBasis, 0)}`);
+    expect(text[5]).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalCostBasis, 'TWD', 0));
+    expect(ccyOf(5)).toBe('TWD');
+    for (const card of text) expect(card).not.toContain('$');
 
     const body = document.body.textContent ?? '';
     expect(body).not.toContain(t('en', 'sharpe'));
@@ -407,11 +466,15 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(rowSymbols()).toEqual(['BBB', 'AAA', 'CCC']);
   });
 
-  it('標題列彙總顯示 summary 的 totalMarketValue 與 holdingCount(D-04)', async () => {
+  // DP-10(04.1-16):舊 `header.toContain($4,242)` → 基準幣裸數字 + 獨立 .stat-ccy 代碼 span。
+  it('標題列彙總顯示 summary 的 totalMarketValue(基準幣)與 holdingCount(D-04)', async () => {
     await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
 
-    const header = requireTestid('positions-header-summary').textContent ?? '';
-    expect(header).toContain(`$${fmtNum(TRUTH_SUMMARY.totalMarketValue, 0)}`);
+    const headerEl = requireTestid('positions-header-summary');
+    const header = headerEl.textContent ?? '';
+    expect(header).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
+    expect(headerEl.querySelector('.stat-ccy')?.textContent).toBe('TWD');
+    expect(header).not.toContain('$');
     // holdingCount = 7,而畫面只有 1 列 —— 證明讀後端而非 holdings.length
     expect(header).toContain('7 holdings');
     expect(rows()).toHaveLength(1);
@@ -792,7 +855,8 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     // summary 區塊:舊值留存 + stale 提示,不進 status:'error'
     expect(testid('positions-summary-error')).toBeNull();
     expect(allTestids('positions-stat')).toHaveLength(6);
-    expect(allTestids('positions-stat')[0].textContent).toContain(`$${fmtNum(TRUTH_SUMMARY.totalMarketValue, 0)}`);
+    // DP-10(04.1-16):舊 `$4,242` → 基準幣裸數字(代碼在獨立 span)
+    expect(allTestids('positions-stat')[0].textContent).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
     expect(requireTestid('positions-refresh-error-code').textContent).toContain('PORTFOLIO_SUMMARY_UNAVAILABLE');
 
     // holdings 區塊:拿到新資料,完全不受 summary 失敗影響
@@ -1063,5 +1127,91 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
     expect(heads[7]).toMatch(new RegExp(`^${t('en', 'todayPnl').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     expect(heads[8]).toMatch(new RegExp(`^${t('en', 'weight')}`));
     for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(9);
+  });
+});
+
+// =====================================================================================
+// 04.1-16 Task 2:基準幣權重、幣別標籤、裸數字金額、缺匯率提示、卡內捲動(PORT-10)。
+// =====================================================================================
+
+describe('Positions — 幣別標籤與說明列(04.1-16 Task 2 / PORT-10)', () => {
+  it('每列 symbol 後一個 ccy-tag,文字為該列幣別,位於「新」標記之前', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'AAA', currency: 'USD' }),
+        holding({ symbol: 'BBB', currency: 'JPY' }),
+      ],
+      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+    );
+    notifyTradeCreated(freshTrade('BBB'));
+    await flushAsync();
+
+    const tags = allTestids('positions-ccy-tag');
+    expect(tags.map(el => el.textContent?.trim()).sort()).toEqual(['JPY', 'USD']);
+    const bbb = rows().find(row => row.textContent?.includes('BBB'))!;
+    const firstCell = bbb.querySelector('td')!;
+    const spans = [...firstCell.querySelectorAll('span')].map(el => el.getAttribute('data-testid'));
+    expect(spans).toEqual(['positions-ccy-tag', 'positions-fresh-badge']);
+  });
+
+  it('currency 為 null:不渲染 ccy-tag,列內無 $,金額照常顯示裸數字(不猜幣別)', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'OLD', currency: null, marketValue: 1234, marketValueInBase: 1234 })],
+      summaryWith({ totalMarketValue: 1234, holdingCount: 1 }),
+    );
+
+    expect(allTestids('positions-ccy-tag')).toHaveLength(0);
+    const row = rows()[0];
+    expect(row.textContent).not.toContain('$');
+    expect(row.querySelectorAll('td')[5].textContent?.trim()).toBe(fmtMoneyAmount(1234, null, 0));
+  });
+
+  it('summary 載入後顯示 holdingsCurrencyNote({base} 已替換);summary 失敗時不渲染且 DOM 無佔位符', async () => {
+    await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+    const note = requireTestid('positions-currency-note');
+    expect(note.textContent?.trim()).toBe(t('en', 'holdingsCurrencyNote').replace('{base}', 'TWD'));
+    expect(note.textContent).not.toContain('{base}');
+    expect(note.textContent).toContain('TWD');
+    unmountAll();
+
+    await mountApiPositions(routedFetch({
+      summary: () => failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-summary-down'),
+      holdings: () => success([TRUTH_HOLDING]),
+    }));
+    expect(rows()).toHaveLength(1);
+    expect(testid('positions-currency-note')).toBeNull();
+    expect(document.body.textContent).not.toContain('{base}');
+  });
+
+  it('說明列在表格之前(DOM 順序)', async () => {
+    await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+    const note = requireTestid('positions-currency-note');
+    const table = document.body.querySelector('table')!;
+    expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe('Positions — 缺匯率提示(04.1-16 Task 2 / D-04)', () => {
+  it('fxExcludedCount = 2 時標題列下方顯示 fxExcludedHint({n}、{base} 已替換)', async () => {
+    await mountApiWith([TRUTH_HOLDING], { ...TRUTH_SUMMARY, fxExcludedCount: 2 });
+
+    const hint = requireTestid('positions-fx-excluded');
+    expect(hint.textContent?.trim())
+      .toBe(t('en', 'fxExcludedHint').replace('{n}', '2').replace('{base}', 'TWD'));
+    expect(hint.textContent).not.toMatch(/\{\w+\}/);
+  });
+
+  it('fxExcludedCount = 0 時不渲染', async () => {
+    await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+    expect(testid('positions-fx-excluded')).toBeNull();
+  });
+});
+
+describe('Positions — 窄螢幕卡內捲動(04.1-16 Task 2)', () => {
+  it('持倉卡 overflow-x: auto,不再 overflow: hidden(捲動發生在卡內,不推擠 .main)', async () => {
+    await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+    const card = rows()[0].closest('.card') as HTMLElement;
+    expect(card.style.overflowX).toBe('auto');
+    expect(card.style.overflow).not.toBe('hidden');
   });
 });
