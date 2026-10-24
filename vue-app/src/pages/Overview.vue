@@ -2,8 +2,8 @@
   <div class="page grid">
     <!--
       KPI 區。mock mode:四張合成卡照舊。
-      API mode(D-14):只有 totalMarketValue 與 roi 兩張有後端資料的卡;
-      今日損益 / 可用現金無後端來源,直接不渲染(不顯示假資料)。
+      API mode(04.1-18):四張後端卡 —— 總資產(totalEquity)/ 今日損益 / 可用現金 / 總報酬率。
+      缺資料時誠實標示(null 顯示 —,不顯示 0),真實為零才顯示 0。
     -->
     <!--
       U-05 / U-06:成交後重讀的指示列。刻意**不新增卡片、不改任何 grid span**,
@@ -57,17 +57,18 @@
       <div
         v-for="(k, i) in kpiCards"
         :key="i"
-        class="card kpi"
+        class="card kpi kpi-card"
         data-testid="overview-kpi"
         :class="{ 'block-refreshing': summaryRefreshing }"
         :aria-busy="summaryRefreshing"
-        :style="{ gridColumn: `span ${kpiSpan}` }"
       >
         <div class="kpi-l">{{ k.l }}</div>
-        <div class="kpi-v num">{{ k.v }}</div>
-        <div class="kpi-s" :style="{ color: k.up == null ? 'var(--fg-dim)' : k.up ? 'var(--up)' : 'var(--dn)' }">
-          <template v-if="k.up != null">{{ k.up ? '↗' : '↘' }} </template>{{ k.s }}
+        <!-- 數值與幣別代碼拆成兩個 span:代碼是 Label 級,不與 Display 數值爭焦點(UI-SPEC §Money) -->
+        <div class="kpi-v"><span class="num">{{ k.v }}</span><span v-if="k.ccy" class="kpi-ccy">{{ k.ccy }}</span></div>
+        <div v-if="k.s" class="kpi-s" :data-testid="k.sTestid" :style="{ color: toneColor(k.tone) }">
+          <span v-if="k.arrow" aria-hidden="true">{{ k.arrow }}</span>{{ k.s }}
         </div>
+        <div v-for="n in k.notes ?? []" :key="n.testid" class="kpi-hint" :data-testid="n.testid">{{ n.text }}</div>
       </div>
     </template>
 
@@ -232,8 +233,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
+import { fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
@@ -373,40 +375,96 @@ const series = genSeries(80, 1_000_000, 0.012, 5);
 const last = series[series.length - 1];
 const ret = (last - series[0]) / series[0] * 100;
 
-const mockKpis = computed(() => [
-  { l: t(props.lang, 'totalAssets'), v: '$' + fmtNum(last, 0), s: '+1.04% ' + t(props.lang, 'yesterday'), up: true as boolean | null },
-  { l: t(props.lang, 'todayPnl'), v: '+$12,481', s: '+1.04%', up: true as boolean | null },
-  { l: t(props.lang, 'availableCash'), v: '$84,210', s: '8.4%', up: null as boolean | null },
-  { l: t(props.lang, 'totalReturn'), v: fmtPct(ret), s: t(props.lang, 'annualized') + ' 18.4%', up: true as boolean | null },
-]);
+type KpiTone = 'up' | 'dn' | 'dim';
 
-function signedMoney(value: number): string {
-  return `${value >= 0 ? '+' : '-'}$${fmtNum(Math.abs(value), 0)}`;
+interface KpiCard {
+  l: string;
+  /** Display 數值(不含幣別代碼)。 */
+  v: string;
+  /** 獨立的幣別代碼 span;數值缺值(—)時不帶。 */
+  ccy?: string;
+  /** 副標 / 比率列文字。 */
+  s?: string;
+  sTestid?: string;
+  /** 副標的 ↗ / ↘(aria-hidden);無則不渲染。 */
+  arrow?: '↗' | '↘';
+  tone: KpiTone;
+  /** 副標下方的常駐說明列(Hint)。 */
+  notes?: { testid: string; text: string }[];
 }
 
-// D-14:API mode 兩張卡皆為後端值。roi 是比值,×100 純屬顯示格式化(D-04 非平行重算);
-// totalPnl 與 holdingCount 落在兩張卡的副標,取代原本的假副標。
-const apiKpis = computed(() => {
+function toneColor(tone: KpiTone): string {
+  return tone === 'up' ? 'var(--up)' : tone === 'dn' ? 'var(--dn)' : 'var(--fg-dim)';
+}
+
+/** 依已格式化文字的正負號決定色調:四捨五入後為零的值不上色、不加箭頭。 */
+function signTone(text: string | null): { tone: KpiTone; arrow?: '↗' | '↘' } {
+  if (text?.startsWith('+')) return { tone: 'up', arrow: '↗' };
+  if (text?.startsWith('-')) return { tone: 'dn', arrow: '↘' };
+  return { tone: 'dim' };
+}
+
+const mockKpis = computed<KpiCard[]>(() => [
+  { l: t(props.lang, 'totalAssets'), v: '$' + fmtNum(last, 0), s: '+1.04% ' + t(props.lang, 'yesterday'), tone: 'up', arrow: '↗' },
+  { l: t(props.lang, 'todayPnl'), v: '+$12,481', s: '+1.04%', tone: 'up', arrow: '↗' },
+  { l: t(props.lang, 'availableCash'), v: '$84,210', s: '8.4%', tone: 'dim' },
+  { l: t(props.lang, 'totalReturn'), v: fmtPct(ret), s: t(props.lang, 'annualized') + ' 18.4%', tone: 'up', arrow: '↗' },
+]);
+
+// API mode:四張卡皆為後端值(D-14 / D-22)。前端唯一的算術是 ratio × 100 的格式化(D-04 / D-21),不換匯。
+const apiKpis = computed<KpiCard[]>(() => {
   const s = summary.value;
   if (!s) return [];
+  const base = s.baseCurrency;
+  const lang = props.lang;
+
+  // 今日損益:null 是「全部被排除」,顯示 — 而非 0;真實為零才顯示 0(T-04.1-55)。
+  const hasDayPnl = s.dayPricePnl != null && Number.isFinite(s.dayPricePnl);
+  const ratioText = hasDayPnl ? fmtRatioPct(s.dayPricePnlRatio) : null;
+  const dayNotes = [{ testid: 'overview-kpi-day-pnl-note', text: t(lang, 'dayPnlNote') }];
+  if (s.dayPnlExcludedCount > 0) {
+    dayNotes.push({
+      testid: 'overview-kpi-day-pnl-excluded',
+      text: tf(lang, 'dayPnlExcluded', { n: s.dayPnlExcludedCount }),
+    });
+  }
+
+  const roiText = fmtRatioPct(s.roi);
+  const pnlSign = signTone(fmtSignedMoney(s.totalPnl, base, 0));
+
   return [
     {
-      l: t(props.lang, 'totalAssets'),
-      v: '$' + fmtNum(s.totalMarketValue, 0),
-      s: `${s.holdingCount} ${t(props.lang, 'positions')}`,
-      up: null as boolean | null,
+      l: t(lang, 'totalAssets'),
+      v: fmtMoneyAmount(s.totalEquity, base, 0),
+      ccy: base,
+      s: `${s.holdingCount} ${t(lang, 'positions')}`,
+      tone: 'dim',
     },
     {
-      l: t(props.lang, 'totalReturn'),
-      v: fmtPct(s.roi * 100),
-      s: `${t(props.lang, 'totalPnlLabel')} ${signedMoney(s.totalPnl)}`,
-      up: (s.totalPnl >= 0) as boolean | null,
+      l: t(lang, 'todayPnl'),
+      v: fmtSignedMoneyAmount(s.dayPricePnl, base, 0),
+      ccy: hasDayPnl ? base : undefined,
+      s: ratioText ?? undefined,
+      sTestid: 'overview-kpi-day-pnl-ratio',
+      ...signTone(ratioText),
+      notes: dayNotes,
+    },
+    {
+      l: t(lang, 'availableCash'),
+      v: fmtMoneyAmount(s.cash, base, 0),
+      ccy: base,
+      tone: 'dim',
+    },
+    {
+      l: t(lang, 'totalReturn'),
+      v: roiText ?? '—',
+      s: `${t(lang, 'totalPnlLabel')} ${fmtSignedMoney(s.totalPnl, base, 0)}`,
+      ...pnlSign,
     },
   ];
 });
 
 const kpiCards = computed(() => (live ? mockKpis.value : apiKpis.value));
-const kpiSpan = computed(() => (live ? 3 : 6));
 
 const alloc = [
   { n: 'Equity', v: 52, c: 'var(--accent)' }, { n: 'Crypto', v: 22, c: '#3b82f6' },
@@ -428,11 +486,14 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
 .page { padding: 22px; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-.kpi { padding: 18px 20px; }
+.kpi { padding: 16px 20px; }
+.kpi-card { grid-column: span 3; }
 .kpi-l { color: var(--fg-dim); font-size: 12px; }
-.kpi-v { font-size: 26px; font-weight: 600; letter-spacing: -0.5px; margin-top: 6px; }
+.kpi-v { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; margin-top: 4px; }
+.kpi-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .kpi-s { font-size: 12px; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
-.ttl { font-size: 14px; font-weight: 600; }
+.kpi-hint { font-size: 12px; font-weight: 400; line-height: 1.35; margin-top: 4px; color: var(--fg-dim); }
+.ttl { font-size: 16px; font-weight: 600; }
 .sub { font-size: 12px; color: var(--fg-dim); margin-top: 2px; }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .seg { display: flex; background: var(--surface2); border-radius: 8px; padding: 2px; }
