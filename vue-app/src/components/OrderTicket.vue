@@ -466,15 +466,15 @@
               <span>{{ t(lang, 'orderType') }}</span>
               <b>{{ ordType === 'MKT' ? t(lang, 'market') : t(lang, 'limit') }} · {{ tif }}</b>
             </div>
-            <div><span>{{ t(lang, 'price') }}</span><b class="num">${{ fmtNum(px) }}</b></div>
+            <div><span>{{ t(lang, 'price') }}</span><b class="num">{{ reviewMoney(px, selectedDp) }}</b></div>
             <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ qty }}</b></div>
-            <div><span>{{ t(lang, 'fee') }}</span><b class="num">${{ fmtNum(fee) }}</b></div>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ reviewMoney(fee, selectedDp) }}</b></div>
             <div class="span-2">
               <span>{{ t(lang, 'tradeExecutedAt') }}</span>
               <b class="num">{{ executedAt.replace('T', ' ') }}</b>
             </div>
             <div class="span-2 highlight">
-              <span>{{ t(lang, 'estTotal') }}</span><b class="num">${{ fmtNum(estTotal, 2) }}</b>
+              <span>{{ t(lang, 'estTotal') }}</span><b class="num">{{ reviewMoney(estTotal, 2) }}</b>
             </div>
             <div v-if="live" class="span-2 dim">
               <span>{{ t(lang, 'cashAfter') }}</span><b class="num">${{ fmtNum(cashAfter, 0) }}</b>
@@ -681,6 +681,14 @@ const recorded = ref<TradeDto | null>(null);
 // 04.1-14(D-28 補充 / UI-SPEC §Interaction 10):API mode 的成功畫面用**後端回傳**的
 // `recorded.currency`,不是 review 時的 `selected.currency`(Phase 4 U-12:成功畫面用後端值)。
 // 缺值時只顯示數字,不帶代碼、不退回 `$`(U-29)。mock mode(`live` 存在)畫面維持原樣。
+// review 步驟(UI-SPEC §Interaction 10):幣別取自已選標的 `selected.currency`;
+// 缺值同樣只顯示數字。價格 / 手續費 dp = minorUnits,預估總額 dp = 2。
+const selectedDp = computed(() => minorUnits(selected.value?.currency));
+function reviewMoney(value: number, dp: number): string {
+  if (live.value) return `$${fmtNum(value, dp)}`;
+  return fmtMoney(value, selected.value?.currency ?? null, dp);
+}
+
 const recordedDp = computed(() => minorUnits(recorded.value?.currency));
 function resultMoney(value: number, dp: number): string {
   if (live.value) return `$${fmtNum(value, dp)}`;

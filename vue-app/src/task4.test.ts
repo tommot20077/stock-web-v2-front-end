@@ -481,9 +481,9 @@ describe('Task 4 trade flow', () => {
 
     expect(exported).toHaveLength(1);
     const csv = await exported[0].text();
-    expect(csv).toContain('date,type,symbol,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
+    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
+    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
   });
 });

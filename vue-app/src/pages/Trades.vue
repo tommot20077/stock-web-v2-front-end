@@ -66,6 +66,12 @@
       <div v-if="notInCurrentView" class="view-hint" data-testid="trades-not-in-current-view">
         {{ t(lang, 'tradeNotInCurrentView') }}
       </div>
+      <!-- D-28:各列金額以該筆交易標的的幣別顯示(API mode 才渲染;mock 沒有幣別資料) -->
+      <div
+        v-if="!live && apiTrades.length"
+        class="currency-note"
+        data-testid="trades-currency-note"
+      >{{ t(lang, 'tradesCurrencyNote') }}</div>
       <div v-if="!live && tradesLoading" class="block-state" data-testid="trades-loading">
         {{ t(lang, 'loading') }}
       </div>
@@ -476,7 +482,9 @@ const filteredTrades = computed(() => {
 });
 
 // =============== CSV ===============
-const CSV_HEADER = ['date', 'type', 'symbol', 'qty', 'price', 'total', 'fee', 'note'];
+// 04.1-14(D-28 / UI-SPEC §Interaction 9):`currency` 緊接 `symbol`,兩模式共用同一份表頭。
+// API 列填 `trade.currency`(缺值為空字串);mock 沒有幣別資料,留空而不猜(U-29)。
+const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,note'.split(',');
 
 type CsvValue = string | number | null | undefined;
 
@@ -522,6 +530,7 @@ async function exportApiCsv() {
       tradeDate(tr),
       tr.type,
       tr.symbol,
+      tr.currency ?? '',
       tr.quantity,
       tr.price,
       tr.quantity * tr.price,
@@ -545,6 +554,7 @@ function exportCsv() {
     tr.d,
     tr.type,
     tr.sym,
+    '',
     tr.qty,
     tr.px,
     tr.qty * tr.px,
@@ -644,6 +654,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 
 /* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
 .refresh-note { padding: 8px 20px; font-size: 12px; color: var(--fg-dim); }
+/* D-28:幣別說明列(Hint 12px、--fg-dim;padding 8px 16px 對齊 UI-SPEC §Interaction 9) */
+.currency-note { padding: 8px 16px; font-size: 12px; color: var(--fg-dim); }
 .refresh-stale { padding: 14px 20px; font-size: 13px; }
 .refresh-stale .details {
   display: flex; flex-wrap: wrap; gap: 4px 10px;
