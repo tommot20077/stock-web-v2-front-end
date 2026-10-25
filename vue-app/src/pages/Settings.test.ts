@@ -116,6 +116,29 @@ afterEach(() => {
   resetMockProfileForTests();
 });
 
+describe('Settings 分頁按鈕的穩定 testid(E2E 用)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+  });
+
+  it('每個分頁按鈕有 settings-tab-<key>,點 settings-tab-display 後才出現基準幣下拉', async () => {
+    vi.stubGlobal('fetch', routedFetch({ me: () => success({ baseCurrency: 'USD', email: 'x@example.com' }) }));
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    const tabKeys = ['profile', 'security', 'providers', 'brokers', 'aiAccess', 'notifPref', 'display', 'data'];
+    for (const k of tabKeys) {
+      expect(document.body.querySelector(`[data-testid="settings-tab-${k}"]`), k).not.toBeNull();
+    }
+    // 預設分頁是 brokers,基準幣下拉在 display 分頁,不在預設畫面
+    expect(document.body.querySelector('[data-testid="settings-base-currency"]')).toBeNull();
+    const displayTab = document.body.querySelector<HTMLButtonElement>('[data-testid="settings-tab-display"]');
+    displayTab!.click();
+    await flushAsync();
+    expect(document.body.querySelector('[data-testid="settings-base-currency"]')).not.toBeNull();
+  });
+});
+
 describe('Settings 基準幣(API mode)', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_DATA_MODE', 'api');
