@@ -14,6 +14,7 @@
 | `auth-` | AuthPanel 登入/註冊 | `auth-tab-login`, `auth-login-email`, `auth-register-submit` |
 | `header-` | Header(session chip、登出、nav) | `header-logout`, `header-session-identity` |
 | `nav-` | Header 導覽按鈕 | `nav-backtest`, `nav-overview` |
+| `settings-` | Settings 頁(分頁按鈕、基準幣欄位) | `settings-tab-display`, `settings-base-currency` |
 | `session-` | SessionBanner | `session-banner`, `session-retry` |
 | `backtest-` | Backtest 頁 | `backtest-run`, `backtest-history` |
 | `overview-` | Overview 頁(KPI、資產配置、近期交易、診斷列) | `overview-kpi`, `overview-recent-trades` |

@@ -67,6 +67,8 @@ test('C1 基準幣切到 USD → 後端持久化 → Settings 與重新登入後
   expect((await meRes.json()).data.baseCurrency).toBe('USD');
 
   await page.getByTestId('nav-settings').click();
+  // Settings 預設開在 brokers 分頁;基準幣欄位在「顯示」分頁
+  await page.getByTestId('settings-tab-display').click();
   await expect(page.getByTestId('settings-base-currency')).toHaveValue('USD');
 
   // 跨來源反向斷言:全新 browser context(沒有任何前端儲存)以同一帳號登入,仍為 USD

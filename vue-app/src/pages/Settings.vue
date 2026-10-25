@@ -4,7 +4,13 @@
     <h2 style="margin:0 0 16px">{{ t(lang, 'settings') }}</h2>
     <div class="layout">
       <div class="sidebar">
-        <button v-for="[k, ic] in tabs" :key="k" :class="['s-btn', { active: tab === k }]" @click="tab = k">
+        <button
+          v-for="[k, ic] in tabs"
+          :key="k"
+          :class="['s-btn', { active: tab === k }]"
+          :data-testid="`settings-tab-${k}`"
+          @click="tab = k"
+        >
           <span class="ic">{{ ic }}</span>{{ t(lang, k) }}
           <span v-if="k === 'aiAccess'" class="soon">{{ lang === 'zh' ? '預覽' : 'preview' }}</span>
         </button>
