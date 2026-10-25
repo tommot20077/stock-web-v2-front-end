@@ -445,7 +445,7 @@
             <div class="summary">
               <div class="sum-row">
                 <span>{{ t(lang, 'estTotal') }}</span>
-                <span class="num sum-strong">${{ fmtNum(estTotal, 2) }}</span>
+                <span class="num sum-strong">{{ reviewMoney(estTotal, 2) }}</span>
               </div>
               <!-- D-04:交易後現金全 repo 無後端來源,只在 mock mode 渲染 -->
               <div v-if="live" class="sum-row dim">
@@ -681,8 +681,8 @@ const recorded = ref<TradeDto | null>(null);
 // 04.1-14(D-28 補充 / UI-SPEC §Interaction 10):API mode 的成功畫面用**後端回傳**的
 // `recorded.currency`,不是 review 時的 `selected.currency`(Phase 4 U-12:成功畫面用後端值)。
 // 缺值時只顯示數字,不帶代碼、不退回 `$`(U-29)。mock mode(`live` 存在)畫面維持原樣。
-// review 步驟(UI-SPEC §Interaction 10):幣別取自已選標的 `selected.currency`;
-// 缺值同樣只顯示數字。價格 / 手續費 dp = minorUnits,預估總額 dp = 2。
+// review 步驟與 ticket 步驟預估總額(04.1-27)共用 `reviewMoney`(UI-SPEC §Interaction 10):
+// 幣別取自已選標的 `selected.currency`;缺值同樣只顯示數字。價格 / 手續費 dp = minorUnits,預估總額 dp = 2。
 const selectedDp = computed(() => minorUnits(selected.value?.currency));
 function reviewMoney(value: number, dp: number): string {
   if (live.value) return `$${fmtNum(value, dp)}`;
