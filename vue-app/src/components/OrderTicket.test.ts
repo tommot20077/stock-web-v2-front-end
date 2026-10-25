@@ -1807,6 +1807,57 @@ describe('OrderTicket review 步驟 — 標的幣別(04.1-14 / D-28 補充 / UI-
   });
 });
 
+describe('OrderTicket ticket 步驟 — 預估總額幣別(04.1-27 / D-28 補充 / UI-SPEC §Interaction 10)', () => {
+  const TSMC: AssetDto = {
+    ...CONTRADICTORY,
+    uuid: 'asset-2330',
+    symbol: '2330.TW',
+    name: 'TSMC',
+    market: 'TW',
+    currency: 'TWD',
+    latestPrice: 945,
+  };
+
+  function ticketEstTotal(): string {
+    const el = document.body.querySelector<HTMLElement>('.summary .sum-strong');
+    expect(el, '.summary .sum-strong(ticket 步驟預估總額)').toBeTruthy();
+    return flat(el!.textContent);
+  }
+
+  async function mountTicketStep(asset: AssetDto, sym: string) {
+    document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
+    await mountApiTicket(ticketFetch({ assets: () => assetPageResponse([asset]) }), { sym });
+  }
+
+  it('ticketStepEstTotalUsesSelectedAssetCurrency:TWD 標的 → 預估總額 9,450.00 TWD,不含 $', async () => {
+    await mountTicketStep(TSMC, '2330.TW');
+
+    // 預估總額 = 10 × 945,dp 2(與 review 步驟同一個 helper / 同一個幣別來源)。
+    expect(ticketEstTotal()).toBe('9,450.00 TWD');
+    expect(ticketEstTotal()).not.toContain('$');
+  });
+
+  it('ticketStepEstTotalUsesUsdCode:USD 標的 → 預估總額帶 USD,不含 $', async () => {
+    await mountTicketStep({ ...CONTRADICTORY, currency: 'USD' }, CONTRADICTORY.symbol);
+
+    const text = ticketEstTotal();
+    expect(text).toMatch(/^[\d,]+\.\d{2} USD$/);
+    expect(text).not.toContain('$');
+  });
+
+  it('ticketStepEstTotalWithoutCurrencyShowsBareNumber:標的幣別缺值 → 只顯示數字,不退回 $', async () => {
+    await mountTicketStep({ ...TSMC, currency: '' }, '2330.TW');
+
+    expect(ticketEstTotal()).toBe('9,450.00');
+  });
+
+  it('mockModeTicketStepEstTotalKeepsDollar:mock mode ticket 步驟預估總額維持既有 $', async () => {
+    await mountTicket();
+
+    expect(ticketEstTotal()).toMatch(/^\$[\d,]+\.\d{2}$/);
+  });
+});
+
 describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
   it('Test 51:holdings 在進入 review 後才落地且不足時,review 步驟必須顯示錯誤、送出鈕 disabled、不得送出', async () => {
     stubUuids();
