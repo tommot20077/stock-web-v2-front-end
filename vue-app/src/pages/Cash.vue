@@ -115,7 +115,7 @@
           <thead>
             <tr>
               <th class="col-date">{{ t(lang, 'date') }}</th>
-              <th>{{ t(lang, 'type') }}</th>
+              <th class="col-type">{{ t(lang, 'type') }}</th>
               <th class="col-right">{{ t(lang, 'cashAmount') }}</th>
               <th>{{ t(lang, 'notes') }}</th>
               <th class="col-right">{{ t(lang, 'cashColStatus') }}</th>
@@ -129,7 +129,7 @@
               :class="{ fresh: isFresh(row) }"
             >
               <td class="num col-date">{{ fmtDateTime(row.occurredAt) }}</td>
-              <td>
+              <td class="col-type">
                 <span class="type-pill">{{ typeLabel(row.type) }}</span>
                 <!-- 不只靠動畫與顏色:新列有文字標記(U-24) -->
                 <span v-if="isFresh(row)" class="fresh-badge" data-testid="cash-entries-fresh-badge">
@@ -574,6 +574,12 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 }
 .col-right { text-align: right; }
 .col-date { white-space: nowrap; }
+/*
+ * 類型欄保底寬度:沖銷註記(「沖銷 2026-10-26 的紀錄」)在欄內換行。表格比卡片窄時,瀏覽器會把
+ * 可壓縮欄壓到最小,類型欄被壓到約 40px,膠囊逐字換行、註記折成 8 行(04.1-30)。
+ * 保底後表格改在卡內水平捲動,而不是擠壓這一欄。
+ */
+.col-type { min-width: 160px; }
 .col-note { min-width: 160px; max-width: 320px; }
 .amount { font-weight: 600; white-space: nowrap; }
 .is-reversed { text-decoration: line-through; color: var(--fg-dim); }
@@ -587,7 +593,7 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 
 .type-pill, .status-pill {
   display: inline-block; padding: 4px 8px; border-radius: 99px;
-  font-size: 12px; font-weight: 600; line-height: 1.2;
+  font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;
   background: var(--surface2); color: var(--fg-dim);
 }
 .type-pill { color: var(--fg); }
