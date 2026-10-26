@@ -389,3 +389,179 @@ for (const width of [320, 375]) {
     });
   }
 }
+
+/**
+ * L9:Trades / Overview 近期交易 / Positions 表在 320 / 375px——相鄰兩格的「可見內容」之間至少留 6px。
+ * (04.1-31:數字格沒有水平內距,數量 `0.5` 與單價 `60,000.00` 被讀成 `0.560,000.00`;錢的表格裡兩個數字讀成一個是誤讀風險。)
+ *
+ * 量法:每格取「畫出來的東西」——文字節點的 Range rect;若文字在有底色的膠囊(type pill / 幣別標籤)裡,
+ * 改取膠囊本身的 rect(膠囊貼著隔壁欄一樣是視覺黏在一起)。同一列的相鄰格:右格內容的最左緣 - 左格內容的最右緣 >= 6px。
+ * 只比同一列的相對位置,所以與表格在卡內的水平捲動位置無關。
+ */
+const MIN_CELL_GAP = 6;
+
+const GAP_PAGES = {
+  trades: { nav: 'trades', ready: 'trades-ccy-tag', host: 'trades-table' },
+  overview: { nav: null, ready: 'overview-trade-ccy-tag', host: 'overview-recent-trades' },
+  positions: { nav: 'positions', ready: 'positions-day-pnl', host: 'positions-table' },
+} as const;
+
+for (const width of [320, 375]) {
+  for (const pageKey of ['trades', 'overview', 'positions'] as const) {
+    test(`L9 ${width}px ${pageKey}:相鄰儲存格的可見內容間距 >= ${MIN_CELL_GAP}px @smoke`, async ({ page }) => {
+      const spec = GAP_PAGES[pageKey];
+      await page.setViewportSize({ width, height: 800 });
+      await mockPortfolioApi(page);
+      if (spec.nav === null) {
+        await page.goto('/');
+      } else {
+        await openPage(page, spec.nav);
+      }
+      await expect(page.getByTestId(spec.ready).first()).toBeVisible();
+
+      const m = await page.evaluate(({ host }) => {
+        const transparent = (c: string) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
+        const inkBoxes = (cell: Element): Array<{ left: number; right: number; text: string }> => {
+          const boxes: Array<{ left: number; right: number; text: string }> = [];
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const text = (node.textContent ?? '').trim();
+            if (!text) continue;
+            let painted: Element | null = null;
+            for (let el = node.parentElement; el && el !== cell; el = el.parentElement) {
+              if (!transparent(getComputedStyle(el).backgroundColor)) { painted = el; break; }
+            }
+            if (painted) {
+              const r = painted.getBoundingClientRect();
+              boxes.push({ left: r.left, right: r.right, text });
+            } else {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const r of Array.from(range.getClientRects())) {
+                if (r.width > 0) boxes.push({ left: r.left, right: r.right, text });
+              }
+            }
+          }
+          return boxes;
+        };
+        const rows = Array.from(document.querySelectorAll(`[data-testid="${host}"] tbody tr`));
+        const pairs: Array<{ row: number; col: number; gap: number; left: string; right: string }> = [];
+        rows.forEach((tr, row) => {
+          const cells = Array.from(tr.children);
+          for (let col = 0; col < cells.length - 1; col += 1) {
+            const a = inkBoxes(cells[col]);
+            const b = inkBoxes(cells[col + 1]);
+            if (!a.length || !b.length) continue;
+            const aRight = Math.max(...a.map((x) => x.right));
+            const bLeft = Math.min(...b.map((x) => x.left));
+            pairs.push({
+              row,
+              col,
+              gap: bLeft - aRight,
+              left: [...new Set(a.map((x) => x.text))].join(' ').slice(0, 24),
+              right: [...new Set(b.map((x) => x.text))].join(' ').slice(0, 24),
+            });
+          }
+        });
+        return { rows: rows.length, pairs };
+      }, { host: spec.host });
+
+      expect(m.rows, `${spec.host} 沒有資料列`).toBeGreaterThan(0);
+      expect(m.pairs.length, '沒有量到任何相鄰儲存格').toBeGreaterThan(0);
+      const tight = m.pairs.filter((p) => p.gap < MIN_CELL_GAP);
+      expect(
+        tight,
+        `${tight.length} 組相鄰儲存格間距 < ${MIN_CELL_GAP}px:`
+          + tight.slice(0, 6).map((p) => `[列${p.row} 欄${p.col}->${p.col + 1}] "${p.left}" | "${p.right}" 間距 ${p.gap.toFixed(1)}px`).join('; '),
+      ).toEqual([]);
+
+      await expectNoHorizontalScroll(page);
+      await expectTableScrollsInsideCard(page, spec.host);
+    });
+  }
+}
+
+/**
+ * L10:現金頁紀錄在 320 / 375px(zh / en)——日期、類型膠囊、帶號金額、備註、狀態 / 沖銷鈕全部直接可見,
+ * 不需要在卡內水平捲動(04.1-30 把類型 / 備註欄保底 160px 後,金額欄被推出視窗、狀態欄不可達)。
+ *
+ * 每列:上述元素的左右緣都在 [0, innerWidth] 內,也在卡片(cash-entries)的可視框內;卡片自己 scrollWidth <= clientWidth;
+ * 類型膠囊與金額單行;整頁與 main 不水平捲動。
+ */
+for (const width of [320, 375]) {
+  for (const lang of ['zh', 'en'] as const) {
+    test(`L10 ${width}px ${lang}:現金頁每列的金額 / 狀態 / 備註不需水平捲動即可見 @smoke`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      if (lang === 'en') {
+        await page.addInitScript(() => {
+          localStorage.setItem('resource:tweaks:v1', JSON.stringify({ lang: 'en' }));
+        });
+      }
+      await mockPortfolioApi(page);
+      await openPage(page, 'cash');
+      await expect(page.getByTestId('cash-entries-row')).toHaveCount(10);
+
+      const m = await page.evaluate(() => {
+        const card = document.querySelector('[data-testid="cash-entries"]') as HTMLElement;
+        const cardBox = card.getBoundingClientRect();
+        const cs = getComputedStyle(card);
+        const visibleLeft = cardBox.left + parseFloat(cs.borderLeftWidth);
+        const visibleRight = cardBox.left + parseFloat(cs.borderLeftWidth) + card.clientWidth;
+        const lineCount = (el: Element): number => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size;
+        };
+        const rows = Array.from(card.querySelectorAll('[data-testid="cash-entries-row"]')).map((row, index) => {
+          const parts: Array<{ name: string; left: number; right: number; width: number }> = [];
+          const add = (name: string, el: Element | null) => {
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            parts.push({ name, left: r.left, right: r.right, width: r.width });
+          };
+          add('日期', row.querySelector('.col-date'));
+          add('類型膠囊', row.querySelector('.type-pill'));
+          add('金額', row.querySelector('.amount'));
+          add('備註', row.querySelector('.note'));
+          add('沖銷狀態', row.querySelector('[data-testid="cash-entries-reversed-pill"]'));
+          add('沖銷鈕', row.querySelector('button'));
+          return {
+            index,
+            parts,
+            hasAmount: row.querySelector('.amount') !== null,
+            amountLines: lineCount(row.querySelector('.amount') as Element),
+            pillLines: lineCount(row.querySelector('.type-pill') as Element),
+            amountText: (row.querySelector('.amount') as HTMLElement).textContent ?? '',
+          };
+        });
+        return {
+          innerWidth: window.innerWidth,
+          visibleLeft,
+          visibleRight,
+          cardScroll: card.scrollWidth,
+          cardClient: card.clientWidth,
+          rows,
+        };
+      });
+
+      expect(m.cardScroll, `卡片需要水平捲動(內容寬 ${m.cardScroll}px > 可視寬 ${m.cardClient}px)`).toBeLessThanOrEqual(m.cardClient);
+      expect(m.rows).toHaveLength(10);
+      for (const row of m.rows) {
+        expect(row.hasAmount, `列 ${row.index} 沒有金額`).toBe(true);
+        expect(row.amountLines, `列 ${row.index} 金額應為單行`).toBe(1);
+        expect(row.pillLines, `列 ${row.index} 類型膠囊應為單行`).toBe(1);
+        for (const p of row.parts) {
+          const where = `列 ${row.index}(${row.amountText})${p.name}`;
+          expect(p.width, `${where} 沒有版面`).toBeGreaterThan(0);
+          expect(p.left, `${where} 左緣 ${p.left}px 在視窗外`).toBeGreaterThanOrEqual(0);
+          expect(p.right, `${where} 右緣 ${p.right}px 超出視窗 ${m.innerWidth}px`).toBeLessThanOrEqual(m.innerWidth);
+          expect(p.left, `${where} 左緣 ${p.left}px 在卡片可視框外(${m.visibleLeft}px)`).toBeGreaterThanOrEqual(m.visibleLeft - 0.5);
+          expect(p.right, `${where} 右緣 ${p.right}px 在卡片可視框外(${m.visibleRight}px)`).toBeLessThanOrEqual(m.visibleRight + 0.5);
+        }
+      }
+
+      await expectNoHorizontalScroll(page);
+      await expectTableScrollsInsideCard(page, 'cash-entries');
+    });
+  }
+}
