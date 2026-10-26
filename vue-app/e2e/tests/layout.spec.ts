@@ -72,6 +72,61 @@ for (const width of [320, 375, 768, 1280]) {
 }
 
 /**
+ * L7:header 導覽在 1024 / 1280 / 1366 / 1440px(zh / en)——每個導覽項都必須完整可見,不得靠水平捲動才看得到。
+ * (04.1-30:1280px 單列版面加了「現金」後,最後兩項「設定 / 運維」被捲出視窗,L1 只量整頁捲動而沒抓到。)
+ *
+ * 單列版面:每顆導覽鈕都落在視窗 [0, innerWidth] 內,且落在 nav 自己的可視框內(沒被 overflow 裁掉);
+ * 兩列版面:nav 獨佔一列,同樣要求 nav 本身不捲動。兩種版面下都另驗整頁與 main 不水平捲動。
+ * 預設 tweaks.admin = true,所以「運維」也在 12 項之內(最寬情況);session chip 帶超長 email(最寬情況)。
+ */
+for (const width of [1024, 1280, 1366, 1440]) {
+  for (const lang of ['zh', 'en'] as const) {
+    test(`L7 ${width}px ${lang}:header 12 個導覽項全部完整可見、不需水平捲動 @smoke`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      if (lang === 'en') {
+        await page.addInitScript(() => {
+          localStorage.setItem('resource:tweaks:v1', JSON.stringify({ lang: 'en' }));
+        });
+      }
+      await mockPortfolioApi(page);
+      await page.goto('/');
+      await expect(page.getByTestId('header-logout')).toBeVisible();
+      await expect(page.getByTestId('nav-ops')).toBeVisible();
+
+      const m = await page.evaluate(() => {
+        const nav = document.querySelector('header nav') as HTMLElement;
+        const brand = document.querySelector('header .brand') as HTMLElement;
+        const navBox = nav.getBoundingClientRect();
+        const buttons = Array.from(nav.querySelectorAll('button')).map((b) => {
+          const r = b.getBoundingClientRect();
+          return { id: b.getAttribute('data-testid') ?? '', left: r.left, right: r.right };
+        });
+        return {
+          innerWidth: window.innerWidth,
+          wrapped: navBox.top >= brand.getBoundingClientRect().bottom - 1,
+          navLeft: navBox.left,
+          navRight: navBox.right,
+          navScroll: nav.scrollWidth,
+          navClient: nav.clientWidth,
+          buttons,
+        };
+      });
+      expect(m.buttons, '導覽項數量').toHaveLength(12);
+      const layout = m.wrapped ? '兩列' : '單列';
+      expect(m.navScroll, `${layout}版面下 nav 需水平捲動(內容寬 ${m.navScroll}px > 可視寬 ${m.navClient}px)`)
+        .toBeLessThanOrEqual(m.navClient);
+      for (const b of m.buttons) {
+        expect(b.left, `${layout}版面 ${b.id} 左緣 ${b.left}px 在視窗外`).toBeGreaterThanOrEqual(0);
+        expect(b.right, `${layout}版面 ${b.id} 右緣 ${b.right}px 超出視窗 ${m.innerWidth}px`).toBeLessThanOrEqual(m.innerWidth);
+        expect(b.left, `${layout}版面 ${b.id} 左緣被 nav 裁掉`).toBeGreaterThanOrEqual(m.navLeft - 0.5);
+        expect(b.right, `${layout}版面 ${b.id} 右緣 ${b.right}px 被 nav 裁掉(nav 右緣 ${m.navRight}px)`).toBeLessThanOrEqual(m.navRight + 0.5);
+      }
+      await expectNoHorizontalScroll(page);
+    });
+  }
+}
+
+/**
  * L2:Phase 04.1 Overview(4 張 KPI + 基準幣工具列 + 資產配置 + 近期交易)。
  * fixture 取最寬情況(portfolioStubs),量測整頁與 main 都不水平捲動,且關鍵元素右緣在視窗內。
  */
@@ -287,3 +342,50 @@ test('L6 320px:summary 503 帶長 traceId 時 Overview 診斷列完整顯示 @sm
   expect(box, 'traceId 應有版面').not.toBeNull();
   expect(box!.x + box!.width).toBeLessThanOrEqual(clientWidth);
 });
+
+/**
+ * L8:現金頁紀錄表在 320 / 375px(zh / en)——類型膠囊單行、沖銷註記不得被擠成一字一行的窄欄。
+ * (04.1-30:類型欄被壓到約 40px,「出 / 金」逐字換行、「沖銷 2026-10-26 的紀錄」折成 8 行。)
+ */
+for (const width of [320, 375]) {
+  for (const lang of ['zh', 'en'] as const) {
+    test(`L8 ${width}px ${lang}:現金頁類型膠囊單行、沖銷註記不超過 3 行 @smoke`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      if (lang === 'en') {
+        await page.addInitScript(() => {
+          localStorage.setItem('resource:tweaks:v1', JSON.stringify({ lang: 'en' }));
+        });
+      }
+      await mockPortfolioApi(page);
+      await openPage(page, 'cash');
+      await expect(page.getByTestId('cash-entries-row')).toHaveCount(10);
+      await expect(page.getByTestId('cash-entries-reversal-of')).toHaveCount(1);
+
+      const m = await page.evaluate(() => {
+        const lineCount = (el: Element): number => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return new Set(Array.from(range.getClientRects()).map((rect) => Math.round(rect.top))).size;
+        };
+        const pills = Array.from(document.querySelectorAll('[data-testid="cash-entries-row"] .type-pill'))
+          .map((el) => ({ lines: lineCount(el), height: el.getBoundingClientRect().height }));
+        const note = document.querySelector('[data-testid="cash-entries-reversal-of"]') as HTMLElement;
+        const fontSize = parseFloat(getComputedStyle(note).fontSize);
+        const amounts = Array.from(document.querySelectorAll('[data-testid="cash-entries-row"] .amount'))
+          .map((el) => lineCount(el));
+        return { pills, noteHeight: note.getBoundingClientRect().height, noteLines: lineCount(note), fontSize, amounts };
+      });
+      expect(m.pills.length).toBeGreaterThan(0);
+      for (const p of m.pills) {
+        expect(p.lines, `類型膠囊應為單行(實際 ${p.lines} 行,高 ${p.height}px)`).toBe(1);
+        expect(p.height, `類型膠囊高 ${p.height}px 不像單行`).toBeLessThanOrEqual(m.fontSize * 2.5);
+      }
+      for (const lines of m.amounts) expect(lines, '金額應為單行').toBe(1);
+      expect(m.noteHeight, `沖銷註記高 ${m.noteHeight}px(${m.noteLines} 行)超過 3 行的高度`)
+        .toBeLessThanOrEqual(m.fontSize * 1.6 * 3);
+
+      await expectNoHorizontalScroll(page);
+      await expectTableScrollsInsideCard(page, 'cash-entries');
+    });
+  }
+}
