@@ -598,6 +598,12 @@ thead th.s { color: var(--accent); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); transition: background .4s; }
 tbody td { padding: 11px 0; }
+/*
+ * 相鄰儲存格至少隔 12px(04.1-31):欄位在窄螢幕被壓到內容最小寬時,靠右對齊的數字格沒有內距,
+ * 數量 `0.5` 與單價 `60,000.00` 會黏成 `0.560,000.00`。內距加在「前面有同層格」的格子左側,
+ * 第一欄各自的 padding-left: 16px(inline)不受影響;L9 以 >= 6px 量測。
+ */
+thead th + th, tbody td + td { padding-left: 12px; }
 tbody tr.fresh { animation: highlight 1.6s ease-out; }
 @keyframes highlight {
   0% { background: color-mix(in oklch, var(--accent) 22%, transparent); }

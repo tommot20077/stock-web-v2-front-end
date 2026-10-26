@@ -903,6 +903,12 @@ thead th {
   border-bottom: 1px solid var(--border);
 }
 tbody td { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+/*
+ * 相鄰儲存格至少隔 12px(04.1-31):欄位在窄螢幕被壓到內容最小寬時,靠右對齊的數字格沒有內距,
+ * 數量 `0.5` 與單價 `60,000.00` 會黏成 `0.560,000.00`。內距加在「前面有同層格」的格子左側,
+ * 第一欄各自的 padding-left: 16px(inline)不受影響;L9 以 >= 6px 量測。
+ */
+thead th + th, tbody td + td { padding-left: 12px; }
 .pill {
   display: inline-block; padding: 2px 8px; border-radius: 99px;
   font-size: 11px; font-weight: 500;

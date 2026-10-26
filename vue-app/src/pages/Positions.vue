@@ -1041,6 +1041,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   100% { background: transparent; }
 }
 tbody td { padding: 12px 0; }
+/* 相鄰儲存格至少隔 12px(04.1-31):窄螢幕欄寬被壓到最小時,靠右的數字格不再黏在一起;第一欄 padding-left: 16px 不受影響 */
+thead th + th, tbody td + td { padding-left: 12px; }
 /* 04.1-16:幣別標籤(同 Trades.vue 的 .ccy-tag,UI-SPEC §Interaction 7);只有水平內距,不改列高 */
 .ccy-tag {
   display: inline-block; margin-left: 8px; padding: 0 8px;

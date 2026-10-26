@@ -428,9 +428,14 @@ for (const width of [320, 375]) {
             const text = (node.textContent ?? '').trim();
             if (!text) continue;
             let painted: Element | null = null;
+            let hidden = false;
             for (let el = node.parentElement; el && el !== cell; el = el.parentElement) {
-              if (!transparent(getComputedStyle(el).backgroundColor)) { painted = el; break; }
+              const style = getComputedStyle(el);
+              // 螢幕閱讀器專用文字(.sr-only:clip + 1px)不是畫出來的內容,不參與間距
+              if (style.clip !== 'auto' && style.clip !== '') hidden = true;
+              if (!painted && !transparent(style.backgroundColor)) painted = el;
             }
+            if (hidden) continue;
             if (painted) {
               const r = painted.getBoundingClientRect();
               boxes.push({ left: r.left, right: r.right, text });
