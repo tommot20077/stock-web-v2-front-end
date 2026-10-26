@@ -111,25 +111,33 @@
         >{{ t(lang, 'cashRecordDeposit') }}</button>
       </div>
       <div v-else class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th class="col-date">{{ t(lang, 'date') }}</th>
-              <th class="col-type">{{ t(lang, 'type') }}</th>
-              <th class="col-right">{{ t(lang, 'cashAmount') }}</th>
-              <th>{{ t(lang, 'notes') }}</th>
-              <th class="col-right">{{ t(lang, 'cashColStatus') }}</th>
+        <!--
+          < 640px 時 CSS 把每列改成堆疊(grid),table 元素的 display 不再是 table,瀏覽器可能丟掉表格語意;
+          所以明確寫上 ARIA role(與原生語意相同,>= 640px 沒有副作用),輔助科技在兩種版面下讀到的結構一致。
+        -->
+        <table role="table">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader" class="col-date">{{ t(lang, 'date') }}</th>
+              <th role="columnheader" class="col-type">{{ t(lang, 'type') }}</th>
+              <th role="columnheader" class="col-right col-amount">{{ t(lang, 'cashAmount') }}</th>
+              <th role="columnheader">{{ t(lang, 'notes') }}</th>
+              <th role="columnheader" class="col-right col-status">{{ t(lang, 'cashColStatus') }}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody role="rowgroup">
             <tr
               v-for="row in items"
               :key="row.id"
+              role="row"
               data-testid="cash-entries-row"
               :class="{ fresh: isFresh(row) }"
             >
-              <td class="num col-date">{{ fmtDateTime(row.occurredAt) }}</td>
-              <td class="col-type">
+              <td role="cell" class="num col-date">
+                <!-- 日期與時間各自不換行:窄螢幕只允許在兩者之間斷行,不會斷在日期的連字號(2026-10- / 28);textContent 仍是 `YYYY-MM-DD HH:mm` -->
+                <span class="nb">{{ dateTimeParts(row.occurredAt).date }}</span><template v-if="dateTimeParts(row.occurredAt).time">{{ ' ' }}<span class="nb">{{ dateTimeParts(row.occurredAt).time }}</span></template>
+              </td>
+              <td role="cell" class="col-type">
                 <span class="type-pill">{{ typeLabel(row.type) }}</span>
                 <!-- 不只靠動畫與顏色:新列有文字標記(U-24) -->
                 <span v-if="isFresh(row)" class="fresh-badge" data-testid="cash-entries-fresh-badge">
@@ -140,14 +148,14 @@
                   {{ tf(lang, 'cashReversalOf', { date: fmtDate(row.reversalOfOccurredAt) }) }}
                 </div>
               </td>
-              <td class="num col-right">
+              <td role="cell" class="num col-right col-amount">
                 <span :class="['amount', { 'is-reversed': row.reversed }]">{{ amountText(row) }}</span>
               </td>
-              <td class="col-note">
+              <td role="cell" class="col-note">
                 <!-- 文字插值(Vue 自動轉義),備註是使用者輸入,不使用 v-html -->
                 <div class="note" :title="row.note || undefined">{{ row.note || '—' }}</div>
               </td>
-              <td class="col-right">
+              <td role="cell" class="col-right col-status">
                 <!-- U-18:「是否已沖銷」只取後端欄位,前端不推導 -->
                 <span v-if="row.reversed" class="status-pill" data-testid="cash-entries-reversed-pill">
                   {{ t(lang, 'cashReversed') }}
@@ -515,6 +523,13 @@ function fmtDateTime(iso: string | null | undefined): string {
   return `${fmtDate(iso)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
+/** `fmtDateTime` 拆成日期 / 時間兩段(無法解析或缺值時只有 date,time 為空字串)。 */
+function dateTimeParts(iso: string | null | undefined): { date: string; time: string } {
+  const text = fmtDateTime(iso);
+  const at = text.indexOf(' ');
+  return at === -1 ? { date: text, time: '' } : { date: text.slice(0, at), time: text.slice(at + 1) };
+}
+
 function typeLabel(kind: string): string {
   if (kind === 'DEPOSIT') return t(props.lang, 'cashTypeDeposit');
   if (kind === 'WITHDRAWAL') return t(props.lang, 'cashTypeWithdrawal');
@@ -574,6 +589,7 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 }
 .col-right { text-align: right; }
 .col-date { white-space: nowrap; }
+.nb { white-space: nowrap; }
 /*
  * 類型欄保底寬度:沖銷註記(「沖銷 2026-10-26 的紀錄」)在欄內換行。表格比卡片窄時,瀏覽器會把
  * 可壓縮欄壓到最小,類型欄被壓到約 40px,膠囊逐字換行、註記折成 8 行(04.1-30)。
@@ -589,6 +605,42 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
     overflow: hidden;
   }
+}
+
+/*
+ * < 640px:每筆紀錄堆疊成一個 grid 區塊,不再靠卡內水平捲動(04.1-31)。
+ * 04.1-30 為了讓類型膠囊不逐字換行,把類型 / 備註欄各保底 160px,表格因此比卡片寬(約 685px vs 270px),
+ * 金額欄被推出視窗、狀態欄捲不到;金額是這張表最關鍵的資料,不能藏在捲動後面。
+ *
+ *   日期              帶號金額     <- 金額靠右,與日期同一行
+ *   類型膠囊 [新] ...    狀態 / 沖銷鈕
+ *   備註(整列寬)
+ *
+ * 欄標題(thead)保留給輔助科技,視覺上以 sr-only 手法隱藏;每格的意義由格式本身表達(日期、膠囊、+/- 金額、狀態文字)。
+ * 膠囊仍是 nowrap(L8);金額 nowrap 且在 auto 欄,不會被擠。>= 640px 維持原本的表格版面。
+ */
+@media (max-width: 639px) {
+  .table-wrap { position: relative; }
+  table, tbody { display: block; }
+  thead {
+    position: absolute; width: 1px; height: 1px; margin: 0; padding: 0;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "date amount"
+      "type status"
+      "note note";
+    gap: 8px 12px; padding: 12px 0;
+  }
+  tbody td { display: block; min-width: 0; max-width: none; padding: 0; }
+  td.col-date { grid-area: date; white-space: normal; }
+  td.col-amount { grid-area: amount; }
+  td.col-type { grid-area: type; }
+  td.col-status { grid-area: status; }
+  td.col-note { grid-area: note; }
 }
 
 .type-pill, .status-pill {
