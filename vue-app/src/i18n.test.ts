@@ -132,8 +132,10 @@ const CASH_SUBMIT_ERROR_KEYS = [
   'cashErrOriginalNotFound',
   'cashErrForbidden',
   'cashErrCsrf',
-  'cashErrUnknown',
 ];
+
+// 結果不確定的錯誤(帳本可能已提交、回應卻失敗):不得斷言「未寫入」,否則使用者可能關掉對話框(換新 key)重試而重複記錄。
+const CASH_INDETERMINATE_ERROR_KEYS = ['cashErrNetwork', 'cashErrUnknown'];
 
 const PHASE41_FORBIDDEN_ZH = ['帳戶餘額', '轉帳', '撥款', '可下單金額', '凍結'];
 const PHASE41_FORBIDDEN_EN = ['account balance', 'transfer', 'funding', 'buying power'];
@@ -352,6 +354,20 @@ describe('i18n phase 04.1 copy', () => {
       expect(I18N.en[key].toLowerCase(), `en.${key} must say nothing was recorded`)
         .toMatch(/nothing was recorded|nothing new was recorded/);
     }
+  });
+
+  it('describes an unexpected/unreachable outcome as indeterminate, never as "nothing was recorded"', () => {
+    for (const key of CASH_INDETERMINATE_ERROR_KEYS) {
+      expect(I18N.zh[key], `zh.${key} 必須表明可能尚未寫入(結果不確定)`).toContain('可能');
+      expect(I18N.zh[key], `zh.${key} 不得斷言這筆紀錄「未寫入」`).not.toMatch(/(?<!尚)未寫入。|紀錄未寫入/);
+      expect(I18N.en[key].toLowerCase(), `en.${key} must say it may not have been saved`).toMatch(/may not have been|may or may not/);
+      expect(I18N.en[key].toLowerCase(), `en.${key} must not claim nothing was recorded`).not.toContain('nothing was recorded');
+    }
+  });
+
+  it('tells the user to check the Cash page when the outcome of an unexpected error is unknown', () => {
+    expect(I18N.zh.cashErrUnknown).toContain('現金頁');
+    expect(I18N.en.cashErrUnknown.toLowerCase()).toContain('cash page');
   });
 
   it('promises no duplicate only on the network error', () => {
