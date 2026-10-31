@@ -272,7 +272,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     cashErrForbidden: '這個帳號沒有記錄入出金的權限,這筆紀錄未寫入。',
     cashErrCsrf: '安全驗證失敗,這筆紀錄未寫入。請重新整理頁面後再試。',
     cashErrNetwork: '無法連線到伺服器,這筆紀錄可能尚未寫入。直接再送出一次不會重複記錄。',
-    cashErrUnknown: '發生未預期的錯誤,這筆紀錄未寫入。',
+    cashErrUnknown: '發生未預期的錯誤,這筆紀錄可能尚未寫入,也可能已經寫入。請先到現金頁確認;沒有出現的話再送出一次。',
     // Phase 04.1:基準幣切換錯誤
     baseCurrencyErrUnsupported: '不支援這個幣別,基準幣未變更。',
     baseCurrencyErrForbidden: '這個帳號不能變更基準幣。',
@@ -549,7 +549,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     cashErrForbidden: 'This account cannot record cash entries; nothing was recorded.',
     cashErrCsrf: 'Security check failed; nothing was recorded. Refresh the page and try again.',
     cashErrNetwork: 'Cannot reach the server; this entry may not have been saved. Submitting again will not create a duplicate.',
-    cashErrUnknown: 'Something unexpected happened; nothing was recorded.',
+    cashErrUnknown: 'Something unexpected happened; this entry may or may not have been saved. Check the Cash page first, and submit again only if it is not listed.',
     // Phase 04.1:基準幣切換錯誤
     baseCurrencyErrUnsupported: 'This currency is not supported; the base currency was not changed.',
     baseCurrencyErrForbidden: 'This account cannot change the base currency.',
