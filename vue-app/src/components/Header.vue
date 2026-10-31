@@ -1,5 +1,5 @@
 <template>
-  <header class="hdr">
+  <header :class="['hdr', `lang-${lang}`]">
     <div class="brand">
       <span class="logo">R</span>
       <span class="brand-name">Resource</span>
@@ -96,6 +96,7 @@ const navItems = computed(() => {
     { k: 'backtest', l: t(props.lang, 'backtest') },
     { k: 'analytics', l: t(props.lang, 'analytics') },
     { k: 'trades', l: t(props.lang, 'trades') },
+    { k: 'cash', l: t(props.lang, 'cash') },
     { k: 'alerts', l: t(props.lang, 'alerts') },
     { k: 'notifications', l: t(props.lang, 'notifications') },
     { k: 'settings', l: t(props.lang, 'settings') },
@@ -149,8 +150,12 @@ const sessionTone = computed(() => {
 }
 .nav {
   display: flex; gap: 2px; min-width: 0;
-  /* 空間不夠時最後才縮(權重 = shrink × 寬度,其他項目先縮),縮了就在列內捲動 */
-  flex: 0 0.01 auto;
+  /*
+   * 單列版面:nav 取固有寬、不縮——空間不夠時由 search / session chip 先縮(身分省略),
+   * 再不夠就由下方 media query 換成兩列。不能讓 nav 自己縮並捲動:那會把最後幾個導覽項
+   * (設定 / 運維)捲出視窗,使用者得自己發現要橫向捲(04.1-30)。
+   */
+  flex: 0 0 auto;
   overflow-x: auto; scrollbar-width: thin;
 }
 .spacer { flex: 1; }
@@ -233,11 +238,22 @@ const sessionTone = computed(() => {
   font-size: 12px; font-weight: 600;
 }
 /*
- * 10 個導覽項加右側工具區的固有寬度約 1070px,flex-shrink: 0 的 nav 會把整頁撐出水平捲軸
- * (todo 2026-09-04-frontend-header-rwd-320px)。現在 nav 可縮並在列內橫向捲動;
- * 窄螢幕再改兩列:第一列品牌 + 工具區,第二列導覽。捲動一律留在 header 裡而不是整頁。
+ * 12 個導覽項(含運維)加右側工具區(最寬情況:session chip 帶超長 email、撐到 max-width 300px)
+ * 在單列放得下的最小視窗寬:中文 1414px、英文 1634px(Playwright 以 1px 步進掃描量測,
+ * 英文導覽字較長;見 layout.spec.ts L7)。低於該寬度改兩列:第一列品牌 + 工具區,
+ * 第二列導覽——每個導覽項都完整可見,捲動一律留在 header 裡而不是整頁
+ * (todo 2026-09-04-frontend-header-rwd-320px;04.1-30 之前斷點是 1279px,1280–1413px 的
+ * 「設定 / 運維」被捲出視窗)。斷點各留約 25px 餘裕給字型差異(中文 ≤ 1439、英文 ≤ 1659),
+ * 兩段規則必須同步維護;英文段用 :where() 把特異度壓回與 .hdr 相同,
+ * 後面 900 / 480px 的覆寫才仍然有效。
  */
-@media (max-width: 1279px) {
+@media (max-width: 1659px) {
+  .hdr:where(.lang-en) { flex-wrap: wrap; height: auto; min-height: 60px; padding: 10px 16px 0; gap: 8px 12px; }
+  .hdr:where(.lang-en) .nav { order: 10; flex: 1 0 100%; padding-bottom: 8px; }
+  .hdr:where(.lang-en) .session-chip { flex: 100 1 0; min-width: 0; }
+  .hdr:where(.lang-en) .session-logout { margin-left: auto; flex-shrink: 0; }
+}
+@media (max-width: 1439px) {
   .hdr { flex-wrap: wrap; height: auto; min-height: 60px; padding: 10px 16px 0; gap: 8px 12px; }
   .nav { order: 10; flex: 1 0 100%; padding-bottom: 8px; }
   /*

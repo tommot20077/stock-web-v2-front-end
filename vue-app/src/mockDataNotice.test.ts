@@ -9,6 +9,8 @@ import Notifications from './pages/Notifications.vue';
 import Settings from './pages/Settings.vue';
 import Watchlist from './pages/Watchlist.vue';
 import { resetRuntimeApiClientsForTests } from './services/pageApiClients';
+import MockDataNotice from './components/MockDataNotice.vue';
+import { t } from './i18n';
 import { cleanupMounted, flushAsync, mountWithPinia } from './testUtils';
 
 /**
@@ -63,4 +65,48 @@ describe('尚未接後端的頁面在 API mode 標示為示範資料', () => {
       expect(notice(), `${page.name} 在 mock mode 不應顯示`).toBeNull();
     });
   }
+});
+
+describe('MockDataNotice 的 exception 例外行(U-12)', () => {
+  afterEach(() => {
+    cleanupMounted();
+    resetRuntimeApiClientsForTests();
+  });
+
+  function exceptionLine(): HTMLElement | null {
+    return document.body.querySelector('[data-testid="mock-data-notice-exception"]');
+  }
+
+  it('API mode 傳入 exception:在既有標示下多渲染一行例外說明', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+
+    mountWithPinia(MockDataNotice, { lang: 'zh', exception: 'mockDataNoticeExceptBaseCurrency' });
+    await flushAsync();
+
+    expect(exceptionLine()?.textContent).toBe(t('zh', 'mockDataNoticeExceptBaseCurrency'));
+    expect(notice()?.textContent).toContain('示範資料');
+  });
+
+  it('API mode 未傳 exception:不渲染例外行,其他頁行為不變', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+
+    mountWithPinia(MockDataNotice, { lang: 'zh' });
+    await flushAsync();
+
+    expect(notice()).not.toBeNull();
+    expect(exceptionLine()).toBeNull();
+  });
+
+  it('mock mode 即使傳入 exception,整個元件仍不渲染', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    resetRuntimeApiClientsForTests();
+
+    mountWithPinia(MockDataNotice, { lang: 'zh', exception: 'mockDataNoticeExceptBaseCurrency' });
+    await flushAsync();
+
+    expect(notice()).toBeNull();
+    expect(exceptionLine()).toBeNull();
+  });
 });

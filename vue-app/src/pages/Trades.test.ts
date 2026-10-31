@@ -31,6 +31,7 @@ function trade(over: Partial<TradeDto> & { id: string }): TradeDto {
     price: 10,
     fee: 0,
     note: null,
+    currency: 'TWD',
     executedAt: '2026-05-16T09:30:00Z',
     createdAt: '2026-05-16T09:30:00Z',
     ...over,
@@ -232,7 +233,7 @@ afterEach(() => {
 });
 
 describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)', () => {
-  it('初始載入明確送出預設排序與分頁參數,並渲染後端回傳的列(D-07)', async () => {
+  it('初始載入明確送出預設排序與分頁參數,並渲染後端回傳的列;總額為裸數字、幣別為標籤、無 $(D-07 / D-28 / D-30)', async () => {
     const fetchMock = scriptedFetch(() => success(page({
       items: [
         trade({ id: 'u-1', symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, note: 'hello', executedAt: '2026-05-16T09:30:00Z' }),
@@ -256,12 +257,37 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     expect(first).not.toContain('T09:30');
     expect(first).toContain('NVDA');
     expect(first).toContain('BUY');
-    // total 欄 = quantity × price(與後端 total 排序鍵同語意,不含 fee)
-    expect(first).toContain('$300');
+    // total 欄 = quantity × price(與後端 total 排序鍵同語意,不含 fee)。
+    // 04.1-11(D-28 / D-30):原本斷言整列含 `$300`;金額不再寫死 `$`,改定位到總額格(第 6 個 td)
+    // 斷言裸數字 `300`,幣別由標的後的 trades-ccy-tag 表示一次,並鎖定整列不含 `$`。
+    const cells = rows()[0].querySelectorAll('td');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(rows()[0].querySelector('[data-testid="trades-ccy-tag"]')?.textContent).toBe('TWD');
+    expect(first).not.toContain('$');
     expect(first).toContain('hello');
     // note 為 null 時退回破折號,不出現 "null"
     expect(rows()[1].textContent).toContain('—');
     expect(document.body.textContent).not.toContain('null');
+  });
+
+  it('apiRowWithoutCurrencyRendersNoTagAndNoDollar:currency 缺值時不渲染標籤,金額為裸數字,不出現 $ 或 undefined', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'nc-1', symbol: 'NVDA', quantity: 3, price: 100, fee: 1, currency: null })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    expect(rows()).toHaveLength(1);
+    const row = rows()[0];
+    expect(row.querySelector('[data-testid="trades-ccy-tag"]')).toBeNull();
+    const cells = row.querySelectorAll('td');
+    expect(cells[4].textContent?.trim()).toBe('100.00');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(cells[6].textContent?.trim()).toBe('1.00');
+    expect(row.textContent).not.toContain('$');
+    expect(row.textContent).not.toContain('undefined');
+    expect(row.textContent).not.toContain('null');
   });
 
   it('row :key 用 TradeDto.id(uuid),同內容不同 id 的交易不共用 key', async () => {
@@ -632,12 +658,12 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
     const lines = csv.split('\n');
-    expect(lines[0]).toBe('date,type,symbol,qty,price,total,fee,note');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
     expect(lines).toHaveLength(251);
     expect(csv).not.toContain('SELL');
     expect(csv).not.toContain('sell 0');
     // 匯出=當前條件的完整資料集,不只當前頁(第 100+ 筆也在)
-    expect(csv).toContain('2026-05-17,BUY,B100,101,10,1010,1,buy 100');
+    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,buy 100');
     expect(dl.downloads[0]).toBe(`trades-buy-${new Date().toISOString().slice(0, 10)}.csv`);
   });
 
@@ -696,7 +722,45 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('2026-02-03,BUY,ESC,2,5,10,0,"a,b ""quoted""\nnext"');
+    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,"a,b ""quoted""\nnext"');
+  });
+
+  it('csvHasCurrencyColumn:API 匯出第 4 欄為 trade.currency,缺值為空字串,數值欄維持原始數字(T-04.1-45)', async () => {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+
+    const items = [
+      trade({ id: 'usd', symbol: 'AAPL', currency: 'USD', quantity: 3, price: 188.5, fee: 1.25, note: 'n1', executedAt: '2026-03-02T10:00:00Z' }),
+      trade({ id: 'none', symbol: 'OLD', currency: null, quantity: 2, price: 5, fee: 0, note: null, executedAt: '2026-03-01T10:00:00Z' }),
+    ];
+    const fetchMock = scriptedFetch(() => success(page({ items, totalElements: 2, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,n1');
+    expect(lines[2].split(',')[3], 'currency 缺值 → 空字串,不猜測').toBe('');
+    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,');
+  });
+
+  it('currencyNoteShownInApiMode:API mode 表格上方有 tradesCurrencyNote', async () => {
+    const fetchMock = scriptedFetch(() => success(page({
+      items: [trade({ id: 'a' })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await mountApiTrades(fetchMock);
+
+    const note = requireTestid('trades-currency-note');
+    expect(note.textContent?.trim()).toBe(t('en', 'tradesCurrencyNote'));
+    const table = document.body.querySelector('table')!;
+    expect(
+      note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+      '說明列必須在表格之前',
+    ).toBeTruthy();
   });
 });
 
@@ -713,6 +777,20 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
     await flushAsync();
   }
+
+  it('mockModeTbodyIsUnchanged:mock tbody 不含 trades-ccy-tag,金額仍是 $ 前綴(逐字保留)', async () => {
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    expect(rows()).toHaveLength(3);
+    expect(document.body.querySelector('[data-testid="trades-ccy-tag"]')).toBeNull();
+    const first = rows()[0].querySelectorAll('td');
+    expect(first[4].textContent?.trim()).toBe('$10.00');
+    expect(first[5].textContent?.trim()).toBe('$20');
+    expect(first[6].textContent?.trim()).toBe('$1');
+  });
 
   it('chips 恰為 All / Buy / Sell / Dividend / 2026 五個(mock 保留寫死年份)', async () => {
     await mountMock();
@@ -797,11 +875,42 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
 
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('date,type,symbol,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
+    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
+    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+
+  it('mockCsvCurrencyColumnIsEmpty:mock 匯出表頭同 API,第 4 欄為空字串(不填 USD 之類的猜測值)', async () => {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    click(requireTestid('trades-export'));
+    await flushAsync();
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines).toHaveLength(4);
+    for (const line of lines.slice(1)) {
+      expect(line.split(',')[3], `mock 列第 4 欄應為空字串:${line}`).toBe('');
+    }
+    expect(lines.join('\n')).not.toMatch(/USD|TWD/);
+  });
+
+  it('currencyNoteHiddenInMockMode:mock mode 不渲染 trades-currency-note', async () => {
+    await mountMock();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+
+    expect(rows()).toHaveLength(3);
+    expect(testid('trades-currency-note')).toBeNull();
   });
 });
 
@@ -832,7 +941,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     await mountApiTrades(fetchMock);
     expect(urls(fetchMock)).toHaveLength(1);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(urls(fetchMock)).toHaveLength(2);
@@ -844,7 +953,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
     await flushAsync();
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -862,7 +971,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     expect(rows()[0].textContent).toContain('OLD');
 
     gate = deferred<Response>();
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // U-05:**不得**重用 status:'loading' —— 舊列必須留在 DOM。
@@ -892,7 +1001,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     await mountApiTrades(fetchMock);
 
     failRefetch = true;
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     // 舊資料仍在畫面上,且**不進** status:'error'
@@ -956,7 +1065,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await flushAsync();
     expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('1');
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     await flushAsync();
 
     const p = paramsOf(lastUrl(fetchMock));

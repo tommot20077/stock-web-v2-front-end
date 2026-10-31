@@ -29,3 +29,8 @@ table { border-collapse: collapse; width: 100%; }
   border-radius: 5px;
   border: 2px solid var(--bg);
 }
+/* 僅供螢幕閱讀器的文字(UI-SPEC §Accessibility):視覺上隱藏,仍在無障礙樹內。 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}

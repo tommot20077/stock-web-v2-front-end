@@ -21,6 +21,8 @@ const mockFactoryCalls = vi.hoisted(() => ({
   portfolio: vi.fn(),
   trading: vi.fn(),
   market: vi.fn(),
+  cash: vi.fn(),
+  profile: vi.fn(),
 }));
 
 afterEach(() => {
@@ -32,6 +34,8 @@ afterEach(() => {
   mockFactoryCalls.portfolio.mockReset();
   mockFactoryCalls.trading.mockReset();
   mockFactoryCalls.market.mockReset();
+  mockFactoryCalls.cash.mockReset();
+  mockFactoryCalls.profile.mockReset();
   vi.doUnmock('./services/authApi');
   vi.doUnmock('./services/aiAccessApi');
   vi.doUnmock('./services/backtestApi');
@@ -39,6 +43,8 @@ afterEach(() => {
   vi.doUnmock('./services/portfolioApi');
   vi.doUnmock('./services/tradingApi');
   vi.doUnmock('./services/marketApi');
+  vi.doUnmock('./services/cashApi');
+  vi.doUnmock('./services/profileApi');
 });
 
 describe('page API adapter wiring', () => {
@@ -222,6 +228,20 @@ describe('page API adapter wiring', () => {
         createMockMarketApi: mockFactoryCalls.market,
       };
     });
+    vi.doMock('./services/cashApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/cashApi')>();
+      return {
+        ...actual,
+        createMockCashApi: mockFactoryCalls.cash,
+      };
+    });
+    vi.doMock('./services/profileApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/profileApi')>();
+      return {
+        ...actual,
+        createMockProfileApi: mockFactoryCalls.profile,
+      };
+    });
 
     const { getRuntimeApiClients } = await import('./services/pageApiClients');
     const clients = getRuntimeApiClients();
@@ -236,6 +256,9 @@ describe('page API adapter wiring', () => {
     expect(clients.trading.mode).toBe('api');
     expect(clients.trading.live).toBeUndefined();
     expect(clients.market.mode).toBe('api');
+    // Phase 04.1:現金帳本 adapter 同樣必須走 HTTP 路徑。
+    expect(clients.cash.mode).toBe('api');
+    expect(clients.profile.mode).toBe('api');
     expect(mockFactoryCalls.auth).not.toHaveBeenCalled();
     expect(mockFactoryCalls.aiAccess).not.toHaveBeenCalled();
     expect(mockFactoryCalls.backtest).not.toHaveBeenCalled();
@@ -244,6 +267,8 @@ describe('page API adapter wiring', () => {
     // Phase 2 D-20 的防線延伸到新 adapter:API mode 靜默回退 mock = 測試失敗。
     expect(mockFactoryCalls.trading).not.toHaveBeenCalled();
     expect(mockFactoryCalls.market).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.cash).not.toHaveBeenCalled();
+    expect(mockFactoryCalls.profile).not.toHaveBeenCalled();
   });
 
   it('exposes live mock trading data only in mock mode', async () => {

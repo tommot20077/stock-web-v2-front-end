@@ -1,8 +1,10 @@
 import { createAiAccessApi, type AiAccessApi } from './aiAccessApi';
 import { createAuthApi, type AuthApi } from './authApi';
 import { createBacktestApi, type BacktestApi } from './backtestApi';
+import { createCashApi, type CashApi } from './cashApi';
 import { createOpsApi, type OpsApi } from './opsApi';
 import { createPortfolioApi, type PortfolioApi } from './portfolioApi';
+import { createProfileApi, type ProfileApi } from './profileApi';
 import { createTradingApi, type TradingApi } from './tradingApi';
 import { createMarketApi, type MarketApi } from './marketApi';
 import type { RuntimeDataMode } from './apiTypes';
@@ -18,6 +20,8 @@ interface RuntimeApiClients {
   portfolio: PortfolioApi;
   trading: TradingApi;
   market: MarketApi;
+  cash: CashApi;
+  profile: ProfileApi;
 }
 
 let clients: RuntimeApiClients | null = null;
@@ -35,6 +39,8 @@ export function getRuntimeApiClients(basePath = '/api/v1'): RuntimeApiClients {
       portfolio: createPortfolioApi(mode, basePath),
       trading: createTradingApi(mode, basePath),
       market: createMarketApi(mode, basePath),
+      cash: createCashApi(mode, basePath),
+      profile: createProfileApi(mode, basePath),
     };
   }
   return clients;

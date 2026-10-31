@@ -2,6 +2,7 @@
   <div v-if="isApiMode" class="mock-data-notice" role="note" data-testid="mock-data-notice">
     <span class="mdn-tag">{{ t(lang, 'mockDataNoticeTag') }}</span>
     <span class="mdn-text">{{ t(lang, 'mockDataNoticeText') }}</span>
+    <span v-if="exception" class="mdn-exception" data-testid="mock-data-notice-exception">{{ t(lang, exception) }}</span>
   </div>
 </template>
 
@@ -12,7 +13,8 @@ import { t } from '../i18n';
 import { getRuntimeDataMode } from '../services/runtimeDataMode';
 import type { Lang } from '../types';
 
-defineProps<{ lang: Lang }>();
+// exception:選填的 i18n key。頁面裡有「已接後端的例外控制」時,在既有文案下方多一行說明(U-12)。
+defineProps<{ lang: Lang; exception?: string }>();
 
 const isApiMode = getRuntimeDataMode() === 'api';
 </script>
@@ -38,6 +40,13 @@ const isApiMode = getRuntimeDataMode() === 'api';
 }
 .mdn-text {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mdn-exception {
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-dim, #8b93a1);
   overflow-wrap: anywhere;
 }
 </style>

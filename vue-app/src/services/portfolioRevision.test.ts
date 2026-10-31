@@ -2,11 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   apiLastFill,
   bumpPortfolioRevision,
+  clearLastCreatedCashEntry,
   clearLastCreatedTrade,
   clearLastFill,
+  lastCreatedCashEntryId,
   lastCreatedTradeId,
+  notifyCashEntryCreated,
   notifyTradeCreated,
   portfolioRevision,
+  portfolioRevisionCause,
   resetPortfolioRevisionForTests,
 } from './portfolioRevision';
 // 原始碼字面(Vite ?raw):用來斷言測試 reset 沒有被偷偷掛進全域 setup。
@@ -37,6 +41,7 @@ const TRADE_DTO: TradeDto = {
   price: 218.4,
   fee: 1.5,
   note: '手動補登',
+  currency: 'USD',
   executedAt: '2026-07-29T02:30:00Z',
   createdAt: '2026-07-30T01:00:00Z',
 };
@@ -49,11 +54,12 @@ afterEach(() => {
 describe('portfolioRevision — D-10 revision counter', () => {
   it('starts at 0 and increments once per bump', () => {
     expect(portfolioRevision.value).toBe(0);
+    expect(portfolioRevisionCause.value, '尚無任何觸發來源').toBeNull();
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     expect(portfolioRevision.value).toBe(1);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     expect(portfolioRevision.value).toBe(2);
   });
 });
@@ -85,6 +91,77 @@ describe('portfolioRevision — notifyTradeCreated 是單一原子動作', () =>
     expect(portfolioRevision.value).toBe(2);
     expect(apiLastFill.value).toEqual({ sym: 'NVDA', type: 'SELL', qty: 4, px: 1142.83 });
     expect(lastCreatedTradeId.value).toBe('second');
+  });
+});
+
+describe('portfolioRevision — 重讀訊號帶觸發來源(U-09 / U-10)', () => {
+  it('notifyTradeCreated sets the cause to trade', () => {
+    notifyTradeCreated(TRADE_DTO);
+
+    expect(portfolioRevisionCause.value).toBe('trade');
+  });
+
+  it('bumpPortfolioRevision requires and records a cause', () => {
+    bumpPortfolioRevision('baseCurrency');
+
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('baseCurrency');
+  });
+
+  it('notifyCashEntryCreated is one atomic action: revision +1, cause cash, entry id, no trade signals', () => {
+    notifyCashEntryCreated({ id: 'e-1' });
+
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('cash');
+    expect(lastCreatedCashEntryId.value).toBe('e-1');
+    // RESEARCH Q11.1:入金不是成交,不得借用交易的訊號 —— 否則 Positions / Trades 會出現不存在的「新」列。
+    expect(apiLastFill.value).toBeNull();
+    expect(lastCreatedTradeId.value).toBeNull();
+  });
+
+  it('notifyCashEntryCreated sets id and cause before the bump becomes visible to a sync watcher', async () => {
+    const { watch } = await import('vue');
+    const seen: Array<{ cause: string | null; id: string | null }> = [];
+    const stop = watch(
+      portfolioRevision,
+      () => seen.push({ cause: portfolioRevisionCause.value, id: lastCreatedCashEntryId.value }),
+      { flush: 'sync' },
+    );
+
+    notifyCashEntryCreated({ id: 'e-2' });
+    stop();
+
+    expect(seen).toEqual([{ cause: 'cash', id: 'e-2' }]);
+  });
+
+  it('a later trade after a cash entry flips the cause back to trade', () => {
+    notifyCashEntryCreated({ id: 'e-1' });
+    notifyTradeCreated(TRADE_DTO);
+
+    expect(portfolioRevisionCause.value).toBe('trade');
+    expect(portfolioRevision.value).toBe(2);
+  });
+
+  it('clearLastCreatedCashEntry only clears the id, leaving revision and cause intact', () => {
+    notifyCashEntryCreated({ id: 'e-1' });
+
+    clearLastCreatedCashEntry();
+
+    expect(lastCreatedCashEntryId.value).toBeNull();
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('cash');
+  });
+
+  it('rejects direct assignment to the new readonly refs', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // @ts-expect-error 唯讀 ref 不得直接賦值
+    portfolioRevisionCause.value = 'cash';
+    // @ts-expect-error 唯讀 ref 不得直接賦值
+    lastCreatedCashEntryId.value = 'forged';
+
+    expect(portfolioRevisionCause.value).toBeNull();
+    expect(lastCreatedCashEntryId.value).toBeNull();
   });
 });
 
@@ -138,18 +215,21 @@ describe('portfolioRevision — D-11 提示清除', () => {
 });
 
 describe('portfolioRevision — 測試隔離', () => {
-  it('resetPortfolioRevisionForTests restores 0 / null / null', () => {
+  it('resetPortfolioRevisionForTests restores 0 and clears every signal', () => {
     notifyTradeCreated(TRADE_DTO);
+    notifyCashEntryCreated({ id: 'e-1' });
 
     resetPortfolioRevisionForTests();
 
     expect(portfolioRevision.value).toBe(0);
     expect(apiLastFill.value).toBeNull();
     expect(lastCreatedTradeId.value).toBeNull();
+    expect(portfolioRevisionCause.value).toBeNull();
+    expect(lastCreatedCashEntryId.value).toBeNull();
   });
 
   it('first test in the pair bumps the shared module state', () => {
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     expect(portfolioRevision.value).toBe(1);
   });
 
@@ -158,7 +238,7 @@ describe('portfolioRevision — 測試隔離', () => {
     // 若 afterEach 沒有 reset,這條會看到 1 而不是 0 —— 這正是這對測試存在的理由。
     expect(portfolioRevision.value).toBe(0);
 
-    bumpPortfolioRevision();
+    bumpPortfolioRevision('trade');
     expect(portfolioRevision.value).toBe(1);
   });
 
@@ -176,7 +256,7 @@ describe('portfolioRevision — 不是 Pinia store', () => {
     // 本測試刻意**不**呼叫 setActivePinia —— 若哪天改用 defineStore,這條會炸。
     expect(() => {
       notifyTradeCreated(TRADE_DTO);
-      bumpPortfolioRevision();
+      bumpPortfolioRevision('trade');
     }).not.toThrow();
 
     expect(portfolioRevision.value).toBe(2);

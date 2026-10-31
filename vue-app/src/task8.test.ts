@@ -73,6 +73,7 @@ describe('Task 8 CmdK, shortcuts, and reachability', () => {
       ['Positions', 'g p'],
       ['Analytics', 'g a'],
       ['Trades', 'g t'],
+      ['Cash', 'g h'],
       ['Watchlist', 'g w'],
       ['Backtest', 'g b'],
       ['Alerts', 'g l'],
@@ -156,13 +157,13 @@ describe('Task 8 CmdK, shortcuts, and reachability', () => {
     mountComponent(CmdK, { open: true, lang: 'en', onClose: () => {} });
     await nextTick();
 
-    for (const query of ['Alerts', 'Backtest', 'Ops', 'Settings', 'Notifications']) {
+    for (const query of ['Alerts', 'Backtest', 'Ops', 'Settings', 'Notifications', 'Cash']) {
       await setCmdKSearch(query);
       expect(cmdkRows('Pages').length, `page result for "${query}"`).toBeGreaterThan(0);
     }
   });
 
-  it('g-prefix shortcuts and bracket navigation reach alerts, backtest, notifications, settings, and ops', async () => {
+  it('g-prefix shortcuts and bracket navigation reach alerts, backtest, notifications, settings, ops, and cash', async () => {
     const navigated: Page[] = [];
     let current: Page = 'overview';
     const Host = defineComponent({
@@ -185,12 +186,12 @@ describe('Task 8 CmdK, shortcuts, and reachability', () => {
     mountComponent(Host, {});
     await nextTick();
 
-    for (const key of ['c', 'b', 'l', 'n', 's', 'x']) {
+    for (const key of ['c', 'h', 'b', 'l', 'n', 's', 'x']) {
       dispatchKey('g');
       dispatchKey(key);
     }
 
-    expect(navigated).toEqual(['chart', 'backtest', 'alerts', 'notifications', 'settings', 'ops']);
+    expect(navigated).toEqual(['chart', 'cash', 'backtest', 'alerts', 'notifications', 'settings', 'ops']);
 
     navigated.length = 0;
     current = 'markets';
@@ -215,6 +216,40 @@ describe('Task 8 CmdK, shortcuts, and reachability', () => {
     current = 'alerts';
     dispatchKey('[');
     expect(navigated).toEqual(['backtest']);
+
+    // 現金頁在 NAV_ORDER 裡緊接 trades、位於 watchlist 之前(與導覽列順序一致)。
+    navigated.length = 0;
+    current = 'trades';
+    dispatchKey(']');
+    dispatchKey(']');
+    expect(navigated).toEqual(['cash', 'watchlist']);
+
+    navigated.length = 0;
+    current = 'watchlist';
+    dispatchKey('[');
+    dispatchKey('[');
+    expect(navigated).toEqual(['cash', 'trades']);
+  });
+
+  it('KeyboardHelp documents the cash row in Chinese as well', async () => {
+    mountComponent(KeyboardHelp, { open: true, lang: 'zh', onClose: () => {} });
+    await nextTick();
+
+    const rows = [...document.body.querySelectorAll<HTMLElement>('.kh-row')].map(row => ({
+      keys: [...row.querySelectorAll('kbd')].map(kbd => kbd.textContent).join(' '),
+      desc: row.querySelector('.kh-desc')?.textContent,
+    }));
+    expect(rows).toContainEqual({ keys: 'g h', desc: '現金' });
+  });
+
+  it('CmdK lists 現金 with g h right after 交易 in Chinese', async () => {
+    mountComponent(CmdK, { open: true, lang: 'zh', onClose: () => {} });
+    await nextTick();
+
+    const labels = cmdkRows('頁面').map(row => [rowLabel(row), rowShortcut(row)]);
+    const trades = labels.findIndex(([label]) => label === '交易');
+    expect(trades).toBeGreaterThanOrEqual(0);
+    expect(labels[trades + 1]).toEqual(['現金', 'g h']);
   });
 
   it('KeyboardHelp documents the Task 8 navigation rows', async () => {
@@ -229,6 +264,10 @@ describe('Task 8 CmdK, shortcuts, and reachability', () => {
     expect(rows).toContainEqual({ keys: 'g l', desc: 'Alerts' });
     expect(rows).toContainEqual({ keys: 'g b', desc: 'Backtest' });
     expect(rows).toContainEqual({ keys: 'g x', desc: 'Ops' });
+    expect(rows).toContainEqual({ keys: 'g h', desc: 'Cash' });
+    // `g h` 緊接在 `g t` 之後(與導覽列的 交易 → 現金 順序一致)。
+    const trades = rows.findIndex(row => row.keys === 'g t');
+    expect(rows[trades + 1]).toEqual({ keys: 'g h', desc: 'Cash' });
     expect(rows).toContainEqual({ keys: '/', desc: 'Search' });
     expect([...document.body.querySelectorAll('kbd')].map(kbd => kbd.textContent)).not.toContain('');
   });

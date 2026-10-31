@@ -6,7 +6,13 @@
         <!-- 標題列彙總:mock 由持倉陣列加總,API mode 讀 summary 後端欄位(D-04) -->
         <div v-if="live" class="sub">${{ fmtNum(totalVal, 0) }} · {{ mockPositions.length }} {{ lang === 'zh' ? '檔' : 'holdings' }}</div>
         <div v-else-if="summary" class="sub" data-testid="positions-header-summary">
-          ${{ fmtNum(summary.totalMarketValue, 0) }} · {{ summary.holdingCount }} {{ lang === 'zh' ? '檔' : 'holdings' }}
+          <!-- 04.1-16:summary 是基準幣(D-05);數值與代碼拆成兩個 span(UI-SPEC §Money) -->
+          <span class="num">{{ fmtMoneyAmount(summary.totalMarketValue, summary.baseCurrency, 0) }}</span><span v-if="Number.isFinite(summary.totalMarketValue)" class="stat-ccy">{{ summary.baseCurrency }}</span>
+          · {{ summary.holdingCount }} {{ lang === 'zh' ? '檔' : 'holdings' }}
+        </div>
+        <!-- D-04:缺匯率的持倉不計入總額,明說而不是靜默少算 -->
+        <div v-if="!live && summary && summary.fxExcludedCount > 0" class="sub" data-testid="positions-fx-excluded">
+          {{ tf(lang, 'fxExcludedHint', { n: summary.fxExcludedCount, base: summary.baseCurrency }) }}
         </div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
@@ -135,7 +141,7 @@
         :aria-busy="summaryRefreshing"
       >
         <div class="stat-l">{{ s.l }}</div>
-        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}</div>
+        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
         <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
       </div>
     </template>
@@ -186,27 +192,36 @@
     </div>
 
     <!--
-      Sector breakdown:HoldingDto 無 sector,API mode 全部持倉會歸 'Other' 等同假資料
-      → 隱藏(D-01 更正 + D-16)。mock mode 照舊。
+      Sector breakdown(04.1-16 / PORT-12 / D-19):兩模式共用同一份模板,吃 view-model `sectorRows`。
+      mock 由既有 sectorStats 映射;API mode 由 summary.sectorAllocation 映射(Phase 3 因 HoldingDto 無 sector
+      而隱藏,現在後端提供分組,資料來源是真的)。summary 載入中 / 失敗時不渲染 —— 單一重試點在頂端錯誤區塊(U-19)。
     -->
-    <div v-if="live" class="card" style="grid-column: span 12; padding: 20px">
+    <div v-if="live || summary" class="card" style="grid-column: span 12; padding: 20px" data-testid="positions-sector">
       <div class="ttl" style="margin-bottom:16px">{{ t(lang, 'sectorBreakdown') }}</div>
-      <div class="sectors">
-        <div v-for="(s, i) in sectorStats" :key="s.name" class="sector">
-          <div class="row-between" style="margin-bottom:6px">
+      <div v-if="!sectorRows.length" class="block-state" style="padding:0" data-testid="positions-sector-empty">
+        {{ t(lang, 'noHoldings') }}
+      </div>
+      <div v-else class="sectors">
+        <div
+          v-for="s in sectorRows"
+          :key="s.key"
+          class="sector"
+          :data-testid="s.uncategorized ? 'positions-sector-uncategorized' : undefined"
+        >
+          <div class="row-between" style="margin-bottom:8px">
             <div style="display:flex;align-items:center;gap:8px;font-size:13px">
-              <span :style="{ width: '8px', height: '8px', background: sectorColor(i), borderRadius: '2px' }" />
-              <span style="font-weight:500">{{ s.name }}</span>
-              <span style="color:var(--fg-mute);font-size:11px">{{ s.count }}</span>
+              <span class="sec-swatch" :style="{ background: s.color }" />
+              <span style="font-weight:600">{{ s.label }}</span>
+              <span style="color:var(--fg-dim);font-size:12px">{{ s.count }}</span>
             </div>
-            <div class="num" style="font-size:13px;font-weight:500">${{ fmtNum(s.value, 0) }}</div>
+            <div class="num" style="font-size:13px;font-weight:600">{{ s.valueText }}</div>
           </div>
           <div class="sec-bar">
-            <div class="sec-fill" :style="{ width: s.weight + '%', background: sectorColor(i) }" />
+            <div class="sec-fill" :style="{ width: s.weight + '%', background: s.color }" />
           </div>
-          <div class="row-between" style="font-size:11px;color:var(--fg-dim);margin-top:4px">
-            <span>{{ s.weight.toFixed(1) }}%</span>
-            <span :style="{ color: s.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.pnlPct) }}</span>
+          <div class="row-between" style="font-size:12px;color:var(--fg-dim);margin-top:4px">
+            <span>{{ s.weightText }}</span>
+            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up)' : 'var(--dn)' }">{{ s.pnlText }}</span>
           </div>
         </div>
       </div>
@@ -215,7 +230,8 @@
     <!-- Holdings table -->
     <div
       class="card"
-      style="grid-column: span 12; overflow: hidden"
+      data-testid="positions-table"
+      style="grid-column: span 12; overflow-x: auto; position: relative"
       :class="{ 'block-refreshing': holdingsRefreshing }"
       :aria-busy="holdingsRefreshing"
     >
@@ -240,6 +256,12 @@
           {{ t(lang, 'authRetry') }}
         </button>
       </div>
+      <!-- 04.1-16(PORT-10):各列金額是原幣,權重是基準幣;summary 未就緒時沒有 {base} 可填 → 整行不渲染 -->
+      <div
+        v-if="!live && summary && holdings.length"
+        class="currency-note"
+        data-testid="positions-currency-note"
+      >{{ tf(lang, 'holdingsCurrencyNote', { base: summary.baseCurrency }) }}</div>
       <!--
         Q5(大清單):loading 不依賴資料筆數,先渲染固定骨架列,資料到位後一次填入完整表格。
         本階段不做虛擬捲動(holdings 後端不分頁,實測筆數見 SUMMARY)。
@@ -273,6 +295,8 @@
             <th @click="sort('price')" :class="{ s: sortKey === 'price' }" style="text-align:right">{{ t(lang, 'price') }}<SortArrow :k="'price'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('value')" :class="{ s: sortKey === 'value' }" style="text-align:right">{{ t(lang, 'mktValue') }}<SortArrow :k="'value'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('pnl')" :class="{ s: sortKey === 'pnl' }" style="text-align:right">P&amp;L<SortArrow :k="'pnl'" :sk="sortKey" :sd="sortDir" /></th>
+            <!-- 04.1-16:今日損益(原幣,PORT-11)。mock 沒有此資料 → 只在 API mode 出現,mock 欄數不變 -->
+            <th v-if="!live" @click="sort('dayPnl')" :class="{ s: sortKey === 'dayPnl' }" style="text-align:right">{{ t(lang, 'todayPnl') }}<SortArrow :k="'dayPnl'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('weight')" :class="{ s: sortKey === 'weight' }" style="text-align:right;padding-right:16px">{{ t(lang, 'weight') }}<SortArrow :k="'weight'" :sk="sortKey" :sd="sortDir" /></th>
           </tr>
         </thead>
@@ -331,6 +355,8 @@
           >
             <td style="font-weight:600;padding-left:16px">
               {{ h.symbol }}
+              <!-- 04.1-16:幣別標籤一次,該列金額改裸數字;currency 缺值不猜、不退回 $ -->
+              <span v-if="h.currency" class="ccy-tag" data-testid="positions-ccy-tag">{{ h.currency }}</span>
               <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
               <span
                 v-if="effectiveLastFill && h.symbol === effectiveLastFill.sym"
@@ -340,21 +366,41 @@
             </td>
             <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
             <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
-            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(h.avgCost) }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(h.avgCost, h.currency, 2) }}</td>
             <td class="num" style="text-align:right">
-              ${{ fmtNum(h.marketPrice) }}
+              {{ fmtMoneyAmount(h.marketPrice, h.currency, 2) }}
               <!-- D-03:行情來自快取可能延遲,顯示時間讓使用者知道資料新鮮度 -->
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
-            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(h.marketValue, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
             <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
-              <div>{{ signedMoney(h.unrealizedPnl) }}</div>
-              <div style="font-size:11px">{{ fmtPct(h.roi * 100) }}</div>
+              <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
+              <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
+            </td>
+            <!--
+              04.1-16(D-14 / D-17 / D-26、U-13):單檔今日損益是原幣價格損益,沒有匯率參與,
+              所以列層級不放「不含匯差」。dayPricePnl 為 null(缺前收或最新價)→ — + 螢幕閱讀器文字。
+            -->
+            <td
+              v-if="!live"
+              class="num"
+              :class="dayPnlClass(h)"
+              style="text-align:right"
+              data-testid="positions-day-pnl"
+            >
+              <template v-if="h.dayPricePnl === null">
+                <span aria-hidden="true">—</span>
+                <span class="sr-only">{{ t(lang, 'dayPnlUnavailable') }}</span>
+              </template>
+              <template v-else>
+                <div>{{ fmtSignedMoneyAmount(h.dayPricePnl, h.currency, 0) }}</div>
+                <div v-if="fmtRatioPct(h.dayPricePnlRatio) !== null" style="font-size:12px">{{ fmtRatioPct(h.dayPricePnlRatio) }}</div>
+              </template>
             </td>
             <td style="text-align:right;padding-right:16px">
               <div style="display:inline-flex;align-items:center;gap:8px">
                 <div class="bar"><div class="bar-fill" :style="{ width: holdingWeightWidth(h) }" /></div>
-                <span data-testid="positions-weight" style="font-size:11px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
+                <span data-testid="positions-weight" style="font-size:12px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
               </div>
             </td>
           </tr>
@@ -366,7 +412,8 @@
 
 <script setup lang="ts">
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
+import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
@@ -509,10 +556,6 @@ watch(portfolioRevision, () => {
   void refreshHoldings();
 });
 
-function signedMoney(value: number): string {
-  return `${value >= 0 ? '+' : '-'}$${fmtNum(Math.abs(value), 0)}`;
-}
-
 /** D-03:priceTime 為 ISO-8601 或 null(mock 端恆為 null),格式化為本地日期時間短格式。 */
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -524,24 +567,32 @@ function fmtDateTime(iso: string | null): string {
 
 /**
  * D-04 明文例外:後端 HoldingDto / PortfolioSummaryDto 都沒有 weight,只能前端衍生。
- * 但分母必須是後端的 summary.totalMarketValue —— 不得改用本頁 holdings 的 qty×price 自行加總。
- * summary 尚未載入(或分母為 0)時回 null,呈現為破折號而非編造 0.0%。
+ * 04.1-16(RESEARCH Q1.4 / Pitfall 3):D-05 之後 summary.totalMarketValue 是**基準幣**,
+ * 而持倉列的 marketValue 仍是**原幣**。分子必須用後端已折好的 marketValueInBase(同為基準幣),
+ * 前端不知道匯率(D-21),只做比值。
+ * 回傳 0..1 的比值;summary 未載入、分母為 0、或 marketValueInBase 為 null(缺匯率)→ null,
+ * 呈現為破折號而非編造 0.0%。
  */
 function holdingWeight(holding: HoldingDto): number | null {
   const s = summary.value;
   if (!s || !Number.isFinite(s.totalMarketValue) || s.totalMarketValue === 0) return null;
-  if (!Number.isFinite(holding.marketValue)) return null;
-  return holding.marketValue / s.totalMarketValue * 100;
+  if (holding.marketValueInBase === null || !Number.isFinite(holding.marketValueInBase)) return null;
+  return holding.marketValueInBase / s.totalMarketValue;
+}
+
+/** 今日損益格的色彩 class:null → fg-dim;其餘依正負(0 視為 up,與同列 P&L 一致)。 */
+function dayPnlClass(holding: HoldingDto): string {
+  if (holding.dayPricePnl === null) return 'day-na';
+  return holding.dayPricePnl >= 0 ? 'day-up' : 'day-dn';
 }
 
 function holdingWeightLabel(holding: HoldingDto): string {
-  const w = holdingWeight(holding);
-  return w === null ? '—' : `${w.toFixed(1)}%`;
+  return fmtWeightPct(holdingWeight(holding));
 }
 
 function holdingWeightWidth(holding: HoldingDto): string {
   const w = holdingWeight(holding);
-  return `${w === null ? 0 : Math.max(0, Math.min(100, w))}%`;
+  return `${w === null ? 0 : Math.max(0, Math.min(100, w * 100))}%`;
 }
 
 // =============== mock mode:以下計算與模板與 Phase 3 之前完全相同 ===============
@@ -596,43 +647,52 @@ const series = computed(() => {
   return genSeries(cfg.n, start, cfg.vol, cfg.seed);
 });
 
-const mockStats = computed(() => {
+/** 彙總卡的共同形狀。ccy 為空字串 = 不渲染代碼 span(mock 與比率卡)。 */
+interface StatCard { l: string; v: string; ccy: string; up: boolean | null; delta: string }
+
+const mockStats = computed<StatCard[]>(() => {
   const cfg = rangeCfg[range.value];
   const pnl = rangePnl.value;
   return [
     {
       l: t(props.lang, 'mktValue'),
       v: '$' + fmtNum(totalVal.value, 0),
+      ccy: '',
       up: null as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'unrealized'),
       v: (pnl >= 0 ? '+' : '−') + '$' + fmtNum(Math.abs(pnl), 0),
+      ccy: '',
       up: pnl >= 0 as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'roi'),
       v: fmtPct(safePct(pnl, totalCost.value)),
+      ccy: '',
       up: pnl >= 0 as boolean | null,
       delta: rangeLabel.value,
     },
     {
       l: t(props.lang, 'sharpe'),
       v: cfg.sharpe,
+      ccy: '',
       up: null as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'annualized'),
       v: cfg.annual,
+      ccy: '',
       up: cfg.annual.startsWith('+') as boolean | null,
       delta: '',
     },
     {
       l: t(props.lang, 'maxDd'),
       v: cfg.dd,
+      ccy: '',
       up: false as boolean | null,
       delta: '',
     },
@@ -643,16 +703,22 @@ const mockStats = computed(() => {
  * API mode 的六張卡全部來自 summary 後端欄位(D-14 授權落點 + D-04);
  * roi 是比值,×100 是顯示格式化而非平行重算。Sharpe / 年化 / MaxDD 三張寫死卡就地被取代(D-16)。
  */
-const apiStats = computed(() => {
+const apiStats = computed<StatCard[]>(() => {
   const s = summary.value;
   if (!s) return [];
+  const base = s.baseCurrency;
+  // 基準幣金額:數值與代碼拆兩個 span(UI-SPEC §Money);非有限值只顯示 —,不帶代碼。
+  const money = (value: number): Pick<StatCard, 'v' | 'ccy'> =>
+    ({ v: fmtMoneyAmount(value, base, 0), ccy: Number.isFinite(value) ? base : '' });
+  const signed = (value: number): Pick<StatCard, 'v' | 'ccy'> =>
+    ({ v: fmtSignedMoneyAmount(value, base, 0), ccy: Number.isFinite(value) ? base : '' });
   return [
-    { l: t(props.lang, 'mktValue'), v: '$' + fmtNum(s.totalMarketValue, 0), up: null as boolean | null, delta: '' },
-    { l: t(props.lang, 'unrealized'), v: signedMoney(s.unrealizedPnl), up: (s.unrealizedPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), up: (s.roi >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'realizedPnl'), v: signedMoney(s.realizedPnl), up: (s.realizedPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'totalPnlLabel'), v: signedMoney(s.totalPnl), up: (s.totalPnl >= 0) as boolean | null, delta: '' },
-    { l: t(props.lang, 'costBasis'), v: '$' + fmtNum(s.totalCostBasis, 0), up: null as boolean | null, delta: '' },
+    { l: t(props.lang, 'mktValue'), ...money(s.totalMarketValue), up: null, delta: '' },
+    { l: t(props.lang, 'unrealized'), ...signed(s.unrealizedPnl), up: s.unrealizedPnl >= 0, delta: '' },
+    { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), ccy: '', up: s.roi >= 0, delta: '' },
+    { l: t(props.lang, 'realizedPnl'), ...signed(s.realizedPnl), up: s.realizedPnl >= 0, delta: '' },
+    { l: t(props.lang, 'totalPnlLabel'), ...signed(s.totalPnl), up: s.totalPnl >= 0, delta: '' },
+    { l: t(props.lang, 'costBasis'), ...money(s.totalCostBasis), up: null, delta: '' },
   ];
 });
 
@@ -676,7 +742,7 @@ const apiTopMovers = computed(() => {
 
 const movers = computed(() => (live ? mockTopMovers.value : apiTopMovers.value));
 
-// Sector breakdown(mock only)
+// Sector breakdown 的分類色輪替與 mock 的 sectorStats(API mode 走 summary.sectorAllocation,見 sectorRows)
 const SECTOR_COLORS = ['var(--accent)', '#3b82f6', '#a855f7', '#f59e0b', '#94a3b8', '#10b981'];
 function sectorColor(i: number) { return SECTOR_COLORS[i % SECTOR_COLORS.length]; }
 
@@ -701,8 +767,68 @@ const sectorStats = computed(() => {
     .sort((a, b) => b.value - a.value);
 });
 
+/**
+ * 產業卡的 view-model(兩模式共用模板)。weight 是 0..100 的 bar 寬度,weightText 是已格式化的標籤。
+ * mock:既有 sectorStats 原樣映射(美元金額、損益 %,輸出與改寫前逐字相同)。
+ * API:summary.sectorAllocation —— 金額與損益都是後端的基準幣值,前端不換匯(D-21);
+ *     損益只顯示金額、不顯示 %(比率要由前端以 pnl / (value − pnl) 推導,違反 Phase 3 D-04「不平行重算」)。
+ */
+interface SectorRow {
+  key: string;
+  label: string;
+  color: string;
+  count: number;
+  valueText: string;
+  weight: number;
+  weightText: string;
+  pnlText: string;
+  pnlUp: boolean;
+  uncategorized: boolean;
+}
+
+const UNCATEGORIZED_COLOR = 'var(--fg-dim)';
+
+const sectorRows = computed<SectorRow[]>(() => {
+  if (live) {
+    return sectorStats.value.map((x, i) => ({
+      key: x.name,
+      label: x.name,
+      color: sectorColor(i),
+      count: x.count,
+      valueText: '$' + fmtNum(x.value, 0),
+      weight: x.weight,
+      weightText: x.weight.toFixed(1) + '%',
+      pnlText: fmtPct(x.pnlPct),
+      pnlUp: x.pnl >= 0,
+      uncategorized: false,
+    }));
+  }
+  const s = summary.value;
+  if (!s) return [];
+  const base = s.baseCurrency;
+  // 後端已依 value 降冪、null 最後;這裡再做一次穩定分割,不把「未分類排最後」押在後端順序上。
+  const classified = s.sectorAllocation.filter(x => x.sector !== null);
+  const unclassified = s.sectorAllocation.filter(x => x.sector === null);
+  return [...classified, ...unclassified].map((x, i) => {
+    const uncategorized = x.sector === null;
+    return {
+      key: uncategorized ? '__uncategorized__' : (x.sector as string),
+      label: uncategorized ? t(props.lang, 'sectorUncategorized') : (x.sector as string),
+      // 未分類固定色、不參與輪替:有分類的組別依序取色,不因為 null 佔掉一格
+      color: uncategorized ? UNCATEGORIZED_COLOR : sectorColor(i),
+      count: x.holdingCount,
+      valueText: fmtMoney(x.value, base, 0),
+      weight: Number.isFinite(x.weight) ? Math.max(0, Math.min(100, x.weight * 100)) : 0,
+      weightText: fmtWeightPct(x.weight),
+      pnlText: fmtSignedMoney(x.unrealizedPnl, base, 0),
+      pnlUp: x.unrealizedPnl >= 0,
+      uncategorized,
+    };
+  });
+});
+
 // Sortable holdings
-type SortKey = 'sym' | 'qty' | 'avg' | 'price' | 'value' | 'pnl' | 'weight';
+type SortKey = 'sym' | 'qty' | 'avg' | 'price' | 'value' | 'pnl' | 'dayPnl' | 'weight';
 const sortKey = ref<SortKey | ''>('value');
 const sortDir = ref<'asc' | 'desc'>('desc');
 
@@ -746,7 +872,14 @@ const sortedHoldings = computed(() => {
       case 'price': va = a.marketPrice; vb = b.marketPrice; break;
       case 'value': va = a.marketValue; vb = b.marketValue; break;
       case 'pnl': va = a.unrealizedPnl; vb = b.unrealizedPnl; break;
-      case 'weight': va = holdingWeight(a) ?? 0; vb = holdingWeight(b) ?? 0; break;
+      // 跨幣別可比的是比率,不是原幣金額;null(缺資料)不論升降冪一律排最後。
+      case 'dayPnl': va = a.dayPricePnlRatio; vb = b.dayPricePnlRatio; break;
+      case 'weight': va = holdingWeight(a); vb = holdingWeight(b); break;
+    }
+    if (k === 'dayPnl' || k === 'weight') {
+      const aMissing = va === null || !Number.isFinite(va);
+      const bMissing = vb === null || !Number.isFinite(vb);
+      if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1;
     }
     if (typeof va === 'number') return (va - vb) * dir;
     return String(va).localeCompare(String(vb)) * dir;
@@ -864,9 +997,13 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .stat { grid-column: span 2; padding: 16px; }
 .stat-l { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
 .stat-v { font-size: 20px; font-weight: 600; margin-top: 6px; letter-spacing: -0.2px; }
+.stat-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .stat-d { font-size: 11px; margin-top: 2px; color: var(--fg-mute); }
+/* 六張統計卡:span 2 在窄螢幕放不下 9 位數金額 + 幣別代碼,會把 main 撐出水平捲動(04.1-19 L5 抓到) */
+@media (max-width: 1279px) { .stat { grid-column: span 4; } }
+@media (max-width: 639px) { .stat { grid-column: span 12; } }
 .chart { padding: 20px; }
-.ttl { font-size: 14px; font-weight: 600; }
+.ttl { font-size: 16px; font-weight: 600; }
 
 /* Top movers */
 .mover { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
@@ -878,7 +1015,10 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 }
 
 /* Sector breakdown */
-.sectors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px 24px; }
+.sectors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px 24px; }
+@media (max-width: 899px) { .sectors { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 559px) { .sectors { grid-template-columns: 1fr; } }
+.sec-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .sec-bar { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
 .sec-fill { height: 100%; transition: width .4s cubic-bezier(.2,.8,.2,1); }
 
@@ -901,6 +1041,18 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   100% { background: transparent; }
 }
 tbody td { padding: 12px 0; }
+/* 相鄰儲存格至少隔 12px(04.1-31):窄螢幕欄寬被壓到最小時,靠右的數字格不再黏在一起;第一欄 padding-left: 16px 不受影響 */
+thead th + th, tbody td + td { padding-left: 12px; }
+/* 04.1-16:幣別標籤(同 Trades.vue 的 .ccy-tag,UI-SPEC §Interaction 7);只有水平內距,不改列高 */
+.ccy-tag {
+  display: inline-block; margin-left: 8px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
+}
+.currency-note { padding: 8px 16px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
+.day-up { color: var(--up); }
+.day-dn { color: var(--dn); }
+.day-na { color: var(--fg-dim); }
 .bar { width: 60px; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--accent); transition: width .3s; }
 

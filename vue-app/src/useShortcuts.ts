@@ -12,6 +12,7 @@ const G_MAP: Record<string, Page> = {
   p: 'positions',
   a: 'analytics',
   t: 'trades',
+  h: 'cash',      // cas(h) —— c 已是 chart
   w: 'watchlist',
   b: 'backtest',
   n: 'notifications',
@@ -22,7 +23,7 @@ const G_MAP: Record<string, Page> = {
 
 const NAV_ORDER: Page[] = [
   'overview', 'markets', 'chart', 'positions', 'analytics',
-  'trades', 'watchlist', 'backtest', 'alerts', 'notifications', 'settings', 'ops',
+  'trades', 'cash', 'watchlist', 'backtest', 'alerts', 'notifications', 'settings', 'ops',
 ];
 
 interface Handlers {

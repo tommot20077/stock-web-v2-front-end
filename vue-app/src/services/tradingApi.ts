@@ -186,6 +186,8 @@ export function createMockTradingApi(): TradingApi {
         price: request.price,
         fee: request.fee,
         note: request.note,
+        // mock 沒有幣別資料,不猜測(畫面不得退回 `$` 或編一個幣別;UI-SPEC U-29)。
+        currency: null,
         // mock store 只保留日期粒度的 `d`(todayStr());回傳使用者實際送出的 executedAt
         // 才是誠實的值 —— 它也是 D-13 高亮與 D-09 成功畫面要顯示的東西。
         executedAt: request.executedAt,

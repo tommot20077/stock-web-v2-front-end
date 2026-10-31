@@ -2,7 +2,7 @@
 export type Lang = 'zh' | 'en';
 export type Theme = 'light' | 'dark';
 export type Density = 'compact' | 'cozy' | 'comfy';
-export type Page = 'overview' | 'markets' | 'positions' | 'analytics' | 'trades' | 'notifications' | 'settings' | 'ops' | 'chart' | 'watchlist' | 'backtest' | 'alerts';
+export type Page = 'overview' | 'markets' | 'positions' | 'analytics' | 'trades' | 'cash' | 'notifications' | 'settings' | 'ops' | 'chart' | 'watchlist' | 'backtest' | 'alerts';
 
 export type AlertCondition = 'above' | 'below' | 'cross_up' | 'cross_down' | 'pct_up' | 'pct_down' | 'vol_spike' | 'news';
 export type AlertStatus = 'active' | 'triggered' | 'muted';

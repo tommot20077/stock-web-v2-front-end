@@ -55,6 +55,7 @@ const nav = [
   { k: 'g p', zh: '持倉', en: 'Positions' },
   { k: 'g a', zh: '分析', en: 'Analytics' },
   { k: 'g t', zh: '交易', en: 'Trades' },
+  { k: 'g h', zh: '現金', en: 'Cash' },
   { k: 'g w', zh: '自選', en: 'Watchlist' },
   { k: 'g b', zh: '回測', en: 'Backtest' },
   { k: 'g l', zh: '警示', en: 'Alerts' },

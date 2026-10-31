@@ -37,7 +37,7 @@
       >{{ c }}</button>
     </div>
 
-    <div class="card" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
+    <div class="card" data-testid="trades-table" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
       <!-- U-05 / U-06:重讀期間保留整張表格,只在區塊頂端加一條指示列 -->
       <div v-if="!live && tradesRefreshing" class="refresh-note" data-testid="trades-refreshing">
         {{ t(lang, 'portfolioRefreshing') }}
@@ -66,6 +66,12 @@
       <div v-if="notInCurrentView" class="view-hint" data-testid="trades-not-in-current-view">
         {{ t(lang, 'tradeNotInCurrentView') }}
       </div>
+      <!-- D-28:各列金額以該筆交易標的的幣別顯示(API mode 才渲染;mock 沒有幣別資料) -->
+      <div
+        v-if="!live && apiTrades.length"
+        class="currency-note"
+        data-testid="trades-currency-note"
+      >{{ t(lang, 'tradesCurrencyNote') }}</div>
       <div v-if="!live && tradesLoading" class="block-state" data-testid="trades-loading">
         {{ t(lang, 'loading') }}
       </div>
@@ -153,8 +159,10 @@
           >
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tradeDate(tr) }}</td>
             <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
-            <td style="font-weight:500">
+            <td style="font-weight:600">
               {{ tr.symbol }}
+              <!-- D-28 / D-30:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
+              <span v-if="tr.currency" class="ccy-tag" data-testid="trades-ccy-tag">{{ tr.currency }}</span>
               <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
               <span
                 v-if="i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym"
@@ -163,9 +171,9 @@
               >{{ t(lang, 'freshBadge') }}</span>
             </td>
             <td class="num" style="text-align:right">{{ tr.quantity }}</td>
-            <td class="num" style="text-align:right">${{ fmtNum(tr.price) }}</td>
-            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.quantity * tr.price, 0) }}</td>
-            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ tr.fee }}</td>
+            <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity * tr.price, tr.currency, 0) }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(tr.fee, tr.currency) }}</td>
             <td style="padding-right:16px;color:var(--fg-dim)">{{ tr.note || '—' }}</td>
           </tr>
         </tbody>
@@ -192,6 +200,7 @@
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t } from '../i18n';
 import { fmtNum } from '../data';
+import { fmtMoneyAmount } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { TradeListParams } from '../services/portfolioApi';
@@ -473,7 +482,9 @@ const filteredTrades = computed(() => {
 });
 
 // =============== CSV ===============
-const CSV_HEADER = ['date', 'type', 'symbol', 'qty', 'price', 'total', 'fee', 'note'];
+// 04.1-14(D-28 / UI-SPEC §Interaction 9):`currency` 緊接 `symbol`,兩模式共用同一份表頭。
+// API 列填 `trade.currency`(缺值為空字串);mock 沒有幣別資料,留空而不猜(U-29)。
+const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,note'.split(',');
 
 type CsvValue = string | number | null | undefined;
 
@@ -519,6 +530,7 @@ async function exportApiCsv() {
       tradeDate(tr),
       tr.type,
       tr.symbol,
+      tr.currency ?? '',
       tr.quantity,
       tr.price,
       tr.quantity * tr.price,
@@ -542,6 +554,7 @@ function exportCsv() {
     tr.d,
     tr.type,
     tr.sym,
+    '',
     tr.qty,
     tr.px,
     tr.qty * tr.px,
@@ -572,7 +585,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   font-family: inherit;
 }
 .chip.active { background: var(--fg); color: var(--bg); border: 0; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
 table { width: 100%; font-size: 13px; }
 thead tr {
   background: var(--surface2); color: var(--fg-dim);
@@ -585,6 +598,12 @@ thead th.s { color: var(--accent); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); transition: background .4s; }
 tbody td { padding: 11px 0; }
+/*
+ * 相鄰儲存格至少隔 12px(04.1-31):欄位在窄螢幕被壓到內容最小寬時,靠右對齊的數字格沒有內距,
+ * 數量 `0.5` 與單價 `60,000.00` 會黏成 `0.560,000.00`。內距加在「前面有同層格」的格子左側,
+ * 第一欄各自的 padding-left: 16px(inline)不受影響;L9 以 >= 6px 量測。
+ */
+thead th + th, tbody td + td { padding-left: 12px; }
 tbody tr.fresh { animation: highlight 1.6s ease-out; }
 @keyframes highlight {
   0% { background: color-mix(in oklch, var(--accent) 22%, transparent); }
@@ -598,6 +617,13 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
+/* D-28:交易列的幣別標籤。與 .fresh-badge 同尺寸規格,line-height 1.2 讓它落在既有 line box 內、不改列高。 */
+.ccy-tag {
+  display: inline-block; margin-left: 8px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
+}
+
 /*
  * U-12:剛成交列的非顏色線索。覆寫 .pill 的內距為**只有水平**:
  * 12px × line-height 1.2 = 14.4px,小於同列 type pill 撐出的行高,
@@ -634,6 +660,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 
 /* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
 .refresh-note { padding: 8px 20px; font-size: 12px; color: var(--fg-dim); }
+/* D-28:幣別說明列(Hint 12px、--fg-dim;padding 8px 16px 對齊 UI-SPEC §Interaction 9) */
+.currency-note { padding: 8px 16px; font-size: 12px; color: var(--fg-dim); }
 .refresh-stale { padding: 14px 20px; font-size: 13px; }
 .refresh-stale .details {
   display: flex; flex-wrap: wrap; gap: 4px 10px;

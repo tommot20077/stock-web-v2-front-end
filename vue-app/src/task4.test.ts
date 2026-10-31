@@ -143,7 +143,10 @@ describe('Task 4 trade flow', () => {
     expect(recentTrades.textContent).not.toContain('NVDA');
 
     clickButtonByText(recentTrades, 'New trade');
-    clickButtonByText(document.body, '→');
+    // 04.1-18:mock 的可用現金卡多了「Cash entries →」連結(含 →),觀察清單的連結改以全文相等定位。
+    const watchlistLink = [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === '→');
+    expect(watchlistLink, 'watchlist → link').toBeTruthy();
+    watchlistLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(events.order).toBe(1);
     expect(events.navigate).toEqual(['watchlist']);
@@ -481,9 +484,9 @@ describe('Task 4 trade flow', () => {
 
     expect(exported).toHaveLength(1);
     const csv = await exported[0].text();
-    expect(csv).toContain('date,type,symbol,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,4,0.5,2,0,cash');
+    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
+    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
     expect(csv).not.toContain('2025-12-31');
   });
 });
