@@ -71,3 +71,13 @@ export function fmtWeightPct(weight: number | null | undefined): string {
   if (!isFiniteNumber(weight)) return MISSING;
   return `${fmtNum(weight * 100, 1)}%`;
 }
+
+/** 帶號股數(Phase 04.2 UI-SPEC §Money)。尚未實作。 */
+export function fmtSignedQuantity(_n: number | null | undefined): string {
+  return '';
+}
+
+/** 不帶號股數。尚未實作。 */
+export function fmtQuantity(_n: number | null | undefined): string {
+  return '';
+}
