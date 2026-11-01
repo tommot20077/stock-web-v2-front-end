@@ -7,6 +7,7 @@ import { createPortfolioApi, type PortfolioApi } from './portfolioApi';
 import { createProfileApi, type ProfileApi } from './profileApi';
 import { createTradingApi, type TradingApi } from './tradingApi';
 import { createMarketApi, type MarketApi } from './marketApi';
+import { createQuoteStream, type QuoteStream } from './quoteStream';
 import type { RuntimeDataMode } from './apiTypes';
 import { getRuntimeDataMode } from './runtimeDataMode';
 
@@ -22,6 +23,8 @@ interface RuntimeApiClients {
   market: MarketApi;
   cash: CashApi;
   profile: ProfileApi;
+  /** 即時報價 WS client(WATCH-04):模組級 singleton,同分頁所有消費者共用一條連線(D-23) */
+  quotes: QuoteStream;
 }
 
 let clients: RuntimeApiClients | null = null;
@@ -29,6 +32,7 @@ let clients: RuntimeApiClients | null = null;
 export function getRuntimeApiClients(basePath = '/api/v1'): RuntimeApiClients {
   const mode = getRuntimeDataMode();
   if (!clients || clients.mode !== mode || clients.basePath !== basePath) {
+    clients?.quotes.dispose();
     clients = {
       mode,
       basePath,
@@ -41,11 +45,13 @@ export function getRuntimeApiClients(basePath = '/api/v1'): RuntimeApiClients {
       market: createMarketApi(mode, basePath),
       cash: createCashApi(mode, basePath),
       profile: createProfileApi(mode, basePath),
+      quotes: createQuoteStream(mode, { basePath }),
     };
   }
   return clients;
 }
 
 export function resetRuntimeApiClientsForTests() {
+  clients?.quotes.dispose();
   clients = null;
 }
