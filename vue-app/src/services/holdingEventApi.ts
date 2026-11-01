@@ -140,6 +140,11 @@ export function resetMockHoldingEventsForTests(): void {
   mockDividends = [];
 }
 
+/** 本 session 由 mock 記錄的事件(尚未實作)。 */
+export function listMockHoldingEventsForTests(): Array<Record<string, unknown> & { id: string }> {
+  return [];
+}
+
 function todayLocal(): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
