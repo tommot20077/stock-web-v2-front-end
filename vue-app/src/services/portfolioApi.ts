@@ -4,6 +4,7 @@ import type {
   AllocationSliceDto,
   HoldingDto,
   PaginatedResponse,
+  PortfolioActivityDto,
   PortfolioSummaryDto,
   RuntimeDataMode,
   SectorAllocationDto,
@@ -26,6 +27,15 @@ export interface TradeListParams {
   /** 預設 20 */
   size?: number;
 }
+
+/**
+ * `GET /api/v1/portfolio/activities` 的參數(PORT-13):參數名與 {@link TradeListParams} 相同,
+ * 只有 `type` / `sort` 的白名單不同(後端 400 `fields.type` / `fields.sort`)。
+ */
+export type ActivityListParams = Omit<TradeListParams, 'type' | 'sort'> & {
+  type?: 'BUY' | 'SELL' | 'DIVIDEND' | 'SHARE_ADJUSTMENT';
+  sort?: 'executedAt' | 'createdAt' | 'total' | 'quantity';
+};
 
 /**
  * mock mode 專用的 reactive 資料視窗。
@@ -51,6 +61,8 @@ export interface PortfolioApi {
   getSummary(): Promise<PortfolioSummaryDto>;
   listHoldings(): Promise<HoldingDto[]>;
   listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
+  /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
+  listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivityDto>>;
   /** 僅 mock 實作提供(Q3 裁決)。 */
   live?: PortfolioLiveMockData;
 }
@@ -230,6 +242,7 @@ export function createMockPortfolioApi(): PortfolioApi {
         totalPages: Math.ceil(matched.length / size),
       };
     },
+    listActivities: async () => ({ items: [], page: 0, size: 0, totalElements: 0, totalPages: 0 }),
   };
 }
 
@@ -250,6 +263,7 @@ export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
         size: params?.size ?? DEFAULT_SIZE,
       })}`,
     ),
+    listActivities: async () => ({ items: [], page: 0, size: 0, totalElements: 0, totalPages: 0 }),
   };
 }
 

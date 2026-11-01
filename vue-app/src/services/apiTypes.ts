@@ -73,6 +73,59 @@ export interface PortfolioSummaryDto {
   allocation: AllocationSliceDto[];
   /** Phase 04.1:依產業的配置(基準幣金額 + 權重比值)。 */
   sectorAllocation: SectorAllocationDto[];
+  /**
+   * Phase 04.2(DIV-02):現金股利收入(基準幣)= Σ 實領淨額(沖銷反號)× 目前匯率;沒有股利時為 0。
+   * 自 04.2 起 `totalPnl` = realizedPnl + unrealizedPnl + dividendIncome,`roi` 因此**含股利**(D-01)。
+   */
+  dividendIncome: number;
+  /** Phase 04.2(DIV-02):預扣稅合計(基準幣);僅供顯示,**不**計入 `totalPnl`(`amount` 已是扣稅後實領)。 */
+  dividendTaxWithheld: number;
+}
+
+/** Phase 04.2(PORT-13):`GET /api/v1/portfolio/activities` 的 `kind`。 */
+export type PortfolioActivityKind = 'BUY' | 'SELL' | 'CASH_DIVIDEND' | 'STOCK_DIVIDEND' | 'SPLIT';
+
+/**
+ * Phase 04.2(PORT-13):對應後端 `PortfolioActivityDto`(交易 / 現金股利 / 股數調整三表 UNION ALL 的一列);
+ * 逐欄同形,勿增刪欄位。不適用於該 kind 的欄位恆為 null(契約〈各 kind 欄位適用表〉)。
+ * 沖銷列的數值欄位輸出**原值**(不反號),以 `reversalOfId != null` 判斷。
+ */
+export interface PortfolioActivityDto {
+  /** 原紀錄 UUID(交易 / 股利 / 股數調整各自的 UUID)。 */
+  id: string;
+  /** 宣告為聯集:未知 kind 代表契約漂移,應在型別層就被看見(與 enum 型欄位宣告為 string 的慣例不同,本欄驅動列渲染分支)。 */
+  kind: PortfolioActivityKind;
+  symbol: string | null;
+  currency: string | null;
+  /** 交易成交時間 / 股利入帳時間 / 股數調整生效 instant。 */
+  occurredAt: string;
+  /** 僅股數調整:除權日 `yyyy-MM-dd`。 */
+  effectiveDate: string | null;
+  createdAt: string;
+  /** 交易數量 / 配股股數 / 拆股 ΔQ(帶號);股利為 null。 */
+  quantity: number | null;
+  /** 僅交易。 */
+  price: number | null;
+  /** 僅交易。 */
+  fee: number | null;
+  /** 交易 = quantity × price;股利 = 實領總額;股數調整為 null。 */
+  amount: number | null;
+  /** 僅股利。 */
+  withholdingTax: number | null;
+  /** 僅拆股。 */
+  ratioNew: number | null;
+  ratioOld: number | null;
+  note: string | null;
+  /** 沖銷列指向的原列 UUID。 */
+  reversalOfId: string | null;
+  /** 原列的 `occurredAt`。 */
+  reversalOfOccurredAt: string | null;
+  /** 原列的 `effectiveDate`(僅股數調整)。 */
+  reversalOfEffectiveDate: string | null;
+  /** 此列是否已被沖銷(交易恆為 false)。 */
+  reversed: boolean;
+  /** 交易恆 false;股利 = 非沖銷列且未被沖銷;股數調整 = 同上且為該標的最晚一筆未沖銷調整。 */
+  reversible: boolean;
 }
 
 /** 對應後端 CashBalanceDto:單一幣別的現金餘額(原幣,可為負)。 */

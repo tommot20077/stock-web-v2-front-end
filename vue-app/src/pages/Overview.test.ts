@@ -46,6 +46,9 @@ const SUMMARY: PortfolioSummaryDto = {
   cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
   allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
   sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
+  // Phase 04.2 欄位(04.2-16 只補型別)
+  dividendIncome: 0,
+  dividendTaxWithheld: 0,
 };
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。

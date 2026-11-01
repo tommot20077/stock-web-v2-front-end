@@ -3,11 +3,14 @@ import {
   apiLastFill,
   bumpPortfolioRevision,
   clearLastCreatedCashEntry,
+  clearLastCreatedHoldingEvent,
   clearLastCreatedTrade,
   clearLastFill,
   lastCreatedCashEntryId,
+  lastCreatedHoldingEventId,
   lastCreatedTradeId,
   notifyCashEntryCreated,
+  notifyHoldingEventCreated,
   notifyTradeCreated,
   portfolioRevision,
   portfolioRevisionCause,
@@ -260,5 +263,78 @@ describe('portfolioRevision — 不是 Pinia store', () => {
     }).not.toThrow();
 
     expect(portfolioRevision.value).toBe(2);
+  });
+});
+
+describe('portfolioRevision — 股利與股數調整的重讀訊號(04.2-16)', () => {
+  it.each(['dividend', 'shareAdjustment'] as const)(
+    'notifyHoldingEventCreated(%s) bumps once, records cause and id, leaves trade / cash signals untouched',
+    cause => {
+      notifyTradeCreated(TRADE_DTO);
+      notifyCashEntryCreated({ id: 'cash-1' });
+      const fillBefore = apiLastFill.value;
+
+      notifyHoldingEventCreated({ id: 'e1' }, cause);
+
+      expect(portfolioRevision.value).toBe(3);
+      expect(portfolioRevisionCause.value).toBe(cause);
+      expect(lastCreatedHoldingEventId.value).toBe('e1');
+      // 股利 / 股數調整不是成交也不是入出金:不得改動那兩組訊號,否則別頁會標出不存在的「新」列。
+      expect(apiLastFill.value).toEqual(fillBefore);
+      expect(lastCreatedTradeId.value).toBe(TRADE_DTO.id);
+      expect(lastCreatedCashEntryId.value).toBe('cash-1');
+    },
+  );
+
+  it('does not invent trade or cash signals when nothing preceded it', () => {
+    notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
+
+    expect(apiLastFill.value).toBeNull();
+    expect(lastCreatedTradeId.value).toBeNull();
+    expect(lastCreatedCashEntryId.value).toBeNull();
+  });
+
+  it('sets id and cause before the bump becomes visible to a sync watcher', async () => {
+    const { watch } = await import('vue');
+    const seen: Array<{ cause: string | null; id: string | null }> = [];
+    const stop = watch(
+      portfolioRevision,
+      () => seen.push({ cause: portfolioRevisionCause.value, id: lastCreatedHoldingEventId.value }),
+      { flush: 'sync' },
+    );
+
+    notifyHoldingEventCreated({ id: 'e2' }, 'shareAdjustment');
+    stop();
+
+    expect(seen).toEqual([{ cause: 'shareAdjustment', id: 'e2' }]);
+  });
+
+  it('clearLastCreatedHoldingEvent only clears the id, leaving revision and cause intact', () => {
+    notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
+
+    clearLastCreatedHoldingEvent();
+
+    expect(lastCreatedHoldingEventId.value).toBeNull();
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('dividend');
+  });
+
+  it('resetPortfolioRevisionForTests clears the holding event id', () => {
+    notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
+
+    resetPortfolioRevisionForTests();
+
+    expect(lastCreatedHoldingEventId.value).toBeNull();
+    expect(portfolioRevisionCause.value).toBeNull();
+  });
+
+  it('rejects direct assignment to lastCreatedHoldingEventId', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
+
+    // @ts-expect-error 唯讀 ref 不得直接賦值
+    lastCreatedHoldingEventId.value = 'forged';
+
+    expect(lastCreatedHoldingEventId.value).toBe('e1');
   });
 });

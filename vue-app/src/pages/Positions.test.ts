@@ -80,6 +80,9 @@ const TRUTH_SUMMARY: PortfolioSummaryDto = {
   cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
   allocation: [{ category: 'STOCK', value: 4242, weight: 1 }],
   sectorAllocation: [{ sector: 'Tech', value: 4242, weight: 1, holdingCount: 1, unrealizedPnl: 1111 }],
+  // Phase 04.2 欄位(04.2-16 只補型別)
+  dividendIncome: 0,
+  dividendTaxWithheld: 0,
 };
 
 function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
@@ -128,6 +131,8 @@ function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryD
     cashBalances: [],
     allocation: [],
     sectorAllocation: [],
+    dividendIncome: 0,
+    dividendTaxWithheld: 0,
     ...over,
   };
 }

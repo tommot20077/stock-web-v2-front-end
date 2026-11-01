@@ -129,6 +129,8 @@ function summaryDto(over: Record<string, unknown> = {}) {
     cashBalances: [{ currency: 'TWD', amount: 880000 }],
     allocation: [],
     sectorAllocation: [],
+    dividendIncome: 0,
+    dividendTaxWithheld: 0,
     ...over,
   };
 }

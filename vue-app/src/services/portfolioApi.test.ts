@@ -1,7 +1,9 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi } from './portfolioApi';
+import { createMockHoldingEventApi, resetMockHoldingEventsForTests } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import type { PortfolioActivityDto } from './apiTypes';
 import type { Trade } from '../types';
 
 const SUMMARY_PAYLOAD = {
@@ -49,6 +51,7 @@ function customTrades(): Trade[] {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  resetMockHoldingEventsForTests();
 });
 
 afterEach(() => {
@@ -233,6 +236,9 @@ describe('portfolioApi mock adapter reads', () => {
       cashBalances: [],
       allocation: [{ category: 'STOCK', value: 1300, weight: 1 }],
       sectorAllocation: [{ sector: 'Tech', value: 1300, weight: 1, holdingCount: 2, unrealizedPnl: 300 }],
+      // 04.2-16:mock KPI 是寫死值、不隨 mock 股利變動(UI-SPEC §Interaction 0 股利附加列在 mock 不渲染),故為 0。
+      dividendIncome: 0,
+      dividendTaxWithheld: 0,
     });
   });
 
@@ -407,5 +413,209 @@ describe('portfolioApi factory', () => {
     expect(mock.live).toBeDefined();
     expect(http.mode).toBe('api');
     expect(http.live).toBeUndefined();
+  });
+});
+
+/** 後端 `PortfolioActivityDto` 的完整欄位集合(已排序)。 */
+const ACTIVITY_FIELDS = [
+  'amount', 'createdAt', 'currency', 'effectiveDate', 'fee', 'id', 'kind', 'note', 'occurredAt', 'price',
+  'quantity', 'ratioNew', 'ratioOld', 'reversalOfEffectiveDate', 'reversalOfId', 'reversalOfOccurredAt',
+  'reversed', 'reversible', 'symbol', 'withholdingTax',
+];
+
+const DIVIDEND_ACTIVITY: PortfolioActivityDto = {
+  id: '11111111-2222-3333-4444-555555555555',
+  kind: 'CASH_DIVIDEND',
+  symbol: 'AAPL',
+  currency: 'USD',
+  occurredAt: '2026-10-30T09:00:00+08:00',
+  effectiveDate: null,
+  createdAt: '2026-10-30T09:00:01+08:00',
+  quantity: null,
+  price: null,
+  fee: null,
+  amount: 120,
+  withholdingTax: 30,
+  ratioNew: null,
+  ratioOld: null,
+  note: null,
+  reversalOfId: null,
+  reversalOfOccurredAt: null,
+  reversalOfEffectiveDate: null,
+  reversed: false,
+  reversible: true,
+};
+
+describe('portfolioApi http adapter — listActivities(PORT-13)', () => {
+  it('calls GET /portfolio/activities with the same parameter names as listTrades', async () => {
+    const pageData = { items: [DIVIDEND_ACTIVITY], page: 2, size: 20, totalElements: 41, totalPages: 3 };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      success: true, data: pageData, error: null, meta: { traceId: 'req_activities' },
+    })));
+
+    const page = await createHttpPortfolioApi('/api/v1').listActivities({
+      type: 'DIVIDEND', sort: 'quantity', direction: 'desc', page: 2, size: 20,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/portfolio/activities?type=DIVIDEND&sort=quantity&direction=desc&page=2&size=20',
+      expect.any(Object),
+    );
+    expect(String(vi.mocked(fetch).mock.calls[0][1]?.method ?? 'GET').toUpperCase()).toBe('GET');
+    expect(page).toEqual(pageData);
+  });
+
+  it('forwards symbol / dateFrom / dateTo and defaults page / size', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      success: true,
+      data: { items: [], page: 0, size: 20, totalElements: 0, totalPages: 0 },
+      error: null,
+      meta: { traceId: 'req_activities' },
+    })));
+    const api = createHttpPortfolioApi('/api/v1');
+
+    await api.listActivities();
+    expect(fetch).toHaveBeenLastCalledWith('/api/v1/portfolio/activities?page=0&size=20', expect.any(Object));
+
+    await api.listActivities({
+      symbol: 'AAPL',
+      type: 'SHARE_ADJUSTMENT',
+      dateFrom: '2026-01-01T00:00:00+08:00',
+      dateTo: '2027-01-01T00:00:00+08:00',
+      sort: 'createdAt',
+      direction: 'asc',
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      '/api/v1/portfolio/activities'
+      + '?symbol=AAPL'
+      + '&type=SHARE_ADJUSTMENT'
+      + '&dateFrom=2026-01-01T00%3A00%3A00%2B08%3A00'
+      + '&dateTo=2027-01-01T00%3A00%3A00%2B08%3A00'
+      + '&sort=createdAt'
+      + '&direction=asc'
+      + '&page=0'
+      + '&size=20',
+      expect.any(Object),
+    );
+  });
+
+  it('preserves backend code / status / requestId on failure envelopes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      success: false,
+      data: null,
+      error: { code: 'VALIDATION_FAILED', message: 'Validation failed', fields: { type: 'invalid' } },
+      meta: { traceId: 'req_bad_type' },
+    }, 400)));
+
+    await expect(createHttpPortfolioApi('/api/v1').listActivities({ type: 'DIVIDEND' })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'VALIDATION_FAILED',
+      status: 400,
+      requestId: 'req_bad_type',
+    });
+  });
+});
+
+describe('portfolioApi mock adapter — listActivities', () => {
+  function seedTrades(): void {
+    const store = useMockPortfolioStore();
+    store.trades = [
+      { d: '2026-03-01', type: 'BUY', sym: 'AAPL', qty: 10, px: 100, fee: 1, note: 'a' },
+      { d: '2026-02-01', type: 'SELL', sym: 'NVDA', qty: 5, px: 200, fee: 2, note: 'b' },
+      { d: '2026-01-15', type: 'DIV', sym: 'AAPL', qty: 120, px: 0.24, fee: 0, note: 'static' },
+    ];
+    store.positions = [{ sym: 'AAPL', name: 'Apple Inc.', qty: 1000, avg: 100, price: 218.4, sector: 'Tech' }];
+  }
+
+  it('maps mock trades to activity rows: static DIV is CASH_DIVIDEND and not reversible', async () => {
+    seedTrades();
+
+    const page = await createMockPortfolioApi().listActivities({ sort: 'executedAt', direction: 'desc' });
+
+    expect(page).toMatchObject({ page: 0, size: 20, totalElements: 3, totalPages: 1 });
+    expect(page.items.map(item => item.kind)).toEqual(['BUY', 'SELL', 'CASH_DIVIDEND']);
+    for (const item of page.items) {
+      expect(Object.keys(item).sort()).toEqual(ACTIVITY_FIELDS);
+      expect(item.reversible).toBe(false);
+      expect(item.reversed).toBe(false);
+    }
+    expect(page.items[0]).toMatchObject({ symbol: 'AAPL', quantity: 10, price: 100, fee: 1, amount: 1000 });
+    expect(page.items[2]).toMatchObject({
+      symbol: 'AAPL', quantity: null, price: null, fee: null, amount: 120 * 0.24, effectiveDate: null,
+    });
+  });
+
+  it('merges events recorded by the mock holdingEventApi exactly once', async () => {
+    seedTrades();
+    const events = createMockHoldingEventApi();
+    const dividend = await events.createDividend(
+      { symbol: 'AAPL', amount: 50, withholdingTax: 5, paidAt: '2026-04-01T09:00:00+08:00' },
+      'k-1',
+    );
+    const split = await events.createShareAdjustment(
+      { symbol: 'AAPL', type: 'SPLIT', ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01' },
+      'k-2',
+    );
+
+    const page = await createMockPortfolioApi().listActivities();
+
+    // 股利事件同時寫了一列 mock DIV 交易;活動列表只能出現一次(以事件本身代表,可沖銷)。
+    expect(page.totalElements).toBe(5);
+    const dividendRow = page.items.find(item => item.id === dividend.id)!;
+    expect(dividendRow).toMatchObject({
+      kind: 'CASH_DIVIDEND', amount: 50, withholdingTax: 5, price: null, fee: null, reversible: true,
+    });
+    const splitRow = page.items.find(item => item.id === split.id)!;
+    expect(splitRow).toMatchObject({
+      kind: 'SPLIT', quantity: 1000, ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01', amount: null, reversible: true,
+    });
+    expect(Object.keys(splitRow).sort()).toEqual(ACTIVITY_FIELDS);
+    expect(page.items.filter(item => item.kind === 'CASH_DIVIDEND')).toHaveLength(2);
+    // 預設 occurredAt desc:最新的拆股排第一。
+    expect(page.items[0].id).toBe(split.id);
+  });
+
+  it('filters by type: DIVIDEND → CASH_DIVIDEND, SHARE_ADJUSTMENT → STOCK_DIVIDEND / SPLIT, BUY / SELL', async () => {
+    seedTrades();
+    const events = createMockHoldingEventApi();
+    await events.createDividend({ symbol: 'AAPL', amount: 50 }, 'k-1');
+    await events.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-05-01' },
+      'k-2',
+    );
+    const api = createMockPortfolioApi();
+
+    expect((await api.listActivities({ type: 'DIVIDEND' })).items.map(item => item.kind))
+      .toEqual(['CASH_DIVIDEND', 'CASH_DIVIDEND']);
+    expect((await api.listActivities({ type: 'SHARE_ADJUSTMENT' })).items.map(item => item.kind))
+      .toEqual(['STOCK_DIVIDEND']);
+    expect((await api.listActivities({ type: 'BUY' })).items.map(item => item.kind)).toEqual(['BUY']);
+    expect((await api.listActivities({ type: 'SELL', symbol: 'NVDA' })).items.map(item => item.kind)).toEqual(['SELL']);
+    expect((await api.listActivities({ symbol: 'NVDA', type: 'BUY' })).items).toEqual([]);
+  });
+
+  it('sorts by total with null amounts last and paginates', async () => {
+    seedTrades();
+    await createMockHoldingEventApi().createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-05-01' },
+      'k-1',
+    );
+    const api = createMockPortfolioApi();
+
+    const ascending = await api.listActivities({ sort: 'total', direction: 'asc' });
+    expect(ascending.items.map(item => item.amount)).toEqual([120 * 0.24, 1000, 1000, null]);
+
+    const second = await api.listActivities({ sort: 'total', direction: 'desc', page: 1, size: 3 });
+    expect(second).toMatchObject({ page: 1, size: 3, totalElements: 4, totalPages: 2 });
+    expect(second.items.map(item => item.amount)).toEqual([null]);
+  });
+
+  it('never touches the network', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await createMockPortfolioApi().listActivities();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

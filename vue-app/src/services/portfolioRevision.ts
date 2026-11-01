@@ -167,6 +167,15 @@ export function clearLastFill(): void {
   lastFill.value = null;
 }
 
+/** 尚未實作(04.2-16 RED 骨架)。 */
+export const lastCreatedHoldingEventId: Readonly<Ref<string | null>> = readonly(ref<string | null>(null));
+
+/** 尚未實作(04.2-16 RED 骨架)。 */
+export function notifyHoldingEventCreated(_event: { id: string }, _cause: 'dividend' | 'shareAdjustment'): void {}
+
+/** 尚未實作(04.2-16 RED 骨架)。 */
+export function clearLastCreatedHoldingEvent(): void {}
+
 /**
  * 測試用的顯式 reset,比照 `pageApiClients.ts:37-39` 的 `resetRuntimeApiClientsForTests`。
  *
