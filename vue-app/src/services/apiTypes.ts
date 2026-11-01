@@ -238,14 +238,15 @@ export interface AssetDto {
   market: string;
   /** 後端 CurrencyCode enum 常數名:USD / TWD / EUR / JPY */
   currency: string;
-  sector: string;
+  /** 資產沒有產業資料時為 null(watchlist-contract〈WatchlistDto〉;FX / 債券 / 加密常見)。 */
+  sector: string | null;
   /** 只有 true 才可送出交易(D-01;後端 `TradingService.resolveTradeableAsset` 是最終權威) */
   tradeable: boolean;
   latestPrice: number | null;
   change: number | null;
   changePercent: number | null;
-  /** 已格式化的成交量字串(例:`52.1M`),後端就是 String,前端不得重算 */
-  volumeText: string;
+  /** 已格式化的成交量字串(例:`52.1M`),後端就是 String,前端不得重算;無量為 null(trading-portfolio-contract〈標的報價欄位〉) */
+  volumeText: string | null;
   high: number | null;
   low: number | null;
 }
