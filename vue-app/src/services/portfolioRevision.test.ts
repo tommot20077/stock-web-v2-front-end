@@ -319,6 +319,16 @@ describe('portfolioRevision — 股利與股數調整的重讀訊號(04.2-16)', 
     expect(portfolioRevisionCause.value).toBe('dividend');
   });
 
+  it('clearing the trade / cash markers never clears the holding event id', () => {
+    notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
+
+    clearLastCreatedTrade();
+    clearLastCreatedCashEntry();
+    clearLastFill();
+
+    expect(lastCreatedHoldingEventId.value).toBe('e1');
+  });
+
   it('resetPortfolioRevisionForTests clears the holding event id', () => {
     notifyHoldingEventCreated({ id: 'e1' }, 'dividend');
 

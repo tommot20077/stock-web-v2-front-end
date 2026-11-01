@@ -45,7 +45,14 @@ import type { TradeDto } from './apiTypes';
  * - `'cash'`:入金 / 出金 / 沖銷建立({@link notifyCashEntryCreated})。
  * - `'baseCurrency'`:基準幣變更(所有金額的換算幣別都變了)。
  */
-export type PortfolioRevisionCause = 'trade' | 'cash' | 'baseCurrency';
+export type PortfolioRevisionCause = 'trade' | 'cash' | 'baseCurrency' | HoldingEventRevisionCause;
+
+/**
+ * Phase 04.2:股利與股數調整各自一個 cause(UI 依此選「股利已記錄」/「股數調整已記錄」的重讀失敗文案)。
+ * - `'dividend'`:現金股利或其沖銷建立({@link notifyHoldingEventCreated})。
+ * - `'shareAdjustment'`:配股 / 拆股 / 合股或其沖銷建立({@link notifyHoldingEventCreated})。
+ */
+export type HoldingEventRevisionCause = 'dividend' | 'shareAdjustment';
 
 /**
  * 「最近一次成交」的摘要,供 Positions / Trades 兩頁的 fresh 高亮使用(D-13)。
@@ -69,6 +76,7 @@ const lastFill = ref<LastFill | null>(null);
 const lastTradeId = ref<string | null>(null);
 const revisionCause = ref<PortfolioRevisionCause | null>(null);
 const lastCashEntryId = ref<string | null>(null);
+const lastHoldingEventId = ref<string | null>(null);
 
 /** D-10:portfolio 三塊的重讀訊號。已掛載的頁 `watch` 它,重跑各自現有的 load 函式。 */
 export const portfolioRevision: Readonly<Ref<number>> = readonly(revision);
@@ -97,6 +105,12 @@ export const lastCreatedTradeId: Readonly<Ref<string | null>> = readonly(lastTra
  * (與 {@link lastCreatedTradeId} 同一型態、同一壽命規則;從 Overview 入金後再進現金頁也看得到)。
  */
 export const lastCreatedCashEntryId: Readonly<Ref<string | null>> = readonly(lastCashEntryId);
+
+/**
+ * 剛建立的股利 / 股數調整紀錄 id(Phase 04.2)。Trades 頁用它在活動列表標示「新」列,
+ * 並在新紀錄不在當前結果集時顯示提示(與 {@link lastCreatedCashEntryId} 同一型態、同一壽命規則)。
+ */
+export const lastCreatedHoldingEventId: Readonly<Ref<string | null>> = readonly(lastHoldingEventId);
 
 /**
  * 交易建立成功後的**唯一**入口:一次呼叫同時產生三個訊號。
@@ -167,14 +181,29 @@ export function clearLastFill(): void {
   lastFill.value = null;
 }
 
-/** 尚未實作(04.2-16 RED 骨架)。 */
-export const lastCreatedHoldingEventId: Readonly<Ref<string | null>> = readonly(ref<string | null>(null));
+/**
+ * 股利 / 股數調整(含沖銷)建立成功後的**唯一**入口(與 {@link notifyCashEntryCreated} 對稱的單一原子動作)。
+ *
+ * **只設 holding event 的訊號**:股利與股數調整不是成交也不是入出金,絕不得碰 `apiLastFill` /
+ * `lastCreatedTradeId` / `lastCreatedCashEntryId`。先設 id 與 cause、最後才 bump。
+ * 契約要求記錄後重讀 summary、holdings 與活動列表 —— 已掛載的頁 watch {@link portfolioRevision} 即可。
+ *
+ * @param event 後端回傳的 `DividendDto` / `ShareAdjustmentDto`(只需要 `id`)。
+ * @param cause `'dividend'` 或 `'shareAdjustment'`,決定重讀失敗時的提示文案。
+ */
+export function notifyHoldingEventCreated(event: { id: string }, cause: HoldingEventRevisionCause): void {
+  lastHoldingEventId.value = event.id;
+  revisionCause.value = cause;
+  revision.value += 1;
+}
 
-/** 尚未實作(04.2-16 RED 骨架)。 */
-export function notifyHoldingEventCreated(_event: { id: string }, _cause: 'dividend' | 'shareAdjustment'): void {}
-
-/** 尚未實作(04.2-16 RED 骨架)。 */
-export function clearLastCreatedHoldingEvent(): void {}
+/**
+ * 清掉「新股利 / 股數調整紀錄」的提示與「新」標記(壽命規則同 {@link clearLastCreatedTrade})。
+ * **只清 `lastCreatedHoldingEventId`**,不動 revision 與 cause。
+ */
+export function clearLastCreatedHoldingEvent(): void {
+  lastHoldingEventId.value = null;
+}
 
 /**
  * 測試用的顯式 reset,比照 `pageApiClients.ts:37-39` 的 `resetRuntimeApiClientsForTests`。
@@ -187,4 +216,5 @@ export function resetPortfolioRevisionForTests(): void {
   lastTradeId.value = null;
   revisionCause.value = null;
   lastCashEntryId.value = null;
+  lastHoldingEventId.value = null;
 }
