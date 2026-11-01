@@ -1,11 +1,14 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  WATCHLIST_MAX_ITEMS,
+  WATCHLIST_MAX_LISTS,
   createHttpWatchlistApi,
   createMockWatchlistApi,
   createWatchlistApi,
   type WatchlistDto,
 } from './watchlistApi';
+import { ApiClientError } from './apiClient';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { AssetDto } from './apiTypes';
 
@@ -270,5 +273,251 @@ describe('createWatchlistApi', () => {
   it('selects the implementation by mode', () => {
     expect(createWatchlistApi('api').mode).toBe('api');
     expect(createWatchlistApi('mock').mode).toBe('mock');
+  });
+});
+
+async function thrownBy(promise: Promise<unknown>): Promise<ApiClientError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiClientError);
+    return error as ApiClientError;
+  }
+  throw new Error('expected promise to reject');
+}
+
+async function expectApiError(
+  promise: Promise<unknown>,
+  expected: { status: number; code: string; fields?: Record<string, string> | null },
+): Promise<void> {
+  const error = await thrownBy(promise);
+  expect(error.status).toBe(expected.status);
+  expect(error.code).toBe(expected.code);
+  if (expected.fields === null) {
+    expect(error.fields).toBeNull();
+  } else if (expected.fields) {
+    expect(Object.keys(error.fields ?? {}).sort()).toEqual(Object.keys(expected.fields).sort());
+  }
+}
+
+/** 把 store 灌到指定清單數,用來逼近 20 上限。 */
+function fillLists(count: number): void {
+  const store = useMockPortfolioStore();
+  store.watchlists = Array.from({ length: count }, (_, index) => ({ id: `l${index}`, name: `List ${index}`, syms: [] }));
+}
+
+describe('mock store watchlist actions(D-15)', () => {
+  it('renameWatchlist / deleteWatchlist / setWatchlistOrder mutate the store', () => {
+    const store = useMockPortfolioStore();
+
+    store.renameWatchlist('core', '長線');
+    store.setWatchlistOrder('core', ['MSFT', 'AAPL', 'NVDA', '2330.TW']);
+    store.deleteWatchlist('crypto');
+
+    expect(store.watchlists.map(list => list.name)).toEqual(['長線', 'AI 概念']);
+    expect(store.watchlists[0].syms).toEqual(['MSFT', 'AAPL', 'NVDA', '2330.TW']);
+  });
+
+  it('existing actions keep their behaviour', () => {
+    const store = useMockPortfolioStore();
+
+    store.toggleWatch('TSLA');
+    expect(store.watchlists[0].syms[0]).toBe('TSLA');
+    store.moveWatchSymbol('core', 0, 1);
+    expect(store.watchlists[0].syms.slice(0, 2)).toEqual(['AAPL', 'TSLA']);
+  });
+});
+
+describe('watchlistApi mock adapter — list(D-17)', () => {
+  it('rebuilds the default list when the store has none', async () => {
+    useMockPortfolioStore().watchlists = [];
+
+    const lists = await createMockWatchlistApi().list();
+
+    expect(lists).toHaveLength(1);
+    expect(lists[0].name).toBe('我的自選');
+    expect(lists[0].items).toEqual([]);
+    expect(useMockPortfolioStore().watchlists).toHaveLength(1);
+  });
+
+  it('projects FX, bond and unknown symbols with contract nulls', async () => {
+    const store = useMockPortfolioStore();
+    store.watchlists = [{ id: 'x', name: 'Mixed', syms: ['USD/TWD', 'US10Y', 'ZZZZ'] }];
+
+    const [list] = await createMockWatchlistApi().list();
+    const [fx, bond, unknown] = list.items;
+
+    expect(fx).toMatchObject({ symbol: 'USD/TWD', assetType: 'FX', tradeable: false, latestPrice: 32.418, volumeText: null });
+    expect(bond).toMatchObject({
+      symbol: 'US10Y', assetType: 'BOND', tradeable: false, latestPrice: 4.218, change: 0.014,
+      changePercent: null, volumeText: null, high: null, low: null, sector: null,
+    });
+    expect(unknown).toMatchObject({
+      symbol: 'ZZZZ', latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
+    });
+    for (const item of list.items) expect(Object.keys(item).sort()).toEqual(ASSET_DTO_FIELDS);
+  });
+
+  it('returns clones that do not leak back into the store', async () => {
+    const api = createMockWatchlistApi();
+    const [first] = await api.list();
+
+    first.name = 'tampered';
+    first.items.pop();
+
+    const [again] = await api.list();
+    expect(again.name).toBe('核心持倉');
+    expect(again.items).toHaveLength(4);
+  });
+});
+
+describe('watchlistApi mock adapter — create', () => {
+  it('trims the name and appends an empty list', async () => {
+    const api = createMockWatchlistApi();
+
+    const created = await api.create('  科技  ');
+
+    expect(created.name).toBe('科技');
+    expect(created.items).toEqual([]);
+    const lists = await api.list();
+    expect(lists.map(list => list.name)).toEqual(['核心持倉', 'Crypto', 'AI 概念', '科技']);
+    expect(lists[3].id).toBe(created.id);
+  });
+
+  it('rejects blank or over-30 names with fields.name', async () => {
+    const api = createMockWatchlistApi();
+
+    await expectApiError(api.create('   '), { status: 400, code: 'VALIDATION_FAILED', fields: { name: '' } });
+    await expectApiError(api.create('x'.repeat(31)), { status: 400, code: 'VALIDATION_FAILED', fields: { name: '' } });
+    await expect(api.create('x'.repeat(30))).resolves.toMatchObject({ name: 'x'.repeat(30) });
+  });
+
+  it('rejects a duplicate name with DUPLICATE_RESOURCE', async () => {
+    await expectApiError(createMockWatchlistApi().create(' 核心持倉 '), {
+      status: 409, code: 'DUPLICATE_RESOURCE', fields: { name: '' },
+    });
+  });
+
+  it('rejects the 21st list with fields.watchlists before the duplicate check', async () => {
+    fillLists(WATCHLIST_MAX_LISTS);
+    const api = createMockWatchlistApi();
+
+    await expectApiError(api.create('New'), { status: 400, code: 'VALIDATION_FAILED', fields: { watchlists: '' } });
+    await expectApiError(api.create('List 0'), { status: 400, code: 'VALIDATION_FAILED', fields: { watchlists: '' } });
+    await expectApiError(api.create(''), { status: 400, code: 'VALIDATION_FAILED', fields: { name: '' } });
+    expect(useMockPortfolioStore().watchlists).toHaveLength(WATCHLIST_MAX_LISTS);
+  });
+
+  it('ensures the default list exists before creating on an empty store', async () => {
+    useMockPortfolioStore().watchlists = [];
+    const api = createMockWatchlistApi();
+
+    await api.create('科技');
+
+    expect((await api.list()).map(list => list.name)).toEqual(['我的自選', '科技']);
+  });
+});
+
+describe('watchlistApi mock adapter — rename / remove', () => {
+  it('renames with trim and allows keeping its own name', async () => {
+    const api = createMockWatchlistApi();
+
+    await expect(api.rename('core', ' 長線 ')).resolves.toMatchObject({ id: 'core', name: '長線' });
+    await expect(api.rename('core', '長線')).resolves.toMatchObject({ name: '長線' });
+    expect(useMockPortfolioStore().watchlists[0].name).toBe('長線');
+  });
+
+  it('rename errors follow the backend order', async () => {
+    const api = createMockWatchlistApi();
+
+    await expectApiError(api.rename('missing', ''), { status: 400, code: 'VALIDATION_FAILED', fields: { name: '' } });
+    await expectApiError(api.rename('missing', 'X'), { status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null });
+    await expectApiError(api.rename('core', 'Crypto'), { status: 409, code: 'DUPLICATE_RESOURCE', fields: { name: '' } });
+  });
+
+  it('removes a list and rebuilds the default after the last one is gone', async () => {
+    const api = createMockWatchlistApi();
+
+    await expect(api.remove('crypto')).resolves.toBeUndefined();
+    expect((await api.list()).map(list => list.id)).toEqual(['core', 'watchAI']);
+    await expectApiError(api.remove('crypto'), { status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null });
+
+    await api.remove('core');
+    await api.remove('watchAI');
+    const rebuilt = await api.list();
+    expect(rebuilt.map(list => list.name)).toEqual(['我的自選']);
+  });
+});
+
+describe('watchlistApi mock adapter — items', () => {
+  it('addItem is idempotent and accepts FX / bonds', async () => {
+    const api = createMockWatchlistApi();
+
+    const same = await api.addItem('core', 'NVDA');
+    expect(same.items.map(item => item.symbol)).toEqual(['AAPL', 'NVDA', '2330.TW', 'MSFT']);
+
+    const withFx = await api.addItem('core', 'USD/TWD');
+    const withBond = await api.addItem('core', 'US10Y');
+    expect(withFx.items.at(-1)?.symbol).toBe('USD/TWD');
+    expect(withBond.items.map(item => item.symbol)).toEqual(['AAPL', 'NVDA', '2330.TW', 'MSFT', 'USD/TWD', 'US10Y']);
+  });
+
+  it('addItem errors: blank symbol, missing list, unknown asset, 101st item', async () => {
+    const api = createMockWatchlistApi();
+
+    await expectApiError(api.addItem('core', '  '), { status: 400, code: 'VALIDATION_FAILED', fields: { symbol: '' } });
+    await expectApiError(api.addItem('missing', 'AAPL'), { status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null });
+    await expectApiError(api.addItem('core', 'NOPE'), { status: 404, code: 'ASSET_NOT_FOUND', fields: { symbol: '' } });
+
+    const store = useMockPortfolioStore();
+    store.watchlists[0].syms = Array.from({ length: WATCHLIST_MAX_ITEMS }, (_, index) => `S${index}`);
+    await expectApiError(api.addItem('core', 'AAPL'), { status: 400, code: 'VALIDATION_FAILED', fields: { items: '' } });
+    expect(store.watchlists[0].syms).toHaveLength(WATCHLIST_MAX_ITEMS);
+    // 已在清單中的代號照冪等語義原樣回傳,即使已滿。
+    await expect(api.addItem('core', 'S0')).resolves.toMatchObject({ id: 'core' });
+  });
+
+  it('removeItem removes by asset uuid and is idempotent', async () => {
+    const api = createMockWatchlistApi();
+    const [core] = await api.list();
+    const nvda = core.items[1];
+
+    const after = await api.removeItem('core', nvda.uuid);
+    expect(after.items.map(item => item.symbol)).toEqual(['AAPL', '2330.TW', 'MSFT']);
+    expect(useMockPortfolioStore().watchlists[0].syms).toEqual(['AAPL', '2330.TW', 'MSFT']);
+
+    const again = await api.removeItem('core', nvda.uuid);
+    expect(again.items.map(item => item.symbol)).toEqual(['AAPL', '2330.TW', 'MSFT']);
+    await expectApiError(api.removeItem('missing', nvda.uuid), { status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null });
+  });
+
+  it('reorder rewrites the order when the set matches', async () => {
+    const api = createMockWatchlistApi();
+    const [core] = await api.list();
+    const reversed = [...core.items].reverse().map(item => item.uuid);
+
+    const dto = await api.reorder('core', reversed);
+
+    expect(dto.items.map(item => item.symbol)).toEqual(['MSFT', '2330.TW', 'NVDA', 'AAPL']);
+    expect(useMockPortfolioStore().watchlists[0].syms).toEqual(['MSFT', '2330.TW', 'NVDA', 'AAPL']);
+  });
+
+  it('reorder rejects missing / extra / duplicate ids with WATCHLIST_ORDER_CONFLICT', async () => {
+    const api = createMockWatchlistApi();
+    const [core] = await api.list();
+    const ids = core.items.map(item => item.uuid);
+    const conflict = { status: 409, code: 'WATCHLIST_ORDER_CONFLICT', fields: null };
+
+    await expectApiError(api.reorder('core', ids.slice(1)), conflict);
+    await expectApiError(api.reorder('core', [...ids, 'mock-asset-TSLA']), conflict);
+    await expectApiError(api.reorder('core', [ids[0], ids[0], ids[1], ids[2]]), conflict);
+    await expectApiError(api.reorder('missing', ids), { status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null });
+    expect(useMockPortfolioStore().watchlists[0].syms).toEqual(['AAPL', 'NVDA', '2330.TW', 'MSFT']);
+  });
+
+  it('addItem on a missing list no longer crashes the mock', async () => {
+    await expectApiError(createMockWatchlistApi().addItem('nope', 'AAPL'), {
+      status: 404, code: 'WATCHLIST_NOT_FOUND', fields: null,
+    });
   });
 });

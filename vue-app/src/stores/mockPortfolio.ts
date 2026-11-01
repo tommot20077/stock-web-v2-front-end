@@ -51,6 +51,15 @@ export const useMockPortfolioStore = defineStore('mockPortfolio', {
       const list = this.watchlists.find(l => l.id === listId);
       if (list) list.syms = list.syms.filter(s => s !== sym);
     },
+    renameWatchlist(_id: string, _name: string) {
+      // RED 骨架:尚未實作
+    },
+    deleteWatchlist(_id: string) {
+      // RED 骨架:尚未實作
+    },
+    setWatchlistOrder(_id: string, _syms: string[]) {
+      // RED 骨架:尚未實作
+    },
     moveWatchSymbol(listId: string, from: number, to: number) {
       const list = this.watchlists.find(l => l.id === listId);
       if (!list || from < 0 || to < 0 || from >= list.syms.length || to >= list.syms.length) return;
