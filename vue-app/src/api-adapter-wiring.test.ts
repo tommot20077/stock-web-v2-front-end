@@ -12,6 +12,7 @@ import {
   rowByText,
   unmountAll,
 } from './testUtils';
+import { createFakeSocketFactory } from './testing/fakeWebSocket';
 
 const mockFactoryCalls = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -23,6 +24,7 @@ const mockFactoryCalls = vi.hoisted(() => ({
   market: vi.fn(),
   cash: vi.fn(),
   profile: vi.fn(),
+  quotes: vi.fn(),
 }));
 
 afterEach(() => {
@@ -36,6 +38,7 @@ afterEach(() => {
   mockFactoryCalls.market.mockReset();
   mockFactoryCalls.cash.mockReset();
   mockFactoryCalls.profile.mockReset();
+  mockFactoryCalls.quotes.mockReset();
   vi.doUnmock('./services/authApi');
   vi.doUnmock('./services/aiAccessApi');
   vi.doUnmock('./services/backtestApi');
@@ -45,6 +48,7 @@ afterEach(() => {
   vi.doUnmock('./services/marketApi');
   vi.doUnmock('./services/cashApi');
   vi.doUnmock('./services/profileApi');
+  vi.doUnmock('./services/quoteStream');
 });
 
 describe('page API adapter wiring', () => {
@@ -269,6 +273,45 @@ describe('page API adapter wiring', () => {
     expect(mockFactoryCalls.market).not.toHaveBeenCalled();
     expect(mockFactoryCalls.cash).not.toHaveBeenCalled();
     expect(mockFactoryCalls.profile).not.toHaveBeenCalled();
+  });
+
+  it('quotes:API mode 是 WS 串流且不呼叫 mock 推播 factory;mock mode 為 mock;reset 會 dispose 舊串流(WATCH-04 / D-24)', async () => {
+    const sockets = createFakeSocketFactory();
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.doMock('./services/quoteStream', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/quoteStream')>();
+      return {
+        ...actual,
+        createMockQuoteStream: mockFactoryCalls.quotes,
+        // 只替換 transport 替身(socket / ticket),其餘走真實 createQuoteStream。
+        createQuoteStream: (...args: Parameters<typeof actual.createQuoteStream>) => actual.createQuoteStream(args[0], {
+          ...args[1],
+          socketFactory: sockets.factory,
+          issueTicket: async () => ({ ticket: 'tk_wiring', expiresIn: 30, wsUrl: '/ws/v1/market' }),
+        }),
+      };
+    });
+
+    const apiModule = await import('./services/pageApiClients');
+    const apiClients = apiModule.getRuntimeApiClients();
+
+    expect(apiClients.quotes?.mode).toBe('api');
+    expect(mockFactoryCalls.quotes).not.toHaveBeenCalled();
+
+    apiClients.quotes.watch(['AAPL']);
+    await flushAsync();
+    expect(sockets.sockets).toHaveLength(1);
+    sockets.last().serverOpen();
+
+    apiModule.resetRuntimeApiClientsForTests();
+    expect(sockets.last().closedWith).not.toBeNull();
+
+    vi.doUnmock('./services/quoteStream');
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    const mockClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
+    expect(mockClients.quotes?.mode).toBe('mock');
   });
 
   it('exposes live mock trading data only in mock mode', async () => {
