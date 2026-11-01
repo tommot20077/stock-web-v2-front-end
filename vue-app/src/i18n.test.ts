@@ -393,8 +393,9 @@ const PHASE42_FORBIDDEN_ZH = ['公司行動', '帳戶餘額'];
 const PHASE42_FORBIDDEN_EN = ['corporate action', 'account balance'];
 // 鐵律 5:股利與股數調整不是下單;唯一允許的是 holdingEventLedgerOnlyNote 的否定句。
 const PHASE42_ORDER_ALLOWED = ['holdingEventLedgerOnlyNote'];
-// 觀察清單「排序」語意的 order(清單順序,不是委託單):UI-SPEC 逐字文案,僅限 en 的 order 單字豁免。
-const PHASE42_LIST_ORDER_KEYS = ['watchlistReorderSaving', 'watchlistErrOrderConflict'];
+// 「順序」語意的 order(清單排序、依日期先後,不是委託單):UI-SPEC 逐字文案,僅豁免 en 的 order 單字;
+// zh 的下單 / 委託 / 掛單仍照擋。
+const PHASE42_SEQUENCE_ORDER_KEYS = ['watchlistReorderSaving', 'watchlistErrOrderConflict', 'holdingEventEffectiveDateHint'];
 // D-23:「即時 / live」只出現在即時狀態用鍵(liveQuote*)與說明 ● 即時標記的 watchlistQuoteNote。
 const PHASE42_LIVE_ALLOWED = (key: string): boolean => key.startsWith('liveQuote') || key === 'watchlistQuoteNote';
 
@@ -667,7 +668,7 @@ describe('i18n phase 04.2 copy', () => {
       for (const term of ['下單', '委託', '掛單']) {
         expect(zh.includes(term), `zh.${key} 含下單語義「${term}」:${zh}`).toBe(false);
       }
-      if (!PHASE42_LIST_ORDER_KEYS.includes(key)) {
+      if (!PHASE42_SEQUENCE_ORDER_KEYS.includes(key)) {
         expect(/\border\b/.test(en), `en.${key} contains the word "order": ${en}`).toBe(false);
       }
     }
