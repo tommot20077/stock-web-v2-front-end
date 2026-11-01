@@ -26,6 +26,7 @@ const mockFactoryCalls = vi.hoisted(() => ({
   profile: vi.fn(),
   quotes: vi.fn(),
   holdingEvents: vi.fn(),
+  watchlist: vi.fn(),
 }));
 
 afterEach(() => {
@@ -41,6 +42,7 @@ afterEach(() => {
   mockFactoryCalls.profile.mockReset();
   mockFactoryCalls.quotes.mockReset();
   mockFactoryCalls.holdingEvents.mockReset();
+  mockFactoryCalls.watchlist.mockReset();
   vi.doUnmock('./services/authApi');
   vi.doUnmock('./services/aiAccessApi');
   vi.doUnmock('./services/backtestApi');
@@ -52,6 +54,7 @@ afterEach(() => {
   vi.doUnmock('./services/profileApi');
   vi.doUnmock('./services/quoteStream');
   vi.doUnmock('./services/holdingEventApi');
+  vi.doUnmock('./services/watchlistApi');
 });
 
 describe('page API adapter wiring', () => {
@@ -299,6 +302,29 @@ describe('page API adapter wiring', () => {
     vi.stubEnv('VITE_DATA_MODE', 'mock');
     const mockClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
     expect(mockClients.holdingEvents?.mode).toBe('mock');
+  });
+
+  it('watchlist:API mode 走 HTTP 且不呼叫 mock factory;mock mode 為 mock(T-04.2-40)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.doMock('./services/watchlistApi', async importOriginal => {
+      const actual = await importOriginal<typeof import('./services/watchlistApi')>();
+      return {
+        ...actual,
+        createMockWatchlistApi: mockFactoryCalls.watchlist,
+      };
+    });
+
+    const apiClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
+
+    expect(apiClients.watchlist?.mode).toBe('api');
+    expect(mockFactoryCalls.watchlist).not.toHaveBeenCalled();
+
+    vi.doUnmock('./services/watchlistApi');
+    vi.resetModules();
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    const mockClients = (await import('./services/pageApiClients')).getRuntimeApiClients();
+    expect(mockClients.watchlist?.mode).toBe('mock');
   });
 
   it('quotes:API mode 是 WS 串流且不呼叫 mock 推播 factory;mock mode 為 mock;reset 會 dispose 舊串流(WATCH-04 / D-24)', async () => {
