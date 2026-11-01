@@ -1,4 +1,5 @@
-import { ApiClientError } from './apiClient';
+import { ApiClientError, apiRequest } from './apiClient';
+import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { RuntimeDataMode } from './apiTypes';
 
 /**
@@ -83,27 +84,102 @@ export interface HoldingEventApi {
   createShareAdjustment(request: CreateShareAdjustmentRequest, idempotencyKey: string): Promise<ShareAdjustmentDto>;
 }
 
-function notImplemented(): never {
-  throw new ApiClientError({ status: 501, code: 'NOT_IMPLEMENTED', message: 'Not implemented' });
-}
-
-export function createHttpHoldingEventApi(_basePath = '/api/v1'): HoldingEventApi {
+/**
+ * 寫入形狀照 `cashApi.createEntry`:CSRF header、cookie 憑證、401 單飛 refresh + 一次 replay
+ * 全由 apiClient 處理;replay 使用同一份 options,所以同一把 key 自動沿用。
+ *
+ * body 逐欄投影而不是整包轉送(T-04.2-37):TypeScript 的 excess property check 只對物件字面量生效,
+ * 呼叫端若把整包表單狀態傳進來,多餘欄位會原封不動送到後端。可省略的欄位一律補成明確的 null,
+ * 讓同一把 key 重試時 payload 逐位元穩定。
+ *
+ * key 是參數不是 adapter 自產 ——「哪一次算同一次嘗試」只有 UI 層知道。
+ */
+export function createHttpHoldingEventApi(basePath = '/api/v1'): HoldingEventApi {
   return {
     mode: 'api',
-    createDividend: async () => notImplemented(),
-    createShareAdjustment: async () => notImplemented(),
+    createDividend: (request, idempotencyKey) => apiRequest<DividendDto>(`${basePath}/portfolio/dividends`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      json: {
+        symbol: request.symbol,
+        amount: request.amount,
+        withholdingTax: request.withholdingTax ?? null,
+        paidAt: request.paidAt ?? null,
+        note: request.note ?? null,
+        reversalOfId: request.reversalOfId ?? null,
+      },
+    }),
+    createShareAdjustment: (request, idempotencyKey) => apiRequest<ShareAdjustmentDto>(
+      `${basePath}/portfolio/share-adjustments`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        json: {
+          symbol: request.symbol,
+          type: request.type,
+          quantity: request.quantity ?? null,
+          ratioNew: request.ratioNew ?? null,
+          ratioOld: request.ratioOld ?? null,
+          effectiveDate: request.effectiveDate,
+          note: request.note ?? null,
+          reversalOfId: request.reversalOfId ?? null,
+        },
+      },
+    ),
   };
+}
+
+/**
+ * mock 宇宙(data.ts)是美股報價,mock 持倉幣別一律 USD(與 `portfolioApi.ts` 的 `MOCK_CURRENCY` 同義)。
+ */
+const MOCK_CURRENCY = 'USD';
+
+let mockDividends: DividendDto[] = [];
+
+export function resetMockHoldingEventsForTests(): void {
+  mockDividends = [];
+}
+
+function todayLocal(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 export function createMockHoldingEventApi(): HoldingEventApi {
   return {
     mode: 'mock',
-    createDividend: async () => notImplemented(),
-    createShareAdjustment: async () => notImplemented(),
+    async createDividend(request) {
+      const now = new Date().toISOString();
+      const dto: DividendDto = {
+        id: crypto.randomUUID(),
+        symbol: request.symbol,
+        currency: MOCK_CURRENCY,
+        amount: request.amount,
+        withholdingTax: request.withholdingTax ?? 0,
+        paidAt: request.paidAt ?? now,
+        createdAt: now,
+        note: request.note ?? null,
+        reversalOfId: request.reversalOfId ?? null,
+        reversed: false,
+      };
+      mockDividends.push(dto);
+      useMockPortfolioStore().trades.unshift({
+        d: (request.paidAt ?? todayLocal()).slice(0, 10),
+        type: 'DIV',
+        sym: request.symbol,
+        qty: 1,
+        px: request.amount,
+        fee: 0,
+        note: request.note ?? '',
+      });
+      return structuredClone(dto);
+    },
+    async createShareAdjustment() {
+      throw new ApiClientError({ status: 501, code: 'NOT_IMPLEMENTED', message: 'Not implemented' });
+    },
   };
 }
-
-export function resetMockHoldingEventsForTests(): void {}
 
 export function createHoldingEventApi(mode: RuntimeDataMode, basePath = '/api/v1'): HoldingEventApi {
   return mode === 'api' ? createHttpHoldingEventApi(basePath) : createMockHoldingEventApi();

@@ -1,3 +1,4 @@
+import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createHoldingEventApi,
@@ -99,6 +100,8 @@ function bodyAt(index: number): Record<string, unknown> {
 }
 
 beforeEach(() => {
+  // mock 實作直接讀寫 mock portfolio store;每個測試一個乾淨的 pinia。
+  setActivePinia(createPinia());
   resetMockHoldingEventsForTests();
   // 預先種 CSRF cookie,避免 apiClient 先打 /csrf bootstrap 讓呼叫序失去可讀性。
   document.cookie = 'XSRF-TOKEN=csrf-holding; path=/';
