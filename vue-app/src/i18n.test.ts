@@ -198,6 +198,206 @@ const PHASE4_TRADE_KEYS = [
   'tradeRecordedToast',
 ];
 
+// Phase 04.2 股利、股數調整、觀察清單與即時報價的全部新文案(135 個),權威來源是
+// `.planning/phases/04.2-.../04.2-UI-SPEC.md` §Copywriting Contract(另加 §Interaction Contract 的
+// positionsActionsHeader)。既有鍵改寫(dayPnlNote、tradeErrExecutedAt)不在此清單,另有斷言。
+const PHASE42_KEYS = [
+  // 動作與標題(48)
+  'holdingEventTitle',
+  'holdingEventRowAction',
+  'holdingEventRowActionAria',
+  'holdingEventModeCashDividend',
+  'holdingEventModeStockDividend',
+  'holdingEventModeSplit',
+  'holdingEventRecordCashDividend',
+  'holdingEventRecordStockDividend',
+  'holdingEventRecordSplit',
+  'holdingEventCashDividendRecorded',
+  'holdingEventStockDividendRecorded',
+  'holdingEventSplitRecorded',
+  'holdingEventReverseSplitRecorded',
+  'closeHoldingEventDialog',
+  'tradesRecordDividend',
+  'tradesRecordShareAdjustment',
+  'tradesReverseAria',
+  'holdingEventIrreversibleNote',
+  'holdingEventLedgerOnlyNote',
+  'holdingEventReversalNoteDividend',
+  'holdingEventReversalNoteAdjustment',
+  'holdingEventReversalPreviewDividend',
+  'holdingEventReversalPreviewAdjustment',
+  'watchlistNewList',
+  'watchlistCreate',
+  'watchlistCreateAndAdd',
+  'watchlistRename',
+  'watchlistSaveName',
+  'watchlistDelete',
+  'watchlistDeleteConfirm',
+  'watchlistDeleteLastNote',
+  'watchlistReorder',
+  'watchlistReorderDone',
+  'watchlistMoveUp',
+  'watchlistMoveDown',
+  'watchlistMovedAnnounce',
+  'watchlistRemoveAria',
+  'watchlistPickerTitle',
+  'watchlistStarAdd',
+  'watchlistStarManage',
+  'closeWatchlistPicker',
+  'chartWatchAdd',
+  'chartWatchIn',
+  'liveQuoteReconnectHere',
+  'overviewWatchlistGo',
+  'overviewWatchlistMore',
+  'cashDividendNote',
+  'cashDividendLink',
+  // 欄位標籤與說明(22)
+  'holdingEventAmount',
+  'holdingEventAmountHint',
+  'holdingEventAmountHintNoSymbol',
+  'holdingEventTax',
+  'holdingEventTaxHint',
+  'holdingEventPaidAt',
+  'holdingEventPaidAtHint',
+  'holdingEventShares',
+  'holdingEventSharesHint',
+  'holdingEventCurrentQty',
+  'holdingEventRatio',
+  'holdingEventRatioNew',
+  'holdingEventRatioOld',
+  'holdingEventRatioHint',
+  'holdingEventRatioReadSplit',
+  'holdingEventRatioReadReverse',
+  'holdingEventEffectiveDate',
+  'holdingEventEffectiveDateHint',
+  'holdingEventNoteCash',
+  'holdingEventNoteStock',
+  'holdingEventNoteSplit',
+  'holdingEventQtyDelta',
+  // 列表、摘要與觀察清單(28)
+  'tradesChipAll',
+  'tradesChipBuy',
+  'tradesChipSell',
+  'tradesChipDividend',
+  'tradesChipShareAdjustment',
+  'activityKindCashDividend',
+  'activityKindStockDividend',
+  'activityKindSplit',
+  'activityKindReverseSplit',
+  'tradesTaxLine',
+  'tradesActivityNotInView',
+  'dividendIncomeLine',
+  'dividendIncomeLineWithTax',
+  'mockDataNoticeExceptWatchlist',
+  'watchlistListName',
+  'watchlistNameHint',
+  'watchlistCount',
+  'watchlistItemsFull',
+  'watchlistListsLimitReached',
+  'watchlistQuoteNote',
+  'watchlistReorderSaving',
+  'liveQuoteConnecting',
+  'liveQuoteLive',
+  'liveQuoteDegraded',
+  'liveQuoteClosed',
+  'liveQuoteReplaced',
+  'liveQuoteReplacedHint',
+  'liveQuoteRowLive',
+  // 空狀態(8)
+  'tradesDividendEmpty',
+  'tradesDividendEmptyBody',
+  'tradesShareAdjustmentEmpty',
+  'tradesShareAdjustmentEmptyBody',
+  'watchlistEmpty',
+  'watchlistEmptyBody',
+  'watchlistGoMarkets',
+  'overviewWatchlistEmpty',
+  // 股利與股數調整對話框錯誤(16)
+  'holdingEventErrSymbol',
+  'holdingEventErrAmount',
+  'holdingEventErrTax',
+  'holdingEventErrPaidAt',
+  'holdingEventErrShares',
+  'holdingEventErrRatio',
+  'holdingEventErrEffectiveDate',
+  'holdingEventErrType',
+  'holdingEventErrValidation',
+  'holdingEventErrKeyReused',
+  'holdingEventErrNoHolding',
+  'holdingEventErrReversalNoHolding',
+  'holdingEventErrAdjustmentNotReversible',
+  'holdingEventErrAsset',
+  'holdingEventErrForbidden',
+  'holdingEventErrUnknown',
+  // 觀察清單錯誤(12)
+  'watchlistErrName',
+  'watchlistErrDuplicateName',
+  'watchlistErrListLimit',
+  'watchlistErrItemLimit',
+  'watchlistErrNotFound',
+  'watchlistErrAsset',
+  'watchlistErrOrderConflict',
+  'watchlistErrForbidden',
+  'watchlistErrCsrf',
+  'watchlistErrNetwork',
+  'watchlistErrUnknown',
+  'watchlistLoadFailedInline',
+  // Positions 動作欄表頭(UI-SPEC §Interaction Contract Positions,sr-only)(1)
+  'positionsActionsHeader',
+];
+
+const PHASE42_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
+  holdingEventRowActionAria: ['symbol'],
+  tradesReverseAria: ['date', 'symbol', 'type'],
+  holdingEventReversalPreviewDividend: ['amount', 'code'],
+  holdingEventReversalPreviewAdjustment: ['qty', 'symbol'],
+  watchlistDeleteConfirm: ['n', 'name'],
+  watchlistMoveUp: ['symbol'],
+  watchlistMoveDown: ['symbol'],
+  watchlistMovedAnnounce: ['pos', 'symbol'],
+  watchlistRemoveAria: ['name', 'symbol'],
+  watchlistStarAdd: ['symbol'],
+  watchlistStarManage: ['symbol'],
+  overviewWatchlistMore: ['n'],
+  holdingEventAmountHint: ['code'],
+  holdingEventCurrentQty: ['qty'],
+  holdingEventRatioReadSplit: ['new', 'old'],
+  holdingEventRatioReadReverse: ['new', 'old'],
+  holdingEventNoteCash: ['code'],
+  tradesTaxLine: ['amount'],
+  dividendIncomeLine: ['amount'],
+  dividendIncomeLineWithTax: ['amount', 'tax'],
+  watchlistCount: ['n'],
+  liveQuoteDegraded: ['time'],
+  liveQuoteClosed: ['time'],
+  overviewWatchlistEmpty: ['name'],
+  watchlistErrItemLimit: ['symbol'],
+};
+
+// 股利與股數調整對話框「送出之後」依 error.code 分派的底部錯誤:確定未寫入,必須明說。
+const HOLDING_EVENT_SUBMIT_ERROR_KEYS = [
+  'holdingEventErrValidation',
+  'holdingEventErrKeyReused',
+  'holdingEventErrNoHolding',
+  'holdingEventErrReversalNoHolding',
+  'holdingEventErrAdjustmentNotReversible',
+  'holdingEventErrAsset',
+  'holdingEventErrForbidden',
+];
+
+// 結果不確定(5xx 等):不得斷言未寫入(T-04.2-36,避免重複記帳)。
+const PHASE42_INDETERMINATE_ERROR_KEYS = ['holdingEventErrUnknown', 'watchlistErrUnknown'];
+
+// D-11:「公司行動 / corporate action」在本 phase 全面禁止。
+const PHASE42_FORBIDDEN_ZH = ['公司行動', '帳戶餘額'];
+const PHASE42_FORBIDDEN_EN = ['corporate action', 'account balance'];
+// 鐵律 5:股利與股數調整不是下單;唯一允許的是 holdingEventLedgerOnlyNote 的否定句。
+const PHASE42_ORDER_ALLOWED = ['holdingEventLedgerOnlyNote'];
+// 觀察清單「排序」語意的 order(清單順序,不是委託單):UI-SPEC 逐字文案,僅限 en 的 order 單字豁免。
+const PHASE42_LIST_ORDER_KEYS = ['watchlistReorderSaving', 'watchlistErrOrderConflict'];
+// D-23:「即時 / live」只出現在即時狀態用鍵(liveQuote*)與說明 ● 即時標記的 watchlistQuoteNote。
+const PHASE42_LIVE_ALLOWED = (key: string): boolean => key.startsWith('liveQuote') || key === 'watchlistQuoteNote';
+
 // UI-SPEC 文案硬規則 1 的適用範圍:ticket 底部「送出之後」依 error.code 分派的錯誤。
 // `tradeErrNetwork` 是唯一「結果未知」的情境,故排除(改由硬規則 2 鎖住)。
 // 欄位級錯誤(tradeErrSymbol 等 7 個)是送出前綁在輸入框旁的提示,不是「我這筆交易怎麼了」
@@ -399,5 +599,129 @@ describe('i18n phase 04.1 copy', () => {
     expect(I18N.zh.cashErrAmount).toContain('8');
     expect(I18N.en.cashErrAmount).toContain('1,000,000,000,000');
     expect(I18N.en.cashErrAmount).toContain('8 decimals');
+  });
+});
+
+describe('i18n phase 04.2 copy', () => {
+  it('provides every phase 04.2 key in both languages', () => {
+    for (const key of PHASE42_KEYS) {
+      expect(I18N.zh[key], `zh.${key}`).toBeTruthy();
+      expect(I18N.en[key], `en.${key}`).toBeTruthy();
+      expect(t('zh', key), `t(zh, ${key})`).not.toBe(key);
+      expect(t('en', key), `t(en, ${key})`).not.toBe(key);
+    }
+  });
+
+  it('lists each phase 04.2 key only once and does not redefine earlier phase keys', () => {
+    expect(new Set(PHASE42_KEYS).size).toBe(PHASE42_KEYS.length);
+    for (const key of PHASE42_KEYS) {
+      expect(PHASE41_KEYS.includes(key), `${key} 已屬 PHASE41_KEYS`).toBe(false);
+      expect(PHASE4_TRADE_KEYS.includes(key), `${key} 已屬 PHASE4_TRADE_KEYS`).toBe(false);
+    }
+  });
+
+  it('keeps the same placeholders in zh and en', () => {
+    for (const [key, expected] of Object.entries(PHASE42_PLACEHOLDERS_BY_KEY)) {
+      expect(PHASE42_KEYS.includes(key), `${key} 必須列在 PHASE42_KEYS`).toBe(true);
+      expect(placeholdersOf(I18N.zh[key] ?? ''), `zh.${key}`).toEqual(expected);
+      expect(placeholdersOf(I18N.en[key] ?? ''), `en.${key}`).toEqual(expected);
+    }
+    for (const key of PHASE42_KEYS.filter(candidate => !(candidate in PHASE42_PLACEHOLDERS_BY_KEY))) {
+      expect(placeholdersOf(I18N.zh[key] ?? ''), `zh.${key}`).toEqual([]);
+      expect(placeholdersOf(I18N.en[key] ?? ''), `en.${key}`).toEqual([]);
+    }
+  });
+
+  it('tf fills the phase 04.2 placeholders in both word orders', () => {
+    expect(tf('zh', 'tradesReverseAria', { date: '2026-10-30', symbol: 'AAPL', type: '股利' }))
+      .toBe('沖銷 2026-10-30 AAPL 的股利');
+    expect(tf('en', 'tradesReverseAria', { date: '2026-10-30', symbol: 'AAPL', type: 'Dividend' }))
+      .toBe('Reverse Dividend for AAPL on 2026-10-30');
+    expect(tf('en', 'holdingEventRatioReadSplit', { old: 1, new: 4 })).toBe('Every 1 shares become 4 (split)');
+  });
+
+  it('says the day P&L excludes both FX and dividends (U-22, DIV-02)', () => {
+    expect(t('zh', 'dayPnlNote')).toBe('只含價格損益,不含匯差與股利;以各市場最近一個交易日計算。');
+    expect(t('zh', 'dayPnlNote')).toContain('不含匯差與股利');
+    expect(t('en', 'dayPnlNote')).toContain('excluding FX and dividends');
+  });
+
+  it('covers both the future rule and the share adjustment guard on executedAt (04.2-02 option-recommended)', () => {
+    expect(t('zh', 'tradeErrExecutedAt')).toContain('不可晚於現在');
+    expect(t('zh', 'tradeErrExecutedAt')).toContain('股數調整');
+    expect(t('en', 'tradeErrExecutedAt')).toContain('future');
+    expect(t('en', 'tradeErrExecutedAt')).toContain('share adjustment');
+  });
+
+  it('keeps forbidden vocabulary out of every phase 04.2 string', () => {
+    for (const key of PHASE42_KEYS) {
+      const zh = I18N.zh[key] ?? '';
+      const en = (I18N.en[key] ?? '').toLowerCase();
+      for (const term of PHASE42_FORBIDDEN_ZH) {
+        expect(zh.includes(term), `zh.${key} 含禁止用語「${term}」:${zh}`).toBe(false);
+      }
+      for (const term of PHASE42_FORBIDDEN_EN) {
+        expect(en.includes(term), `en.${key} contains forbidden term "${term}": ${en}`).toBe(false);
+      }
+      if (PHASE42_ORDER_ALLOWED.includes(key)) continue;
+      for (const term of ['下單', '委託', '掛單']) {
+        expect(zh.includes(term), `zh.${key} 含下單語義「${term}」:${zh}`).toBe(false);
+      }
+      if (!PHASE42_LIST_ORDER_KEYS.includes(key)) {
+        expect(/\border\b/.test(en), `en.${key} contains the word "order": ${en}`).toBe(false);
+      }
+    }
+    // 鍵名本身也不得帶禁止用語(D-11:程式識別字一律不得出現)。
+    for (const key of PHASE42_KEYS) {
+      expect(/corporate/i.test(key), key).toBe(false);
+    }
+  });
+
+  it('allows the negated "not an order" wording only in the ledger-only note', () => {
+    expect(I18N.zh.holdingEventLedgerOnlyNote ?? '').toContain('不是下單');
+    expect(I18N.en.holdingEventLedgerOnlyNote ?? '').toContain('not an order');
+  });
+
+  it('uses "live" wording only on live-state keys (D-23)', () => {
+    for (const key of PHASE42_KEYS.filter(candidate => !PHASE42_LIVE_ALLOWED(candidate))) {
+      expect((I18N.zh[key] ?? '').includes('即時'), `zh.${key} 不得出現「即時」`).toBe(false);
+      expect(/\blive\b/i.test(I18N.en[key] ?? ''), `en.${key} must not say "live"`).toBe(false);
+    }
+  });
+
+  it('states that nothing was recorded on every post-submit dividend / adjustment error', () => {
+    for (const key of HOLDING_EVENT_SUBMIT_ERROR_KEYS) {
+      expect(I18N.zh[key] ?? '', `zh.${key} 必須明說未寫入`).toMatch(/未寫入|沒有寫入新紀錄/);
+      expect((I18N.en[key] ?? '').toLowerCase(), `en.${key} must say nothing was recorded`)
+        .toMatch(/nothing was recorded|nothing new was recorded/);
+    }
+  });
+
+  it('describes unexpected outcomes as indeterminate and points to where to check (T-04.2-36)', () => {
+    for (const key of PHASE42_INDETERMINATE_ERROR_KEYS) {
+      const zh = I18N.zh[key] ?? '';
+      const en = (I18N.en[key] ?? '').toLowerCase();
+      expect(zh, `zh.${key} 必須表明結果不確定`).toContain('可能');
+      expect(zh, `zh.${key} 不得斷言未寫入`).not.toMatch(/(?<!尚)未寫入。|紀錄未寫入/);
+      expect(en, `en.${key} must say it may or may not have been saved`).toContain('may or may not');
+      expect(en, `en.${key} must not claim nothing was recorded`).not.toContain('nothing was recorded');
+    }
+    expect(I18N.zh.holdingEventErrUnknown ?? '').toContain('「交易」頁');
+    expect(I18N.en.holdingEventErrUnknown ?? '').toContain('Trades page');
+  });
+
+  it('never calls the reused idempotency key a duplicate and promises no duplicate nowhere', () => {
+    expect(I18N.zh.holdingEventErrKeyReused ?? '').not.toContain('重複');
+    expect((I18N.en.holdingEventErrKeyReused ?? '').toLowerCase()).not.toContain('duplicate');
+    for (const key of PHASE42_KEYS) {
+      expect(I18N.zh[key] ?? '', `zh.${key}`).not.toContain('不會重複記錄');
+    }
+  });
+
+  it('states the dividend / share ranges exactly as the backend validates them', () => {
+    expect(I18N.zh.holdingEventErrAmount ?? '').toContain('1,000,000,000,000');
+    expect(I18N.en.holdingEventErrAmount ?? '').toContain('8 decimals');
+    expect(I18N.zh.holdingEventErrShares ?? '').toContain('1,000,000,000');
+    expect(I18N.en.holdingEventErrRatio ?? '').toContain('1 to 1000');
   });
 });
