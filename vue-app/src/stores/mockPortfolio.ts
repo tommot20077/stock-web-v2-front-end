@@ -51,14 +51,17 @@ export const useMockPortfolioStore = defineStore('mockPortfolio', {
       const list = this.watchlists.find(l => l.id === listId);
       if (list) list.syms = list.syms.filter(s => s !== sym);
     },
-    renameWatchlist(_id: string, _name: string) {
-      // RED 骨架:尚未實作
+    // 以下三個 action 只做狀態變更;名稱長度、重名、上限與集合一致性由 watchlistApi 的 mock 在 service 層把關(D-15)。
+    renameWatchlist(id: string, name: string) {
+      const list = this.watchlists.find(l => l.id === id);
+      if (list) list.name = name;
     },
-    deleteWatchlist(_id: string) {
-      // RED 骨架:尚未實作
+    deleteWatchlist(id: string) {
+      this.watchlists = this.watchlists.filter(l => l.id !== id);
     },
-    setWatchlistOrder(_id: string, _syms: string[]) {
-      // RED 骨架:尚未實作
+    setWatchlistOrder(id: string, syms: string[]) {
+      const list = this.watchlists.find(l => l.id === id);
+      if (list) list.syms = [...syms];
     },
     moveWatchSymbol(listId: string, from: number, to: number) {
       const list = this.watchlists.find(l => l.id === listId);

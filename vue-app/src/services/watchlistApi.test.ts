@@ -458,7 +458,7 @@ describe('watchlistApi mock adapter — items', () => {
 
     const withFx = await api.addItem('core', 'USD/TWD');
     const withBond = await api.addItem('core', 'US10Y');
-    expect(withFx.items.at(-1)?.symbol).toBe('USD/TWD');
+    expect(withFx.items[withFx.items.length - 1].symbol).toBe('USD/TWD');
     expect(withBond.items.map(item => item.symbol)).toEqual(['AAPL', 'NVDA', '2330.TW', 'MSFT', 'USD/TWD', 'US10Y']);
   });
 
@@ -470,11 +470,11 @@ describe('watchlistApi mock adapter — items', () => {
     await expectApiError(api.addItem('core', 'NOPE'), { status: 404, code: 'ASSET_NOT_FOUND', fields: { symbol: '' } });
 
     const store = useMockPortfolioStore();
-    store.watchlists[0].syms = Array.from({ length: WATCHLIST_MAX_ITEMS }, (_, index) => `S${index}`);
-    await expectApiError(api.addItem('core', 'AAPL'), { status: 400, code: 'VALIDATION_FAILED', fields: { items: '' } });
+    store.watchlists[0].syms = [...Array.from({ length: WATCHLIST_MAX_ITEMS - 1 }, (_, index) => `S${index}`), 'AAPL'];
+    await expectApiError(api.addItem('core', 'TSLA'), { status: 400, code: 'VALIDATION_FAILED', fields: { items: '' } });
     expect(store.watchlists[0].syms).toHaveLength(WATCHLIST_MAX_ITEMS);
-    // 已在清單中的代號照冪等語義原樣回傳,即使已滿。
-    await expect(api.addItem('core', 'S0')).resolves.toMatchObject({ id: 'core' });
+    // 已在清單中的代號照冪等語義原樣回傳,即使已滿(資產查找先於冪等,所以用真實代號)。
+    await expect(api.addItem('core', 'AAPL')).resolves.toMatchObject({ id: 'core' });
   });
 
   it('removeItem removes by asset uuid and is idempotent', async () => {

@@ -1,4 +1,4 @@
-import { apiRequest } from './apiClient';
+import { ApiClientError, apiRequest } from './apiClient';
 import { BONDS, CRYPTO, FX, SYMBOLS } from '../data';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { AssetDto, RuntimeDataMode } from './apiTypes';
@@ -32,10 +32,6 @@ export interface WatchlistApi {
   addItem(id: string, symbol: string): Promise<WatchlistDto>;
   removeItem(id: string, assetId: string): Promise<WatchlistDto>;
   reorder(id: string, assetIds: string[]): Promise<WatchlistDto>;
-}
-
-function notImplemented(): never {
-  throw new Error('not implemented');
 }
 
 /**
@@ -166,27 +162,131 @@ function toDto(list: { id: string; name: string; syms: string[] }): WatchlistDto
   return { id: list.id, name: list.name, items: list.syms.map(assetDtoForStored) };
 }
 
+/** 契約〈上限與併發保證〉:預設清單名稱與清單名稱長度。 */
+const DEFAULT_WATCHLIST_NAME = '我的自選';
+const MAX_NAME_LENGTH = 30;
+
+function validationFailed(field: string, message: string): ApiClientError {
+  return new ApiClientError({ status: 400, code: 'VALIDATION_FAILED', message: 'Validation failed', fields: { [field]: message } });
+}
+
+/** 錯誤訊息為靜態英文字串,不回射使用者輸入(契約〈錯誤〉)。 */
+function watchlistNotFound(): ApiClientError {
+  return new ApiClientError({ status: 404, code: 'WATCHLIST_NOT_FOUND', message: 'Watchlist not found' });
+}
+
+function duplicateName(): ApiClientError {
+  return new ApiClientError({
+    status: 409, code: 'DUPLICATE_RESOURCE', message: 'Watchlist name already exists', fields: { name: 'already exists' },
+  });
+}
+
+/** 名稱 trim 後 1–30 字;不合法丟 400 `fields.name`(後端 bean validation,先於一切查找)。 */
+function normalizeName(name: string): string {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (trimmed.length < 1 || trimmed.length > MAX_NAME_LENGTH) {
+    throw validationFailed('name', `length must be between 1 and ${MAX_NAME_LENGTH}`);
+  }
+  return trimmed;
+}
+
+type MockStore = ReturnType<typeof useMockPortfolioStore>;
+type StoredWatchlist = MockStore['watchlists'][number];
+
+function findList(store: MockStore, id: string): StoredWatchlist {
+  const list = store.watchlists.find(candidate => candidate.id === id);
+  if (!list) throw watchlistNotFound();
+  return list;
+}
+
+/** D-17:0 個清單時先建「我的自選」(GET 與 POST 建立前皆同,與後端一致)。 */
+function ensureDefaultList(store: MockStore): void {
+  if (store.watchlists.length === 0) store.addWatchlist(DEFAULT_WATCHLIST_NAME);
+}
+
+function lastList(store: MockStore): StoredWatchlist {
+  return store.watchlists[store.watchlists.length - 1];
+}
+
 /**
  * mock 以 mock portfolio store 為狀態來源(星號、Markets / Chart 舊呼叫點在 04.2-22 / 23 移除前共用同一份),
- * 上限與錯誤碼在 service 層實作。回傳值每次都是新建物件,外部修改不會回灌 store。
+ * 上限與錯誤碼在 service 層實作,檢查順序對齊後端:request 驗證 → 清單查找(404)→ 資產查找 → 冪等 → 上限 → 寫入。
+ * 回傳值每次都是新建物件(clone),外部修改不會回灌 store。
  */
 export function createMockWatchlistApi(): WatchlistApi {
   return {
     mode: 'mock',
     async list() {
-      return useMockPortfolioStore().watchlists.map(toDto);
-    },
-    create: async () => notImplemented(),
-    rename: async () => notImplemented(),
-    remove: async () => notImplemented(),
-    async addItem(id, symbol) {
       const store = useMockPortfolioStore();
-      const list = store.watchlists.find(candidate => candidate.id === id)!;
-      if (!list.syms.includes(symbol)) list.syms.push(symbol);
+      ensureDefaultList(store);
+      return store.watchlists.map(toDto);
+    },
+    async create(name) {
+      const normalized = normalizeName(name);
+      const store = useMockPortfolioStore();
+      ensureDefaultList(store);
+      // 後端:鎖住使用者全部清單 → count → insert,重名由 insert 時的唯一約束擋下,所以上限先於重名。
+      if (store.watchlists.length >= WATCHLIST_MAX_LISTS) {
+        throw validationFailed('watchlists', `at most ${WATCHLIST_MAX_LISTS} watchlists`);
+      }
+      if (store.watchlists.some(candidate => candidate.name === normalized)) throw duplicateName();
+      store.addWatchlist(normalized);
+      return toDto(lastList(store));
+    },
+    async rename(id, name) {
+      const normalized = normalizeName(name);
+      const store = useMockPortfolioStore();
+      const list = findList(store, id);
+      if (store.watchlists.some(candidate => candidate.id !== id && candidate.name === normalized)) throw duplicateName();
+      store.renameWatchlist(id, normalized);
       return toDto(list);
     },
-    removeItem: async () => notImplemented(),
-    reorder: async () => notImplemented(),
+    async remove(id) {
+      const store = useMockPortfolioStore();
+      findList(store, id);
+      store.deleteWatchlist(id);
+    },
+    async addItem(id, symbol) {
+      const trimmed = typeof symbol === 'string' ? symbol.trim() : '';
+      if (trimmed === '') throw validationFailed('symbol', 'must not be blank');
+      const store = useMockPortfolioStore();
+      const list = findList(store, id);
+      if (!mockAssetFor(trimmed)) {
+        throw new ApiClientError({ status: 404, code: 'ASSET_NOT_FOUND', message: 'Asset not found', fields: { symbol: 'not found' } });
+      }
+      // 已在清單中 → 原樣回傳(冪等,不報錯、不改順序)。
+      if (list.syms.includes(trimmed)) return toDto(list);
+      if (list.syms.length >= WATCHLIST_MAX_ITEMS) {
+        throw validationFailed('items', `at most ${WATCHLIST_MAX_ITEMS} items`);
+      }
+      store.setWatchlistOrder(id, [...list.syms, trimmed]);
+      return toDto(findList(store, id));
+    },
+    async removeItem(id, assetId) {
+      const store = useMockPortfolioStore();
+      const list = findList(store, id);
+      const remaining = list.syms.filter(sym => assetDtoForStored(sym).uuid !== assetId);
+      if (remaining.length !== list.syms.length) store.setWatchlistOrder(id, remaining);
+      return toDto(findList(store, id));
+    },
+    async reorder(id, assetIds) {
+      if (!Array.isArray(assetIds)) throw validationFailed('assetIds', 'must be an array');
+      const store = useMockPortfolioStore();
+      const list = findList(store, id);
+      const symByUuid = new Map(list.syms.map(sym => [assetDtoForStored(sym).uuid, sym]));
+      const unique = new Set(assetIds);
+      // 多、少、重複皆視為集合不同 → 409,前端重讀後再讓使用者重試。
+      const sameSet = assetIds.length === list.syms.length
+        && unique.size === assetIds.length
+        && assetIds.every(assetId => symByUuid.has(assetId));
+      if (!sameSet) {
+        throw new ApiClientError({
+          status: 409, code: 'WATCHLIST_ORDER_CONFLICT', message: 'Watchlist items changed; reload and retry',
+        });
+      }
+      store.setWatchlistOrder(id, assetIds.map(assetId => symByUuid.get(assetId)!));
+      return toDto(findList(store, id));
+    },
   };
 }
 
