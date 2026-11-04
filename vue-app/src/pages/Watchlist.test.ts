@@ -686,3 +686,239 @@ describe('Watchlist 頁 — mock mode 清單管理', () => {
     expect(rowSymbols()).toEqual(['AAPL', '2330.TW', 'MSFT']);
   });
 });
+
+// =============== Task 3:拖拉與排序模式(↑ ↓)持久化 ===============
+
+/** 只假 setTimeout / clearTimeout(debounce);fetch → apiClient 鏈靠真 setImmediate hop 跑完。 */
+function fakeDebounceTimers() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+}
+
+async function settle(times = 6) {
+  const g = globalThis as unknown as { setImmediate: (callback: () => void) => unknown };
+  for (let i = 0; i < times; i += 1) {
+    await new Promise<void>(resolve => { g.setImmediate(resolve); });
+    await Promise.resolve();
+  }
+}
+
+async function press(el: Element) {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await settle(2);
+}
+
+async function advance(ms: number) {
+  vi.advanceTimersByTime(ms);
+  await settle();
+}
+
+function moveButton(symbol: string, direction: 'up' | 'down'): HTMLButtonElement {
+  const el = row(symbol).querySelector<HTMLButtonElement>(`[data-testid="watchlist-move-${direction}"]`);
+  expect(el, `watchlist-move-${direction} in ${symbol}`).not.toBeNull();
+  return el!;
+}
+
+function statusTexts(): string[] {
+  return [...document.body.querySelectorAll('[role="status"]')].map(el => el.textContent?.trim() ?? '');
+}
+
+function putBodies(fetchImpl: WatchlistFetch): string[][] {
+  return callsTo(fetchImpl, 'PUT', '/items/order').map(([, init]) => (JSON.parse(String(init?.body)) as { assetIds: string[] }).assetIds);
+}
+
+function uuidOf(list: WatchlistDto, symbol: string): string {
+  return list.items.find(item => item.symbol === symbol)!.uuid;
+}
+
+describe('Watchlist 頁 — 排序模式(鍵盤 / 觸控)', () => {
+  const three = () => watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT']);
+
+  it('調整順序(aria-pressed)→ 每列 ↑ ↓(aria-label 帶代號);首列 ↑、末列 ↓ disabled;✕ 隱藏、列點擊停用', async () => {
+    const on = await mountApi(watchlistFetch([three()]));
+
+    const toggle = button('watchlist-reorder');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle.textContent?.trim()).toBe(t('zh', 'watchlistReorder'));
+    expect(document.body.querySelector('[data-testid="watchlist-move-up"]')).toBeNull();
+
+    await click(toggle);
+    expect(button('watchlist-reorder').getAttribute('aria-pressed')).toBe('true');
+    expect(button('watchlist-reorder').textContent?.trim()).toBe(t('zh', 'watchlistReorderDone'));
+    expect(moveButton('AAPL', 'up').getAttribute('aria-label')).toBe(tf('zh', 'watchlistMoveUp', { symbol: 'AAPL' }));
+    expect(moveButton('AAPL', 'down').getAttribute('aria-label')).toBe(tf('zh', 'watchlistMoveDown', { symbol: 'AAPL' }));
+    expect(moveButton('AAPL', 'up').disabled).toBe(true);
+    expect(moveButton('AAPL', 'down').disabled).toBe(false);
+    expect(moveButton('MSFT', 'down').disabled).toBe(true);
+    expect(document.body.querySelector('[data-testid="watchlist-remove"]')).toBeNull();
+
+    await click(cell(row('NVDA'), 'watchlist-row-price'));
+    expect(on.chart).not.toHaveBeenCalled();
+
+    await click(button('watchlist-reorder'));
+    expect(button('watchlist-reorder').getAttribute('aria-pressed')).toBe('false');
+    expect(document.body.querySelector('[data-testid="watchlist-move-up"]')).toBeNull();
+  });
+
+  it('1 檔 → ↑ ↓ 皆 disabled', async () => {
+    await mountApi(watchlistFetch([watchlistDto('w1', '我的自選', ['AAPL'])]));
+    await click(button('watchlist-reorder'));
+
+    expect(moveButton('AAPL', 'up').disabled).toBe(true);
+    expect(moveButton('AAPL', 'down').disabled).toBe(true);
+  });
+
+  it('↓ → 本地重排、焦點停在被移動列的同一顆按鈕、role=status 播報;500 ms 後送整份順序', async () => {
+    const list = three();
+    const fetchImpl = watchlistFetch([list]);
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    await press(moveButton('AAPL', 'down'));
+    expect(rowSymbols()).toEqual(['NVDA', 'AAPL', 'MSFT']);
+    expect(document.activeElement).toBe(moveButton('AAPL', 'down'));
+    expect(statusTexts()).toContain(tf('zh', 'watchlistMovedAnnounce', { symbol: 'AAPL', pos: 2 }));
+    expect(requireTestid('watchlist-reorder-saving').textContent?.trim()).toBe(t('zh', 'watchlistReorderSaving'));
+    expect(requireTestid('watchlist-reorder-saving').getAttribute('role')).toBe('status');
+
+    await advance(499);
+    expect(putBodies(fetchImpl)).toHaveLength(0);
+    await advance(1);
+    expect(putBodies(fetchImpl)).toEqual([[uuidOf(list, 'NVDA'), uuidOf(list, 'AAPL'), uuidOf(list, 'MSFT')]]);
+    expect(callsTo(fetchImpl, 'PUT', '/watchlists/w1/items/order')).toHaveLength(1);
+    expect(testid('watchlist-reorder-saving')).toBeNull();
+    expect(rowSymbols()).toEqual(['NVDA', 'AAPL', 'MSFT']);
+  });
+
+  it('移到首位後 ↑ disabled,焦點仍留在被移動的列上', async () => {
+    await mountApi(watchlistFetch([three()]));
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    await press(moveButton('NVDA', 'up'));
+    expect(rowSymbols()).toEqual(['NVDA', 'AAPL', 'MSFT']);
+    expect(moveButton('NVDA', 'up').disabled).toBe(true);
+    expect(row('NVDA').contains(document.activeElement)).toBe(true);
+  });
+
+  it('連續三次移動只送一次(最後順序)', async () => {
+    const list = three();
+    const fetchImpl = watchlistFetch([list]);
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    await press(moveButton('AAPL', 'down'));
+    await advance(200);
+    await press(moveButton('AAPL', 'down'));
+    await advance(200);
+    await press(moveButton('NVDA', 'down'));
+    expect(rowSymbols()).toEqual(['MSFT', 'NVDA', 'AAPL']);
+    await advance(499);
+    expect(putBodies(fetchImpl)).toHaveLength(0);
+    await advance(1);
+    expect(putBodies(fetchImpl)).toEqual([[uuidOf(list, 'MSFT'), uuidOf(list, 'NVDA'), uuidOf(list, 'AAPL')]]);
+  });
+
+  it('同時間只有一個請求在飛:第二批等第一個完成後才送最新順序', async () => {
+    const list = three();
+    let releaseFirst: (() => void) | null = null;
+    const fetchImpl = watchlistFetch([list], {
+      reorder: (_listId, assetIds, call) => (call === 0
+        ? new Promise<Response>(resolve => { releaseFirst = () => resolve(apiSuccess({ ...list, items: assetIds.map(id => list.items.find(item => item.uuid === id)!) })); })
+        : undefined),
+    });
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    await press(moveButton('AAPL', 'down'));
+    await advance(500);
+    expect(putBodies(fetchImpl)).toHaveLength(1);
+
+    await press(moveButton('MSFT', 'up'));
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT', 'AAPL']);
+    await advance(500);
+    expect(putBodies(fetchImpl), '第一個還在飛,不得送第二個').toHaveLength(1);
+    requireTestid('watchlist-reorder-saving');
+
+    releaseFirst!();
+    await settle();
+    expect(putBodies(fetchImpl)).toHaveLength(2);
+    expect(putBodies(fetchImpl)[1]).toEqual([uuidOf(list, 'NVDA'), uuidOf(list, 'MSFT'), uuidOf(list, 'AAPL')]);
+    await settle();
+    expect(rowSymbols(), '第一個回應不得蓋掉較新的本地順序').toEqual(['NVDA', 'MSFT', 'AAPL']);
+    expect(testid('watchlist-reorder-saving')).toBeNull();
+  });
+
+  it('409 WATCHLIST_ORDER_CONFLICT → 重讀清單回到伺服器順序 + watchlistErrOrderConflict', async () => {
+    const fetchImpl = watchlistFetch([three()], {
+      reorder: () => apiFailure('WATCHLIST_ORDER_CONFLICT', 'trace-409', 409),
+    });
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    await press(moveButton('AAPL', 'down'));
+    expect(rowSymbols()).toEqual(['NVDA', 'AAPL', 'MSFT']);
+    await advance(500);
+    await settle();
+
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(rowSymbols()).toEqual(['AAPL', 'NVDA', 'MSFT']);
+    expect(requireTestid('watchlist-op-error').textContent).toContain(t('zh', 'watchlistErrOrderConflict'));
+    expect(requireTestid('watchlist-op-error-code').textContent?.trim()).toBe('WATCHLIST_ORDER_CONFLICT');
+  });
+});
+
+describe('Watchlist 頁 — 拖拉(HTML5 DnD)', () => {
+  function drag(type: string, el: Element) {
+    el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+  }
+
+  it('dragstart → dragover 顯示指示線 → drop 本地重排(樂觀),500 ms 後送 PUT', async () => {
+    const list = watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT']);
+    const fetchImpl = watchlistFetch([list]);
+    await mountApi(fetchImpl);
+    fakeDebounceTimers();
+
+    expect(row('AAPL').getAttribute('draggable')).toBe('true');
+    const grip = row('AAPL').querySelector('.grip');
+    expect(grip?.getAttribute('aria-hidden')).toBe('true');
+
+    drag('dragstart', row('MSFT'));
+    drag('dragover', row('AAPL'));
+    await settle(2);
+    expect(row('AAPL').classList.contains('drop-before')).toBe(true);
+
+    drag('drop', row('AAPL'));
+    drag('dragend', row('MSFT'));
+    await settle(2);
+    expect(rowSymbols()).toEqual(['MSFT', 'AAPL', 'NVDA']);
+    expect(document.body.querySelector('.drop-before, .drop-after')).toBeNull();
+
+    await advance(500);
+    expect(putBodies(fetchImpl)).toEqual([[uuidOf(list, 'MSFT'), uuidOf(list, 'AAPL'), uuidOf(list, 'NVDA')]]);
+  });
+
+  it('往下拖到最後一列 → 指示線在目標列下緣,放開後成為最後一列', async () => {
+    await mountApi(watchlistFetch([watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT'])]));
+    fakeDebounceTimers();
+
+    drag('dragstart', row('AAPL'));
+    drag('dragover', row('MSFT'));
+    await settle(2);
+    expect(row('MSFT').classList.contains('drop-after')).toBe(true);
+    drag('drop', row('MSFT'));
+    await settle(2);
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT', 'AAPL']);
+  });
+
+  it('排序模式時列不可拖曳、不渲染把手', async () => {
+    await mountApi(watchlistFetch([watchlistDto('w1', '我的自選', ['AAPL', 'NVDA'])]));
+    await click(button('watchlist-reorder'));
+
+    expect(row('AAPL').getAttribute('draggable')).toBe('false');
+    expect(row('AAPL').querySelector('.grip')).toBeNull();
+  });
+});
