@@ -27,9 +27,109 @@
         <!-- FORM -->
         <div v-if="step === 'form'" class="body">
           <div id="holding-event-symbol-label" class="lab">{{ t(lang, 'symbol') }}</div>
+          <!--
+            從 Trades 開啟(無 symbol):可搜尋 typeahead(D-28)。行為與七態逐項沿用 OrderTicket.vue:33-146;
+            差異:輸入框是 13px `.inp`(Display 留給金額),listbox 在文件流內(U-04,body 會捲動,絕對定位會被裁切)。
+          -->
+          <div v-if="isTypeahead" ref="symBlock" class="sym-wrap">
+            <input
+              id="holding-event-symbol"
+              ref="symInput"
+              v-model="symQuery"
+              type="text"
+              autocomplete="off"
+              class="inp"
+              data-testid="holding-event-symbol-input"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-labelledby="holding-event-symbol-label"
+              aria-controls="holding-event-symbol-options"
+              :aria-expanded="symPopoverOpen ? 'true' : 'false'"
+              :aria-activedescendant="activeOptionId"
+              :aria-invalid="invalidAttr('symbol')"
+              :aria-describedby="describedBy('symbol')"
+              :placeholder="t(lang, 'selectSymbol')"
+              :disabled="submitting"
+              @focus="onSymFocus"
+              @blur="onSymBlur"
+              @input="onSymInput"
+              @keydown="onSymKeydown"
+            />
+            <div v-if="pickedAsset" class="sym-meta">
+              <span class="sym-name">{{ pickedAsset.name }}</span>
+              <span class="ccy-tag">{{ pickedAsset.currency }}</span>
+            </div>
+
+            <!-- 七態下拉;這一區的任何狀態都不得阻擋其他欄位(錯誤只屬於這個區塊) -->
+            <div v-if="symPopoverOpen" class="sym-pop">
+              <div v-if="symbolLoading" class="block-state" data-testid="holding-event-symbol-loading">
+                <!-- Loading 一律有可讀文字,不得只有骨架 -->
+                <div>{{ t(lang, 'loading') }}</div>
+                <div v-for="i in 3" :key="i" class="skeleton-row" />
+              </div>
+              <div v-else-if="symbolError" class="block-error" data-testid="holding-event-symbol-error">
+                <div>{{ t(lang, 'symbolSearchFailed') }}</div>
+                <!-- 只露 code 與 traceId,不顯示後端 message -->
+                <div class="details">
+                  <span data-testid="holding-event-symbol-error-code">{{ symbolError.code }}</span>
+                  <span v-if="symbolError.traceId" data-testid="holding-event-symbol-trace-id">
+                    {{ t(lang, 'authRequestId') }} {{ symbolError.traceId }}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  class="block-retry"
+                  data-testid="holding-event-symbol-retry"
+                  @click="retrySymbolSearch"
+                >{{ t(lang, 'authRetry') }}</button>
+              </div>
+              <template v-else>
+                <div
+                  v-if="visibleOptions.length"
+                  id="holding-event-symbol-options"
+                  class="sym-list"
+                  role="listbox"
+                  aria-labelledby="holding-event-symbol-label"
+                  data-testid="holding-event-symbol-options"
+                >
+                  <div
+                    v-for="(asset, index) in visibleOptions"
+                    :id="`holding-event-symbol-option-${index}`"
+                    :key="asset.uuid"
+                    :class="['sym-row', { active: index === activeIndex }]"
+                    role="option"
+                    :aria-selected="asset.symbol === selectedSymbol ? 'true' : 'false'"
+                    :data-testid="`holding-event-symbol-option-${asset.symbol}`"
+                    @mousedown.prevent="pickAsset(asset)"
+                  >
+                    <span class="sym-code">{{ asset.symbol }}</span>
+                    <span class="sym-name">{{ asset.name }}</span>
+                    <span class="ccy-tag">{{ asset.currency }}</span>
+                  </div>
+                </div>
+                <!-- 有結果但全部不可交易,必須與「查無結果」分開,否則使用者以為打錯字 -->
+                <div
+                  v-else-if="symbolNoTradable"
+                  class="block-state"
+                  data-testid="holding-event-symbol-no-tradable"
+                >{{ t(lang, 'symbolNoTradable') }}</div>
+                <div
+                  v-else
+                  class="block-state"
+                  data-testid="holding-event-symbol-empty"
+                >{{ t(lang, 'symbolNoResults') }}</div>
+                <!-- 不做分頁 / 無限捲動,只提示縮小關鍵字 -->
+                <div
+                  v-if="symbolTruncated"
+                  class="sym-truncated"
+                  data-testid="holding-event-symbol-truncated"
+                >{{ t(lang, 'symbolMoreResults') }}</div>
+              </template>
+            </div>
+          </div>
           <!-- 從持倉開啟:標的鎖定顯示,不可改(D-11) -->
           <div
-            v-if="selectedSymbol"
+            v-else
             class="sym-locked"
             role="group"
             aria-labelledby="holding-event-symbol-label"
@@ -39,7 +139,6 @@
             <span v-if="holding?.name" class="sym-name">{{ holding.name }}</span>
             <span v-if="selectedCurrency" class="ccy-tag">{{ selectedCurrency }}</span>
           </div>
-          <p v-else class="hint">{{ t(lang, 'holdingEventAmountHintNoSymbol') }}</p>
           <p
             v-if="fieldErrorText('symbol')"
             :id="fieldErrorId('symbol')"
@@ -400,7 +499,7 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyHoldingEventCreated } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
-import type { PortfolioActivityDto } from '../services/apiTypes';
+import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
@@ -441,6 +540,8 @@ const mode = ref<HoldingEventMode>('cashDividend');
 
 const selectedSymbol = ref<string | null>(null);
 const selectedCurrency = ref<string | null>(null);
+/** typeahead 選定的資產(只用於顯示名稱與幣別);鎖定標的時為 null。 */
+const pickedAsset = ref<AssetDto | null>(null);
 const amount = ref('');
 const tax = ref('');
 const paidAt = ref('');
@@ -453,13 +554,15 @@ const maxEffectiveDate = ref('');
 const note = ref('');
 
 /** 欄位被使用者離開過才算「碰過」:空欄位在 blur 前不提早罵人。 */
-const touched = reactive({ amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
+const touched = reactive({ symbol: false, amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
 
 const submitting = ref(false);
 type RecordedEvent = { kind: 'dividend'; dto: DividendDto } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
 const recorded = ref<RecordedEvent | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
+const symInput = ref<HTMLInputElement | null>(null);
+const symBlock = ref<HTMLElement | null>(null);
 const sharesInput = ref<HTMLInputElement | null>(null);
 const ratioNewInput = ref<HTMLInputElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
@@ -511,14 +614,227 @@ function resetForm() {
   selectedCurrency.value = props.holding?.currency ?? null;
   note.value = '';
   resetModeFields();
+  resetSymbolSearch();
   recorded.value = null;
   submitError.value = null;
   currentKey.value = null;
   dirtySinceSubmit.value = false;
 }
 
-/** 開啟焦點落在該模式唯一的 Display 元素,不落在送出鈕以免 Enter 誤送。 */
+// =================== 標的 typeahead(D-28;狀態機逐項沿用 OrderTicket.vue) ===================
+
+/** 無 symbol(從 Trades 開啟)= 可搜尋;有 symbol(從持倉開啟)= 鎖定。 */
+const isTypeahead = computed(() => props.symbol === null);
+
+/** 診斷只露 code 與 traceId,絕不顯示後端 message。 */
+interface BlockError {
+  code: string;
+  traceId: string | null;
+}
+
+type BlockState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded'; data: T }
+  | { status: 'error'; error: BlockError };
+
+/** 下拉最多 10 筆(後端 `size` 上限 100);超量只提示縮小關鍵字。 */
+const SEARCH_SIZE = 10;
+/** idle(聚焦未輸入)只列前 6 筆,不宣稱任何排序語意。 */
+const IDLE_LIMIT = 6;
+const SEARCH_DEBOUNCE_MS = 250;
+
+const symQuery = ref('');
+const symOpen = ref(false);
+const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+/** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
+const activeQuery = ref('');
+const activeIndex = ref(-1);
+
+// 模板不做型別窄化,一律先投影成 computed。
+const symbolLoading = computed(() => symbolState.value.status === 'loading');
+const symbolError = computed(() => (symbolState.value.status === 'error' ? symbolState.value.error : null));
+const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbolState.value.data : null));
+
+// 唯一允許的本地過濾:只列可交易標的(股利標的須 active + tradeable)。關鍵字過濾是後端的事。
+const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const visibleOptions = computed(() => (
+  activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
+));
+const symbolNoTradable = computed(() => (
+  !!symbolPage.value && symbolPage.value.items.length > 0 && options.value.length === 0
+));
+const symbolTruncated = computed(() => (
+  !!symbolPage.value
+  && activeQuery.value !== ''
+  && symbolPage.value.totalElements > symbolPage.value.items.length
+));
+
+const symPopoverOpen = computed(() => symOpen.value && symbolState.value.status !== 'idle');
+const activeOptionId = computed(() => (
+  symPopoverOpen.value && activeIndex.value >= 0 && activeIndex.value < visibleOptions.value.length
+    ? `holding-event-symbol-option-${activeIndex.value}`
+    : undefined
+));
+
+function describeSearchError(error: unknown): BlockError {
+  if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
+  return { code: 'UNKNOWN_ERROR', traceId: null };
+}
+
+// debounce 壓請求量,遞增 request id 壓亂序返回(慢網路下 `AAP` 的回應不得覆蓋 `AAPL`)。
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let searchSeq = 0;
+let searchController: AbortController | null = null;
+
+function cancelPendingSearch() {
+  if (searchTimer !== null) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+}
+
+async function runSymbolSearch(query: string) {
+  cancelPendingSearch();
+  const seq = ++searchSeq;
+  activeQuery.value = query;
+  activeIndex.value = -1;
+  symbolState.value = { status: 'loading' };
+  searchController?.abort();
+  const controller = new AbortController();
+  searchController = controller;
+  try {
+    const page = await getRuntimeApiClients().market.searchAssets(
+      { query, page: 0, size: SEARCH_SIZE },
+      controller.signal,
+    );
+    if (seq !== searchSeq) return;
+    symbolState.value = { status: 'loaded', data: page };
+    // 精準命中可交易標的即選定,但下拉不收起:使用者還沒看清楚候選就被收走不友善(沿用 OrderTicket)。
+    const exact = page.items.find(
+      asset => asset.tradeable && asset.symbol.toUpperCase() === query.toUpperCase(),
+    );
+    if (exact) pickAsset(exact, { close: false });
+  } catch (error) {
+    // 已被新查詢取代的請求(含 abort 造成的 DOMException)一律不寫回狀態。
+    if (seq !== searchSeq) return;
+    symbolState.value = { status: 'error', error: describeSearchError(error) };
+  }
+}
+
+function scheduleSymbolSearch(query: string) {
+  cancelPendingSearch();
+  activeQuery.value = query;
+  activeIndex.value = -1;
+  // 舊查詢字串的結果不得留在畫面上冒充目前查詢的結果。
+  symbolState.value = { status: 'loading' };
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void runSymbolSearch(query);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function retrySymbolSearch() {
+  void runSymbolSearch(activeQuery.value);
+}
+
+function resetSymbolSearch() {
+  cancelPendingSearch();
+  searchController?.abort();
+  searchController = null;
+  searchSeq += 1;
+  symbolState.value = { status: 'idle' };
+  symQuery.value = '';
+  symOpen.value = false;
+  activeQuery.value = '';
+  activeIndex.value = -1;
+  pickedAsset.value = null;
+}
+
+function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
+  pickedAsset.value = asset;
+  selectedSymbol.value = asset.symbol;
+  selectedCurrency.value = asset.currency;
+  symQuery.value = asset.symbol;
+  if (close) {
+    symOpen.value = false;
+    activeIndex.value = -1;
+    cancelPendingSearch();
+  }
+}
+
+function clearPick() {
+  pickedAsset.value = null;
+  selectedSymbol.value = null;
+  selectedCurrency.value = null;
+}
+
+function onSymFocus() {
+  symOpen.value = true;
+  // 收起下拉後又回到欄位時補一次查詢,讓 idle 列表重新出現。
+  if (symbolState.value.status === 'idle') void runSymbolSearch(symQuery.value.trim());
+}
+
+/** 離開欄位:標記「碰過」(未選標的的錯誤此後可見);焦點移出整個標的區塊才收起下拉(重試鈕在區塊內)。 */
+function onSymBlur(event: FocusEvent) {
+  touched.symbol = true;
+  const next = event.relatedTarget;
+  if (next instanceof Node && symBlock.value?.contains(next)) return;
+  symOpen.value = false;
+  activeIndex.value = -1;
+}
+
+function onSymInput() {
+  symOpen.value = true;
+  const query = symQuery.value.trim();
+  // 改了關鍵字 = 先前的選定作廢(否則畫面顯示 `AAP` 卻送出 `AAPL`)。
+  if (!selectedSymbol.value || query.toUpperCase() !== selectedSymbol.value.toUpperCase()) clearPick();
+  scheduleSymbolSearch(query);
+}
+
+/** combobox 必須可完全用鍵盤操作。 */
+function onSymKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    // 下拉開著時 Esc 只收起下拉,不連帶關閉對話框(document 層的 Esc 處理在冒泡階段)。
+    if (!symPopoverOpen.value) return;
+    event.stopPropagation();
+    symOpen.value = false;
+    activeIndex.value = -1;
+    return;
+  }
+  const rows = visibleOptions.value;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    symOpen.value = true;
+    if (!rows.length) return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    activeIndex.value = activeIndex.value < 0
+      ? (delta > 0 ? 0 : rows.length - 1)
+      : (activeIndex.value + delta + rows.length) % rows.length;
+    return;
+  }
+  if (event.key === 'Enter') {
+    const asset = symPopoverOpen.value ? rows[activeIndex.value] : undefined;
+    if (!asset) return;
+    event.preventDefault();
+    pickAsset(asset);
+  }
+}
+
+onBeforeUnmount(() => {
+  cancelPendingSearch();
+  searchController?.abort();
+});
+
+/**
+ * 開啟焦點:Trades 開啟(typeahead)→ 標的輸入框;Positions 開啟 → 該模式唯一的 Display 元素。
+ * 不落在送出鈕以免 Enter 誤送。
+ */
 function focusPrimaryField() {
+  if (isTypeahead.value) {
+    symInput.value?.focus();
+    return;
+  }
   const target = mode.value === 'cashDividend'
     ? amountInput.value
     : mode.value === 'stockDividend' ? sharesInput.value : ratioNewInput.value;
@@ -735,8 +1051,16 @@ function fieldErrorId(field: string): string {
   return `holding-event-${field}-error`;
 }
 
+/** 本模式除標的外的欄位是否都合法(送出鈕 disabled 的唯一原因若是「未選標的」,該原因必須可見)。 */
+const modeFieldsValid = computed(() => {
+  if (mode.value === 'cashDividend') return amountValid.value && taxValid.value && paidAtValid.value;
+  if (mode.value === 'stockDividend') return sharesValid.value && effectiveDateValid.value;
+  return ratioValid.value && effectiveDateValid.value;
+});
+
 function localFieldInvalid(field: string): boolean {
   switch (field) {
+    case 'symbol': return !selectedSymbol.value && (touched.symbol || modeFieldsValid.value);
     case 'amount': return !amountValid.value && (touched.amount || amount.value !== '');
     case 'withholdingTax': return !taxValid.value;
     case 'paidAt': return !paidAtValid.value && (touched.paidAt || paidAt.value !== '');
@@ -827,6 +1151,7 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
 
 /** 讓所有自檢錯誤可見(程式化觸發送出時不得靜默)。 */
 function touchAll() {
+  touched.symbol = true;
   touched.amount = true;
   touched.paidAt = true;
   touched.shares = true;
@@ -1002,6 +1327,46 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
 }
 
+/*
+  標的 typeahead:樣式沿用 OrderTicket 的 `.sym-*` / `.block-*`;listbox 在文件流內(U-04),
+  不是絕對定位 —— 對話框 body 會捲動,絕對定位的下拉會被裁切。
+*/
+.sym-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 8px; }
+.sym-pop {
+  margin-top: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+}
+.sym-list { max-height: 240px; overflow-y: auto; }
+.sym-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding: 8px 12px; min-height: 44px; cursor: pointer; font-size: 13px; font-weight: 400;
+}
+.sym-row:hover, .sym-row.active { background: var(--surface2); }
+.sym-truncated {
+  padding: 8px 12px; border-top: 1px solid var(--border);
+  color: var(--fg-mute); font-size: 12px; font-weight: 400; line-height: 1.35;
+}
+.block-state { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
+.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--dn); }
+.block-error .details {
+  display: flex; flex-wrap: wrap; gap: 4px 8px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px;
+}
+.block-error .details span { overflow-wrap: anywhere; user-select: text; }
+.block-retry {
+  margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--dn); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.block-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 骨架列固定 3 條,載入呈現不隨資料量變動 */
+.skeleton-row {
+  height: 16px; margin: 8px 0; border-radius: 4px;
+  background: var(--surface2);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
 .inp {
   width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
   padding: 8px 12px; min-height: 36px; font-size: 13px; font-weight: 400; line-height: 1.45;
@@ -1116,6 +1481,6 @@ textarea.inp { resize: vertical; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mask, .dialog, .check { animation: none; }
+  .mask, .dialog, .check, .skeleton-row { animation: none; }
 }
 </style>

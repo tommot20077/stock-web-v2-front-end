@@ -1247,6 +1247,7 @@ describe('HoldingEventDialog — 標的 typeahead(D-28 / D-03)', () => {
     await typeInto('holding-event-amount', '120');
     expect(submitButton().disabled, '無持倉也能記現金股利(D-03)').toBe(false);
     await submit();
+    await flushAsync(16);
 
     const calls = dividendCalls(fetchImpl);
     expect(calls).toHaveLength(1);
@@ -1269,6 +1270,7 @@ describe('HoldingEventDialog — 標的 typeahead(D-28 / D-03)', () => {
     expect(requireTestid('holding-event-amount-ccy').textContent?.trim()).toBeTruthy();
     await typeInto('holding-event-amount', '12.5');
     await submit();
+    await flushAsync(16);
 
     requireTestid('holding-event-result');
     expect(onRecorded).toHaveBeenCalledTimes(1);
