@@ -24,6 +24,12 @@ import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testU
 const CURRENT_YEAR = new Date().getFullYear();
 
 /**
+ * 04.2-20 反轉(DP-10 / U-09):CSV 表頭由 `date,type,symbol,currency,qty,price,total,fee,note`
+ * 擴充為含 tax / ratio / reversal_of / reversed 的 13 欄,兩模式共用。
+ */
+const CSV_HEADER_42 = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed';
+
+/**
  * 04.2-20(PORT-13):Trades 改讀 `GET /portfolio/activities`,列的形狀是 `PortfolioActivityDto`。
  * 既有案例以 TradeDto 的欄位描述一筆交易;這裡機械式轉成 BUY / SELL 活動列(occurredAt = executedAt、
  * amount = quantity × price,與契約〈各 kind 欄位適用表〉一致),呼叫端與斷言本體因此不用改。
@@ -799,12 +805,12 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
     const lines = csv.split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[0]).toBe(CSV_HEADER_42);
     expect(lines).toHaveLength(251);
     expect(csv).not.toContain('SELL');
     expect(csv).not.toContain('sell 0');
     // 匯出=當前條件的完整資料集,不只當前頁(第 100+ 筆也在)
-    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,buy 100');
+    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,,,buy 100,,');
     expect(dl.downloads[0]).toBe(`trades-buy-${new Date().toISOString().slice(0, 10)}.csv`);
   });
 
@@ -863,7 +869,7 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,"a,b ""quoted""\nnext"');
+    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,,,"a,b ""quoted""\nnext",,');
   });
 
   it('csvHasCurrencyColumn:API 匯出第 4 欄為 trade.currency,缺值為空字串,數值欄維持原始數字(T-04.1-45)', async () => {
@@ -881,10 +887,10 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const lines = (await dl.blobs[0].text()).split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
-    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,n1');
+    expect(lines[0]).toBe(CSV_HEADER_42);
+    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,,,n1,,');
     expect(lines[2].split(',')[3], 'currency 缺值 → 空字串,不猜測').toBe('');
-    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,');
+    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,,,,,');
   });
 
   it('currencyNoteShownInApiMode:API mode 表格上方有 tradesCurrencyNote', async () => {
@@ -1035,7 +1041,7 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(1);
   });
 
-  it('CSV 匯出沿用現行行為:當前篩選來源、既有欄序與檔名', async () => {
+  it('CSV 匯出:當前篩選來源、13 欄表頭(04.2-20 擴充)、mock DIV 列 type 為 CASH_DIVIDEND、檔名沿用', async () => {
     const dl = captureDownloads();
     restorers.push(dl.restore);
 
@@ -1052,9 +1058,9 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
 
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
+    expect(csv).toContain(CSV_HEADER_42);
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,,,first,,');
+    expect(csv).toContain('2026-01-15,CASH_DIVIDEND,CCC,,4,0.5,2,0,,,cash,,');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
   });
@@ -1072,7 +1078,7 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     await flushAsync();
 
     const lines = (await dl.blobs[0].text()).split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[0]).toBe(CSV_HEADER_42);
     expect(lines).toHaveLength(4);
     for (const line of lines.slice(1)) {
       expect(line.split(',')[3], `mock 列第 4 欄應為空字串:${line}`).toBe('');
@@ -1707,5 +1713,147 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
     expect(testid('trades-reversal-of')).toBeNull();
     expect(testid('trades-reversed-pill')).toBeNull();
     expect(document.body.querySelector('.is-reversed')).toBeNull();
+  });
+});
+
+describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  function localDate(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  const ORIG = 'aaaaaaaa-1111-4222-8333-000000000001';
+  const REV = 'aaaaaaaa-1111-4222-8333-000000000002';
+  const SPLIT_ID = 'bbbbbbbb-1111-4222-8333-000000000001';
+  const STOCK_ID = 'cccccccc-1111-4222-8333-000000000001';
+  const ADJ_REV = 'dddddddd-1111-4222-8333-000000000001';
+
+  function exportItems(): PortfolioActivityDto[] {
+    return [
+      activity({
+        id: ORIG,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120.5,
+        withholdingTax: 30,
+        occurredAt: '2026-10-30T01:15:00Z',
+        note: 'Q3',
+        reversed: true,
+      }),
+      activity({
+        id: REV,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120.5,
+        withholdingTax: 30,
+        occurredAt: '2026-10-31T02:00:00Z',
+        reversalOfId: ORIG,
+        reversalOfOccurredAt: '2026-10-30T01:15:00Z',
+      }),
+      activity({
+        id: SPLIT_ID,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+      }),
+      activity({
+        id: STOCK_ID,
+        kind: 'STOCK_DIVIDEND',
+        symbol: '2330',
+        currency: 'TWD',
+        quantity: 12.5,
+        effectiveDate: '2026-08-15',
+        occurredAt: '2026-08-14T16:00:00Z',
+      }),
+      activity({
+        id: ADJ_REV,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+        reversalOfId: SPLIT_ID,
+        reversalOfEffectiveDate: '2026-07-01',
+      }),
+    ];
+  }
+
+  async function exportWith(fetchMock: TradesFetch) {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+    await mountApiTrades(fetchMock);
+    return dl;
+  }
+
+  it('股利列 type=CASH_DIVIDEND、total = amount、tax 有值;被沖銷列 reversed=true;沖銷列 reversal_of 為原紀錄日期', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe(CSV_HEADER_42);
+    expect(lines).toHaveLength(6);
+    expect(lines[1]).toBe(`${localDate('2026-10-30T01:15:00Z')},CASH_DIVIDEND,AAPL,USD,,,120.5,,30,,Q3,,true`);
+    expect(lines[2]).toBe(`${localDate('2026-10-31T02:00:00Z')},CASH_DIVIDEND,AAPL,USD,,,120.5,,30,,,${localDate('2026-10-30T01:15:00Z')},`);
+  });
+
+  it('拆股列 qty = 帶號 delta 原始數字、ratio = 4:1;配股列 qty 原始數字;股數調整沖銷列 reversal_of = 原 effectiveDate', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[3]).toBe('2026-07-01,SPLIT,TSLA,USD,300,,,,,4:1,,,');
+    expect(lines[4]).toBe('2026-08-15,STOCK_DIVIDEND,2330,TWD,12.5,,,,,,,,');
+    expect(lines[5]).toBe('2026-07-01,SPLIT,TSLA,USD,300,,,,,4:1,,2026-07-01,');
+  });
+
+  it('CSV 內容不含任何 uuid(T-04.2-44)', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const csv = await dl.blobs[0].text();
+    for (const uuid of [ORIG, REV, SPLIT_ID, STOCK_ID, ADJ_REV]) expect(csv).not.toContain(uuid);
+  });
+
+  it('匯出與畫面同源:股數調整頁籤逐頁走 /portfolio/activities?type=SHARE_ADJUSTMENT,檔名 trades-shareadjustment-{date}.csv', async () => {
+    const fetchMock = fakeBackendFetch(exportItems());
+    const dl = await exportWith(fetchMock);
+
+    clickChip('share-adjustment');
+    await flushAsync();
+    const before = urls(fetchMock).length;
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const exportUrls = urls(fetchMock).slice(before);
+    expect(exportUrls.length).toBeGreaterThan(0);
+    for (const url of exportUrls) {
+      expect(url).toContain('/portfolio/activities');
+      expect(paramsOf(url).get('type')).toBe('SHARE_ADJUSTMENT');
+      expect(paramsOf(url).get('size')).toBe('100');
+    }
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines.slice(1).every(line => /,(SPLIT|STOCK_DIVIDEND),/.test(line))).toBe(true);
+    expect(dl.downloads[0]).toBe(`trades-shareadjustment-${new Date().toISOString().slice(0, 10)}.csv`);
   });
 });
