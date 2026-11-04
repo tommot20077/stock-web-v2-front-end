@@ -22,19 +22,20 @@
     </div>
 
     <!--
-      chips。mock:五個(含 Dividend 與寫死的 2026)照舊。
-      API mode:後端 TradeType 只有 BUY/SELL,永遠回不出 DIV → 不渲染 Dividend(D-02);
-      年度 chip 為動態當年度,不寫死(D-05)。
+      04.2-20(D-12 / PORT-13 / U-25):chip 值為內部 id,標籤經 i18n。兩模式皆 6 顆:
+      全部 / 買入 / 賣出 / 股利 / 股數調整 / 年度(mock 保留寫死的 2026;API 為動態當年度,D-05)。
+      API mode 的每顆頁籤都是後端篩選(活動列表的 type 參數),前端不合併多個分頁端點。
+      個別 id 的 testid(trades-chip-{id})在按鈕本身;既有共用的 trades-chip 保留在標籤 span 上。
     -->
     <div class="filters">
       <button
         v-for="c in chips"
         :key="c"
         type="button"
-        data-testid="trades-chip"
+        :data-testid="`trades-chip-${chipTestId(c)}`"
         :class="['chip', { active: activeFilter === c }]"
         @click="selectChip(c)"
-      >{{ c }}</button>
+      ><span data-testid="trades-chip">{{ chipLabel(c) }}</span></button>
     </div>
 
     <div class="card" data-testid="trades-table" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
@@ -147,7 +148,7 @@
         </tbody>
         <!--
           API 路徑:整份列表就是後端當前頁的回應,前端不再做任何本地篩選或排序(T-03-15)。
-          :key 用 TradeDto.id(uuid),取代原本的多欄拼接 key —— 同內容不同筆的交易才不會撞 key。
+          :key 用活動列的 id(uuid,04.2-20 前為 TradeDto.id),取代原本的多欄拼接 key —— 同內容不同筆的紀錄才不會撞 key。
           D-13:fresh 的來源是 effectiveLastFill(API mode 由 post-trade refetch 提供)。
         -->
         <tbody v-else>
@@ -155,10 +156,11 @@
             v-for="(tr, i) in apiTrades"
             :key="tr.id"
             data-testid="trades-row"
+            :data-kind="tr.kind"
             :class="{ fresh: i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym }"
           >
-            <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tradeDate(tr) }}</td>
-            <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
+            <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ activityDate(tr) }}</td>
+            <td><span :class="['pill', kindPillClass(tr)]" data-testid="trades-kind-pill">{{ kindLabel(tr) }}</span></td>
             <td style="font-weight:600">
               {{ tr.symbol }}
               <!-- D-28 / D-30:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
@@ -172,7 +174,15 @@
             </td>
             <td class="num" style="text-align:right">{{ tr.quantity }}</td>
             <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
-            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity * tr.price, tr.currency, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">
+              <template v-if="isTrade(tr)">{{ fmtMoneyAmount(tradeTotal(tr), tr.currency, 0) }}</template>
+              <template v-else>
+                {{ fmtMoneyAmount(tr.amount, tr.currency) }}
+                <div v-if="(tr.withholdingTax ?? 0) > 0" class="cell-hint" data-testid="trades-tax-line">
+                  {{ tf(lang, 'tradesTaxLine', { amount: fmtMoneyAmount(tr.withholdingTax, tr.currency) }) }}
+                </div>
+              </template>
+            </td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(tr.fee, tr.currency) }}</td>
             <td style="padding-right:16px;color:var(--fg-dim)">{{ tr.note || '—' }}</td>
           </tr>
@@ -198,12 +208,12 @@
 
 <script setup lang="ts">
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { fmtNum } from '../data';
 import { fmtMoneyAmount } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
-import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
-import type { TradeListParams } from '../services/portfolioApi';
+import type { PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
+import type { ActivityListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
   apiLastFill,
@@ -215,7 +225,7 @@ import {
 import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
 
-defineProps<{ lang: Lang }>();
+const props = defineProps<{ lang: Lang }>();
 defineEmits<{ (e: 'order'): void }>();
 
 // judgment §3:頁面只認 domain service,永不 import mock store。
@@ -235,20 +245,56 @@ const effectiveLastFill = computed(() => (live ? live.lastFill : apiLastFill.val
 // D-05:mock 保留寫死的 '2026';API mode 一律動態當年度(2027 年不會突然壞掉)。
 const CURRENT_YEAR = new Date().getFullYear();
 const YEAR_CHIP = String(CURRENT_YEAR);
-const MOCK_CHIPS = ['All', 'Buy', 'Sell', 'Dividend', '2026'];
-const API_CHIPS = ['All', 'Buy', 'Sell', YEAR_CHIP];
+const MOCK_YEAR_CHIP = '2026';
 
-const chips = computed(() => (live ? MOCK_CHIPS : API_CHIPS));
-const activeFilter = ref<string>('All');
+/**
+ * 04.2-20(U-25):頁籤的內部 id。年度 chip 的 id 就是年份字串(檔名 `trades-2026-…` 沿用既有行為)。
+ * 04.2-21 依此 id 決定頁首動作與空狀態。
+ */
+type TypeChipId = 'all' | 'buy' | 'sell' | 'dividend' | 'shareAdjustment';
+type ChipId = TypeChipId | string;
+
+const TYPE_CHIPS: readonly TypeChipId[] = ['all', 'buy', 'sell', 'dividend', 'shareAdjustment'];
+const CHIP_LABEL_KEYS: Record<TypeChipId, string> = {
+  all: 'tradesChipAll',
+  buy: 'tradesChipBuy',
+  sell: 'tradesChipSell',
+  dividend: 'tradesChipDividend',
+  shareAdjustment: 'tradesChipShareAdjustment',
+};
+/** 頁籤 → 活動列表 `type`(D-12);`all` 與年度不送 type(年度改送 dateFrom / dateTo)。 */
+const CHIP_ACTIVITY_TYPE: Partial<Record<TypeChipId, NonNullable<ActivityListParams['type']>>> = {
+  buy: 'BUY',
+  sell: 'SELL',
+  dividend: 'DIVIDEND',
+  shareAdjustment: 'SHARE_ADJUSTMENT',
+};
+
+function isTypeChip(id: ChipId): id is TypeChipId {
+  return (TYPE_CHIPS as readonly string[]).includes(id);
+}
+
+const chips = computed<ChipId[]>(() => [...TYPE_CHIPS, live ? MOCK_YEAR_CHIP : YEAR_CHIP]);
+const activeFilter = ref<ChipId>('all');
+
+function chipLabel(id: ChipId): string {
+  return isTypeChip(id) ? t(props.lang, CHIP_LABEL_KEYS[id]) : id;
+}
+
+/** UI-SPEC §Test-Visible Contract:`trades-chip-{all|buy|sell|dividend|share-adjustment|year}`。 */
+function chipTestId(id: ChipId): string {
+  if (id === 'shareAdjustment') return 'share-adjustment';
+  return isTypeChip(id) ? id : 'year';
+}
 
 // D-07:預設 executedAt 降序、size 20(明確送出,不倚賴後端預設)。
 const PAGE_SIZE = 20;
 // D-10 / T-03-19:匯出以後端 clamp 上限的 size 減少請求數。
 const EXPORT_PAGE_SIZE = 100;
 
-type SortKey = NonNullable<TradeListParams['sort']>;
+type SortKey = 'executedAt' | 'total' | 'quantity';
 const sortKey = ref<SortKey>('executedAt');
-const sortDir = ref<NonNullable<TradeListParams['direction']>>('desc');
+const sortDir = ref<NonNullable<ActivityListParams['direction']>>('desc');
 const pageNo = ref(0);
 
 // =============== API mode 狀態機(D-11:區塊內嵌四態,retry 只重打自己) ===============
@@ -262,13 +308,13 @@ type BlockState<T> =
   | { status: 'loaded'; data: T }
   | { status: 'error'; error: BlockError };
 
-const tradesState = ref<BlockState<PaginatedResponse<TradeDto>>>({ status: 'loading' });
+const tradesState = ref<BlockState<PaginatedResponse<PortfolioActivityDto>>>({ status: 'loading' });
 
 // 模板不做型別窄化(vue-tsc 對模板內 union 窄化支援不穩),一律先投影成 computed。
 const tradesLoading = computed(() => tradesState.value.status === 'loading');
 const tradesError = computed(() => (tradesState.value.status === 'error' ? tradesState.value.error : null));
 const tradesPage = computed(() => (tradesState.value.status === 'loaded' ? tradesState.value.data : null));
-const apiTrades = computed<TradeDto[]>(() => tradesPage.value?.items ?? []);
+const apiTrades = computed<PortfolioActivityDto[]>(() => tradesPage.value?.items ?? []);
 const totalPages = computed(() => tradesPage.value?.totalPages ?? 0);
 
 /**
@@ -296,12 +342,16 @@ function describeError(error: unknown): BlockError {
 
 /**
  * chip → 後端篩選參數。日期為半開區間 [dateFrom, dateTo)(03-01-SUMMARY 契約:
- * dateFrom 含、dateTo 不含),因此「當年度」= 今年年初 ≤ executedAt < 明年年初。
+ * dateFrom 含、dateTo 不含),因此「當年度」= 今年年初 ≤ occurredAt < 明年年初。
+ * 04.2-20(D-12):股利 / 股數調整同樣是後端篩選(type=DIVIDEND / SHARE_ADJUSTMENT)。
  */
-function filterParams(): Pick<TradeListParams, 'type' | 'dateFrom' | 'dateTo'> {
-  if (activeFilter.value === 'Buy') return { type: 'BUY' };
-  if (activeFilter.value === 'Sell') return { type: 'SELL' };
-  if (activeFilter.value === YEAR_CHIP) {
+function filterParams(): Pick<ActivityListParams, 'type' | 'dateFrom' | 'dateTo'> {
+  const id = activeFilter.value;
+  if (isTypeChip(id)) {
+    const type = CHIP_ACTIVITY_TYPE[id];
+    return type ? { type } : {};
+  }
+  if (id === YEAR_CHIP) {
     return {
       dateFrom: toLocalIso(new Date(CURRENT_YEAR, 0, 1)),
       dateTo: toLocalIso(new Date(CURRENT_YEAR + 1, 0, 1)),
@@ -311,7 +361,7 @@ function filterParams(): Pick<TradeListParams, 'type' | 'dateFrom' | 'dateTo'> {
 }
 
 /** 篩選 + 排序參數的單一來源:列表與 CSV 匯出共用,兩者語意不可能漂移(D-10)。 */
-function queryParams(): TradeListParams {
+function queryParams(): ActivityListParams {
   return { ...filterParams(), sort: sortKey.value, direction: sortDir.value };
 }
 
@@ -353,7 +403,7 @@ async function loadTrades(options: LoadTradesOptions = {}): Promise<void> {
   }
   const requestedPage = pageNo.value;
   try {
-    const result = await api.listTrades({ ...queryParams(), page: requestedPage, size: PAGE_SIZE });
+    const result = await api.listActivities({ ...queryParams(), page: requestedPage, size: PAGE_SIZE });
     if (
       allowOverflowFallback
       && result.items.length === 0
@@ -401,7 +451,7 @@ function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
   void loadTrades(options);
 }
 
-function selectChip(chip: string) {
+function selectChip(chip: ChipId) {
   if (live) {
     activeFilter.value = chip;
     return;
@@ -460,21 +510,52 @@ watch(portfolioRevision, () => {
 const SortArrow = (p: { k: string; sk: string; sd: 'asc' | 'desc' }) =>
   p.k === p.sk ? createElement('span', { class: 'sort-a' }, p.sd === 'asc' ? '↑' : '↓') : null;
 
-/** executedAt 是 ISO-8601,表格只顯示日期部分。 */
-function tradeDate(trade: TradeDto): string {
-  return trade.executedAt.slice(0, 10);
+/** 交易列的 occurredAt(= executedAt)是 ISO-8601,表格只顯示日期部分(既有行為)。 */
+function activityDate(row: PortfolioActivityDto): string {
+  return row.occurredAt.slice(0, 10);
+}
+
+function isTrade(row: PortfolioActivityDto): boolean {
+  return row.kind === 'BUY' || row.kind === 'SELL';
+}
+
+/** 交易總額 = quantity × price(不含 fee,與後端 total 排序鍵同語意)。 */
+function tradeTotal(row: PortfolioActivityDto): number | null {
+  if (row.quantity === null || row.price === null) return row.amount;
+  return row.quantity * row.price;
+}
+
+const KIND_LABEL_KEYS: Record<Exclude<PortfolioActivityDto['kind'], 'BUY' | 'SELL'>, string> = {
+  CASH_DIVIDEND: 'activityKindCashDividend',
+  STOCK_DIVIDEND: 'activityKindStockDividend',
+  SPLIT: 'activityKindSplit',
+};
+
+/** 類型 pill 文字:買 / 賣沿用既有原字串;股利 / 配股 / 拆股經 i18n。 */
+function kindLabel(row: PortfolioActivityDto): string {
+  if (row.kind === 'BUY' || row.kind === 'SELL') return row.kind;
+  return t(props.lang, KIND_LABEL_KEYS[row.kind]);
+}
+
+function kindPillClass(row: PortfolioActivityDto): string {
+  if (row.kind === 'BUY') return 'buy';
+  if (row.kind === 'SELL') return 'sell';
+  return row.kind === 'CASH_DIVIDEND' ? 'div' : '';
 }
 
 // =============== mock mode:以下篩選與 Phase 3 之前逐字相同 ===============
 const filteredTrades = computed(() => {
   switch (activeFilter.value) {
-    case 'Buy':
+    case 'buy':
       return mockTrades.value.filter(tr => tr.type === 'BUY');
-    case 'Sell':
+    case 'sell':
       return mockTrades.value.filter(tr => tr.type === 'SELL');
-    case 'Dividend':
+    case 'dividend':
       return mockTrades.value.filter(tr => tr.type === 'DIV');
-    case '2026':
+    // mock 交易沒有股數調整(mock 拆股 / 配股只攤薄持倉,不寫交易列)→ 恆為空
+    case 'shareAdjustment':
+      return [];
+    case MOCK_YEAR_CHIP:
       return mockTrades.value.filter(tr => tr.d.startsWith('2026'));
     default:
       return mockTrades.value;
@@ -512,11 +593,11 @@ async function exportApiCsv() {
   exporting.value = true;
   exportError.value = null;
   try {
-    const collected: TradeDto[] = [];
+    const collected: PortfolioActivityDto[] = [];
     let requestPage = 0;
     let pages = 1;
     do {
-      const result = await api.listTrades({
+      const result = await api.listActivities({
         ...queryParams(),
         page: requestPage,
         size: EXPORT_PAGE_SIZE,
@@ -527,13 +608,13 @@ async function exportApiCsv() {
     } while (requestPage < pages);
 
     downloadCsv(collected.map(tr => [
-      tradeDate(tr),
-      tr.type,
+      activityDate(tr),
+      tr.kind,
       tr.symbol,
       tr.currency ?? '',
       tr.quantity,
       tr.price,
-      tr.quantity * tr.price,
+      tradeTotal(tr),
       tr.fee,
       tr.note,
     ]));
@@ -617,6 +698,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
+/* 04.2-20:儲存格內第二行 Hint(預扣稅行 / 比例行 / 沖銷指回;UI-SPEC §Typography Hint 12/400) */
+.cell-hint { margin-top: 4px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
 /* D-28:交易列的幣別標籤。與 .fresh-badge 同尺寸規格,line-height 1.2 讓它落在既有 line box 內、不改列高。 */
 .ccy-tag {
   display: inline-block; margin-left: 8px; padding: 0 8px;
