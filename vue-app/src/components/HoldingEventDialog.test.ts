@@ -18,7 +18,7 @@ import {
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
-import type { AssetDto } from '../services/apiTypes';
+import type { AssetDto, PortfolioActivityDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -1422,5 +1422,327 @@ describe('HoldingEventDialog — 標的 typeahead(D-28 / D-03)', () => {
     expect(holdingEventDialogSource).toMatch(/\.sym-row\s*\{[^}]*min-height:\s*44px/);
     expect(holdingEventDialogSource).toMatch(/\.sym-row\s*\{[^}]*padding:\s*8px 12px/);
     expect(holdingEventDialogSource).toMatch(/searchAssets\(/);
+  });
+});
+
+// =====================================================================================
+// Phase 04.2 Plan 19 Task 2:沖銷模式(D-13 記錯以沖銷修正)。
+// 值由 Trades 活動列帶入且不可編輯(DB 驗證沖銷值與原列相同),只有備註可改;
+// 沖銷衝突丟棄 key、鎖住送出、emit reversalConflict 讓開啟者重讀列表。
+// =====================================================================================
+
+/** 原列 UUID:任何沖銷畫面都不得顯示它(T-04.2-43,只以日期指回)。 */
+const ORIGINAL_UUID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+
+function activityRow(overrides: Partial<PortfolioActivityDto>): PortfolioActivityDto {
+  return {
+    id: ORIGINAL_UUID,
+    kind: 'CASH_DIVIDEND',
+    symbol: 'AAPL',
+    currency: 'USD',
+    occurredAt: '2026-10-15T09:30:00+08:00',
+    effectiveDate: null,
+    createdAt: '2026-10-15T09:31:00+08:00',
+    quantity: null,
+    price: null,
+    fee: null,
+    amount: null,
+    withholdingTax: null,
+    ratioNew: null,
+    ratioOld: null,
+    note: null,
+    reversalOfId: null,
+    reversalOfOccurredAt: null,
+    reversalOfEffectiveDate: null,
+    reversed: false,
+    reversible: true,
+    ...overrides,
+  };
+}
+
+const DIVIDEND_ROW = activityRow({ kind: 'CASH_DIVIDEND', amount: 120, withholdingTax: 30, note: 'Q3 配息' });
+const SPLIT_ROW = activityRow({
+  kind: 'SPLIT',
+  occurredAt: '2026-10-20T13:30:00Z',
+  effectiveDate: '2026-10-20',
+  quantity: 300,
+  ratioNew: 4,
+  ratioOld: 1,
+});
+const STOCK_DIVIDEND_ROW = activityRow({
+  kind: 'STOCK_DIVIDEND',
+  occurredAt: '2026-10-01T13:30:00Z',
+  effectiveDate: '2026-10-01',
+  quantity: 50,
+});
+
+/** 後端回的沖銷紀錄:沖銷列輸出原值(不反號),以 `reversalOfId` 判斷。 */
+const REVERSAL_DIVIDEND_DTO: DividendDto = {
+  ...RECORDED_DIVIDEND,
+  id: 'dividend-reversal-1',
+  note: 'reversal-from-backend',
+  reversalOfId: ORIGINAL_UUID,
+};
+
+function reversalAdjustmentDto(overrides: Partial<ShareAdjustmentDto> = {}): ShareAdjustmentDto {
+  return adjustmentDto({
+    id: 'adjustment-reversal-1',
+    type: 'SPLIT',
+    quantityDelta: 300,
+    ratioNew: 4,
+    ratioOld: 1,
+    effectiveDate: '2026-10-20',
+    reversalOfId: ORIGINAL_UUID,
+    ...overrides,
+  });
+}
+
+/** 從 Trades 活動列開啟沖銷:不傳 symbol / holding,值全來自 `reversalOf`。 */
+function reversalProps(row: PortfolioActivityDto) {
+  return { symbol: null, holding: null, reversalOf: row };
+}
+
+function localDateOf(iso: string): string {
+  return toLocalInputValue(new Date(iso)).slice(0, 10);
+}
+
+function dialogText(): string {
+  return requireTestid('holding-event-dialog').textContent ?? '';
+}
+
+describe('HoldingEventDialog — 沖銷模式(D-13)', () => {
+  it('rendersTheOriginalSummaryAndPreviewForACashDividend', async () => {
+    const { fetchImpl } = await mountDialog({ fetchImpl: holdingEventFetch(), props: reversalProps(DIVIDEND_ROW) });
+
+    expect(document.getElementById('holding-event-dialog-title')?.textContent?.trim()).toBe(t('zh', 'cashDialogTitleReversal'));
+    // 不渲染模式切換、typeahead、鎖定標的區與任何數值輸入框。
+    expect(testid('holding-event-mode-cash-dividend')).toBeNull();
+    expect(testid('holding-event-symbol-input')).toBeNull();
+    expect(testid('holding-event-amount')).toBeNull();
+    expect(testid('holding-event-tax')).toBeNull();
+    expect(testid('holding-event-paid-at')).toBeNull();
+    expect(callsTo(fetchImpl, '/assets'), '沖銷不需要搜尋標的').toHaveLength(0);
+
+    const original = requireTestid('holding-event-reversal-original');
+    expect(original.textContent).toContain(t('zh', 'cashReversalOriginal'));
+    expect(original.textContent).toContain(t('zh', 'activityKindCashDividend'));
+    expect(original.textContent).toContain('AAPL');
+    expect(original.querySelector('.ccy-tag')?.textContent?.trim()).toBe('USD');
+    expect(original.textContent).toContain(toLocalInputValue(new Date(DIVIDEND_ROW.occurredAt)).replace('T', ' '));
+    expect(original.textContent).toContain(fmtMoney(120, 'USD', 2));
+    expect(original.textContent).toContain(fmtMoney(30, 'USD', 2));
+    expect(original.textContent).toContain('Q3 配息');
+
+    const preview = requireTestid('holding-event-reversal-preview');
+    expect(preview.textContent).toContain(t('zh', 'cashReversalWillRecord'));
+    expect(preview.textContent).toContain(
+      tf('zh', 'holdingEventReversalPreviewDividend', { code: 'USD', amount: fmtMoney(120, 'USD', 2) }),
+    );
+    expect(dialogText()).toContain(t('zh', 'holdingEventReversalNoteDividend'));
+
+    expect(document.activeElement, '沖銷開啟焦點在備註').toBe(requireTestid('holding-event-note'));
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'cashRecordReversal'));
+    expect(submitButton().disabled).toBe(false);
+    expect(dialogText(), '不得顯示原列 uuid').not.toContain(ORIGINAL_UUID);
+  });
+
+  it('submitsTheDividendReversalWithOriginalValuesAndPointsBackByDate', async () => {
+    const { fetchImpl, onRecorded } = await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => okResponse(REVERSAL_DIVIDEND_DTO) }),
+      props: reversalProps(DIVIDEND_ROW),
+    });
+    await typeInto('holding-event-note', '記錯了');
+    await submit();
+
+    const calls = dividendCalls(fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(bodiesOf(calls)[0]).toEqual({
+      symbol: 'AAPL',
+      amount: 120,
+      withholdingTax: 30,
+      paidAt: null,
+      note: '記錯了',
+      reversalOfId: ORIGINAL_UUID,
+    });
+    expect(keysOf(calls)[0]).toHaveLength(36);
+
+    requireTestid('holding-event-result');
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'cashReversalRecorded'));
+    expect(requireTestid('holding-event-result-reversal-of').textContent?.trim())
+      .toBe(tf('zh', 'cashReversalOf', { date: localDateOf(DIVIDEND_ROW.occurredAt) }));
+    expect(bodyText()).toContain('reversal-from-backend');
+    // reversal 的 result footer 只有 `完成`。
+    expect(testid('holding-event-record-another')).toBeNull();
+    requireTestid('holding-event-done');
+    expect(dialogText(), 'result 也不得顯示原列 uuid').not.toContain(ORIGINAL_UUID);
+
+    expect(portfolioRevisionCause.value).toBe('dividend');
+    expect(lastCreatedHoldingEventId.value).toBe(REVERSAL_DIVIDEND_DTO.id);
+    expect(onRecorded).toHaveBeenCalledWith(REVERSAL_DIVIDEND_DTO);
+  });
+
+  it('rendersAndSubmitsASplitReversalWithTheRecordedRatioAndExDate', async () => {
+    const dto = reversalAdjustmentDto();
+    const { fetchImpl } = await mountDialog({ fetchImpl: adjustmentFetch(dto), props: reversalProps(SPLIT_ROW) });
+
+    expect(testid('holding-event-ratio-new')).toBeNull();
+    expect(testid('holding-event-effective-date')).toBeNull();
+    const original = requireTestid('holding-event-reversal-original');
+    expect(original.textContent).toContain(t('zh', 'activityKindSplit'));
+    expect(original.textContent).toContain('2026-10-20');
+    expect(original.textContent).toContain(fmtSignedQuantity(300));
+    expect(original.textContent).toContain('4 : 1');
+    expect(requireTestid('holding-event-reversal-preview').textContent).toContain(
+      tf('zh', 'holdingEventReversalPreviewAdjustment', { symbol: 'AAPL', qty: fmtSignedQuantity(300) }),
+    );
+    expect(dialogText()).toContain(t('zh', 'holdingEventReversalNoteAdjustment'));
+    expect(document.activeElement).toBe(requireTestid('holding-event-note'));
+
+    await submit();
+    const calls = adjustmentCalls(fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(bodiesOf(calls)[0]).toEqual({
+      symbol: 'AAPL',
+      type: 'SPLIT',
+      quantity: null,
+      ratioNew: 4,
+      ratioOld: 1,
+      effectiveDate: '2026-10-20',
+      note: null,
+      reversalOfId: ORIGINAL_UUID,
+    });
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'cashReversalRecorded'));
+    expect(requireTestid('holding-event-result-reversal-of').textContent?.trim())
+      .toBe(tf('zh', 'cashReversalOf', { date: '2026-10-20' }));
+    expect(portfolioRevisionCause.value).toBe('shareAdjustment');
+    expect(dialogText()).not.toContain(ORIGINAL_UUID);
+  });
+
+  it('submitsAStockDividendReversalWithTheRecordedQuantity', async () => {
+    const dto = reversalAdjustmentDto({ type: 'STOCK_DIVIDEND', quantityDelta: 50, ratioNew: null, ratioOld: null, effectiveDate: '2026-10-01' });
+    const { fetchImpl } = await mountDialog({ fetchImpl: adjustmentFetch(dto), props: reversalProps(STOCK_DIVIDEND_ROW) });
+
+    expect(requireTestid('holding-event-reversal-original').textContent).toContain(t('zh', 'activityKindStockDividend'));
+    await submit();
+    expect(bodiesOf(adjustmentCalls(fetchImpl))[0]).toEqual({
+      symbol: 'AAPL',
+      type: 'STOCK_DIVIDEND',
+      quantity: 50,
+      ratioNew: null,
+      ratioOld: null,
+      effectiveDate: '2026-10-01',
+      note: null,
+      reversalOfId: ORIGINAL_UUID,
+    });
+  });
+
+  it('reversalConflictsLockSubmitAndAskTheOpenerToReload', async () => {
+    const cases: Array<[string, number, string, PortfolioActivityDto]> = [
+      ['DIVIDEND_ALREADY_REVERSED', 409, 'cashErrAlreadyReversed', DIVIDEND_ROW],
+      ['DIVIDEND_NOT_REVERSIBLE', 409, 'cashErrNotReversible', DIVIDEND_ROW],
+      ['DIVIDEND_NOT_FOUND', 404, 'cashErrOriginalNotFound', DIVIDEND_ROW],
+      ['SHARE_ADJUSTMENT_ALREADY_REVERSED', 409, 'cashErrAlreadyReversed', SPLIT_ROW],
+      ['SHARE_ADJUSTMENT_NOT_REVERSIBLE', 409, 'holdingEventErrAdjustmentNotReversible', SPLIT_ROW],
+      ['SHARE_ADJUSTMENT_NOT_FOUND', 404, 'cashErrOriginalNotFound', STOCK_DIVIDEND_ROW],
+    ];
+    for (const [code, status, key, row] of cases) {
+      const fail = () => failure(code, { status });
+      const { fetchImpl, onReversalConflict } = await mountDialog({
+        fetchImpl: holdingEventFetch({ dividends: fail, adjustments: fail }),
+        props: reversalProps(row),
+      });
+      await submit();
+
+      expect(errorText(), code).toContain(t('zh', key));
+      expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe(code);
+      expect(onReversalConflict, code).toHaveBeenCalledTimes(1);
+      expect(onReversalConflict).toHaveBeenCalledWith(code);
+      expect(submitButton().disabled, `${code}:此原紀錄不可再沖銷`).toBe(true);
+
+      // 改備註也不解鎖,錯誤(送出鈕 disabled 的可見原因)持續顯示。
+      await typeInto('holding-event-note', 'retry');
+      expect(submitButton().disabled, code).toBe(true);
+      expect(errorText(), code).toContain(t('zh', key));
+      await submit();
+      expect(callsTo(fetchImpl, '/portfolio/').length, `${code}:鎖定後不得再送`).toBe(1);
+      expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+      cleanupMounted();
+    }
+  });
+
+  it('reversalInsufficientHoldingShowsTheReversalCopyAndKeepsTheKey', async () => {
+    const uuids = stubUuids();
+    let attempt = 0;
+    const { fetchImpl, onReversalConflict } = await mountDialog({
+      fetchImpl: holdingEventFetch({
+        adjustments: () => (++attempt === 1
+          ? failure('TRADE_INSUFFICIENT_HOLDING', { status: 409 })
+          : okResponse(reversalAdjustmentDto())),
+      }),
+      props: reversalProps(SPLIT_ROW),
+    });
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrReversalNoHolding'));
+    expect(errorText(), '不是 form 模式的無持倉文案').not.toContain(t('zh', 'holdingEventErrNoHolding'));
+    expect(onReversalConflict, '持股不足不是沖銷衝突').not.toHaveBeenCalled();
+    expect(submitButton().disabled).toBe(false);
+
+    await submit();
+    expect(keysOf(adjustmentCalls(fetchImpl))).toEqual(['key-1', 'key-1']);
+    expect(uuids).toHaveBeenCalledTimes(1);
+  });
+
+  it('editingTheReversalNoteMintsANewKey', async () => {
+    stubUuids();
+    let attempt = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => {
+          attempt += 1;
+          if (attempt <= 2) throw new TypeError('network down');
+          return okResponse(REVERSAL_DIVIDEND_DTO);
+        },
+      }),
+      props: reversalProps(DIVIDEND_ROW),
+    });
+    await submit();
+    expect(errorText()).toContain(t('zh', 'cashErrNetwork'));
+    await submit();
+    await typeInto('holding-event-note', 'changed');
+    await submit();
+
+    expect(keysOf(dividendCalls(fetchImpl)), '重試沿用;改備註換新').toEqual(['key-1', 'key-1', 'key-2']);
+  });
+
+  it('reversalValueMismatchFallsBackToTheBottomValidationCopy', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('VALIDATION_FAILED', { fields: { amount: FIELD_VALUE_CANARY } }),
+      }),
+      props: reversalProps(DIVIDEND_ROW),
+    });
+    await submit();
+
+    // 沖銷畫面沒有金額輸入框:欄位錯誤對不到節點,必須退回底部,不得按了送出卻看不到任何東西。
+    expect(errorText()).toContain(t('zh', 'holdingEventErrValidation'));
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+
+  it('closingFromTheReversalResultUsesOnlyDone', async () => {
+    const { onClose } = await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => okResponse(REVERSAL_DIVIDEND_DTO) }),
+      props: reversalProps(DIVIDEND_ROW),
+    });
+    await submit();
+    const footerButtons = [...document.body.querySelectorAll<HTMLButtonElement>('.ft button')];
+    expect(footerButtons.map(button => button.dataset.testid)).toEqual(['holding-event-done']);
+    await click(requireTestid('holding-event-done'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('mapsReversalCodesInTheCopyTable', () => {
+    expect(holdingEventDialogSource).toMatch(/emit\('reversalConflict'/);
+    expect(holdingEventDialogSource).toMatch(/holdingEventErrReversalNoHolding/);
   });
 });
