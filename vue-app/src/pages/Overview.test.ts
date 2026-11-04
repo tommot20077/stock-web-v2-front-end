@@ -1736,3 +1736,78 @@ describe('Overview — mock mode 的觀察清單卡與新聞卡(維持原樣)', 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+// =====================================================================================
+// 04.2-24(DIV-02;D-01;UI-SPEC §4、U-10):KPI #4「總報酬率」的股利收入附加列。
+// 數值刻意不同於 mock(3840 / 960),證明資料來自後端(04.1 慣例)。
+// =====================================================================================
+
+describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
+  async function mountDividend(overrides: Partial<PortfolioSummaryDto>, lang: 'en' | 'zh' = 'en') {
+    await mountApiOverview(routedFetch({
+      summary: () => success(summaryWith(overrides)),
+      trades: () => tradePage(API_TRADES),
+    }), { lang });
+  }
+
+  function roiCard(): HTMLElement {
+    const cards = allTestids('overview-kpi');
+    expect(cards).toHaveLength(4);
+    return cards[3];
+  }
+
+  it('dividendIncome 3840 + 預扣稅 960 → dividendIncomeLineWithTax,位在總報酬率卡、總損益副標之後', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' });
+
+    const line = requireTestid('overview-kpi-dividend-income');
+    expect(line.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(3840, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+    const card = roiCard();
+    expect(card.contains(line)).toBe(true);
+    expect(line.classList.contains('kpi-hint')).toBe(true);
+    // 副標(總損益 …)在前,股利列在後
+    const subtitle = card.querySelector('.kpi-s');
+    expect(subtitle?.textContent).toContain(t('en', 'totalPnlLabel'));
+    expect(subtitle!.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('預扣稅 0 → dividendIncomeLine(不列稅)', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'USD' });
+    expect(requireTestid('overview-kpi-dividend-income').textContent?.trim())
+      .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'USD', 0) }));
+  });
+
+  it('股利收入 0 但有預扣稅 → 仍渲染(只有兩者皆 0 才不渲染)', async () => {
+    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 960 });
+    expect(requireTestid('overview-kpi-dividend-income').textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(0, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+  });
+
+  it('兩者皆 0 → 不渲染', async () => {
+    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 0 });
+    expect(allTestids('overview-kpi')).toHaveLength(4);
+    expect(testid('overview-kpi-dividend-income')).toBeNull();
+  });
+
+  it('今日損益說明 = dayPnlNote(不含匯差與股利);總報酬率顯示後端 roi、不重算不加註', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, roi: 0.1567 }, 'zh');
+    const note = requireTestid('overview-kpi-day-pnl-note');
+    expect(note.textContent?.trim()).toBe(t('zh', 'dayPnlNote'));
+    expect(note.textContent).toContain('不含匯差與股利');
+    expect(roiCard().querySelector('.kpi-v .num')?.textContent?.trim()).toBe(fmtRatioPct(0.1567));
+    expect(roiCard().querySelectorAll('.kpi-hint')).toHaveLength(1);
+  });
+});
+
+describe('Overview — mock mode 不渲染股利收入附加列', () => {
+  it('mock KPI 卡沒有 overview-kpi-dividend-income', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    expect(allTestids('overview-kpi')).toHaveLength(4);
+    expect(testid('overview-kpi-dividend-income')).toBeNull();
+  });
+});
