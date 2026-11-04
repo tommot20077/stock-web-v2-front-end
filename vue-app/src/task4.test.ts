@@ -484,9 +484,10 @@ describe('Task 4 trade flow', () => {
 
     expect(exported).toHaveLength(1);
     const csv = await exported[0].text();
-    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
+    // 04.2-20 反轉(DP-10 / U-09):表頭擴充為 13 欄,mock 靜態 DIV 列 type 以 CASH_DIVIDEND 輸出。
+    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed');
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,,,first,,');
+    expect(csv).toContain('2026-01-15,CASH_DIVIDEND,CCC,,4,0.5,2,0,,,cash,,');
     expect(csv).not.toContain('2025-12-31');
   });
 });

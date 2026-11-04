@@ -637,7 +637,9 @@ const filteredTrades = computed(() => {
 // =============== CSV ===============
 // 04.1-14(D-28 / UI-SPEC §Interaction 9):`currency` 緊接 `symbol`,兩模式共用同一份表頭。
 // API 列填 `trade.currency`(缺值為空字串);mock 沒有幣別資料,留空而不猜(U-29)。
-const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,note'.split(',');
+// 04.2-20(U-09):擴充 tax / ratio / reversal_of / reversed。數值一律未格式化原始數字;
+// reversal_of 為原紀錄日期,**不輸出 uuid**(T-04.2-44);reversed 為 `true` 或空。
+const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed'.split(',');
 
 type CsvValue = string | number | null | undefined;
 
@@ -679,17 +681,7 @@ async function exportApiCsv() {
       requestPage += 1;
     } while (requestPage < pages);
 
-    downloadCsv(collected.map(tr => [
-      activityDate(tr),
-      tr.kind,
-      tr.symbol,
-      tr.currency ?? '',
-      tr.quantity,
-      tr.price,
-      tradeTotal(tr),
-      tr.fee,
-      tr.note,
-    ]));
+    downloadCsv(collected.map(activityCsvRow));
   } catch (error) {
     exportError.value = describeError(error);
   } finally {
@@ -702,18 +694,49 @@ function exportCsv() {
     void exportApiCsv();
     return;
   }
-  // mock 路徑:來源仍是 filteredTrades,欄序與檔名與 Phase 3 之前相同。
+  // mock 路徑:來源仍是 filteredTrades、檔名同前;表頭與 API 共用。mock 列沒有的資料欄位
+  // (currency / tax / ratio / reversal_of / reversed)留空不猜;靜態 DIV 列 type 以 CASH_DIVIDEND 輸出(與 data-kind 一致)。
   downloadCsv(filteredTrades.value.map(tr => [
     tr.d,
-    tr.type,
+    mockKind(tr),
     tr.sym,
     '',
     tr.qty,
     tr.px,
     tr.qty * tr.px,
     tr.fee,
+    '',
+    '',
     tr.note,
+    '',
+    '',
   ]));
+}
+
+/**
+ * 活動列 → CSV 列(依 kind 分支;不適用欄位在 DTO 恆為 null → 空字串)。
+ * date:交易沿用 occurredAt 前 10 碼(既有);現金股利為本機日期;股數調整為 effectiveDate。
+ */
+function activityCsvRow(row: PortfolioActivityDto): CsvValue[] {
+  const isAdjustment = row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT';
+  let date = row.occurredAt.slice(0, 10);
+  if (row.kind === 'CASH_DIVIDEND') date = localDate(row.occurredAt);
+  else if (isAdjustment) date = row.effectiveDate ?? date;
+  return [
+    date,
+    row.kind,
+    row.symbol,
+    row.currency ?? '',
+    row.quantity,
+    row.price,
+    isTrade(row) ? tradeTotal(row) : row.amount,
+    row.fee,
+    row.kind === 'CASH_DIVIDEND' ? row.withholdingTax : null,
+    row.kind === 'SPLIT' && row.ratioNew !== null && row.ratioOld !== null ? `${row.ratioNew}:${row.ratioOld}` : null,
+    row.note,
+    row.reversalOfId != null ? reversalOfDate(row) : null,
+    row.reversed ? 'true' : null,
+  ];
 }
 
 function csvCell(value: CsvValue) {
