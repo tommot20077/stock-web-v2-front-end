@@ -6,6 +6,7 @@ import Analytics from './pages/Analytics.vue';
 import Chart from './pages/Chart.vue';
 import Markets from './pages/Markets.vue';
 import Notifications from './pages/Notifications.vue';
+import Overview from './pages/Overview.vue';
 import Settings from './pages/Settings.vue';
 import Watchlist from './pages/Watchlist.vue';
 import { resetRuntimeApiClientsForTests } from './services/pageApiClients';
@@ -162,5 +163,39 @@ describe('MockDataNotice 的 exception 例外行(U-12)', () => {
 
     expect(notice()).toBeNull();
     expect(exceptionLine()).toBeNull();
+  });
+});
+
+describe('Overview 新聞卡:仍是示範資料,API mode 標示(D-26)', () => {
+  afterEach(() => {
+    cleanupMounted();
+    resetRuntimeApiClientsForTests();
+  });
+
+  it('Overview:API mode 新聞卡(overview-news)內顯示示範資料標示', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('offline in test'))));
+    resetRuntimeApiClientsForTests();
+
+    mountWithPinia(Overview, { lang: 'zh' });
+    await flushAsync();
+
+    const news = document.body.querySelector('[data-testid="overview-news"]');
+    expect(news, 'overview-news').not.toBeNull();
+    const el = news!.querySelector('[data-testid="mock-data-notice"]');
+    expect(el, 'Overview 新聞卡應顯示 mock-data-notice').not.toBeNull();
+    expect(el?.getAttribute('role')).toBe('note');
+    expect(el?.textContent).toContain('示範資料');
+  });
+
+  it('Overview:mock mode 新聞卡不顯示標示', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    resetRuntimeApiClientsForTests();
+
+    mountWithPinia(Overview, { lang: 'zh' });
+    await flushAsync();
+
+    expect(document.body.querySelector('[data-testid="overview-news"]'), 'overview-news').not.toBeNull();
+    expect(notice()).toBeNull();
   });
 });
