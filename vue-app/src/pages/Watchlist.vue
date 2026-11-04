@@ -3,7 +3,8 @@
     <div class="page-head">
       <div class="head-main">
         <h2>{{ t(lang, 'watchlist') }}</h2>
-        <!-- 04.2-24:LiveQuoteStatus 放在 h2 下方(margin-top: 4px),取代舊副標 -->
+        <!-- 04.2-24(D-23):即時報價狀態列(margin-top: 4px 由元件提供),取代舊副標 -->
+        <LiveQuoteStatus :lang="lang" :status="streamStatus" :updated-at="lastUpdatedAt" @reconnect="quotes.reconnect()" />
       </div>
       <div class="head-actions">
         <button
@@ -241,14 +242,14 @@
               </thead>
               <tbody role="rowgroup">
                 <tr
-                  v-for="(item, index) in activeList.items"
+                  v-for="(item, index) in liveRows"
                   :key="item.uuid"
                   role="row"
                   :class="dropClass(index)"
                   :draggable="reordering ? 'false' : 'true'"
                   data-testid="watchlist-row"
                   :data-symbol="item.symbol"
-                  :data-quote-source="quoteSource(item)"
+                  :data-quote-source="item.quoteSource"
                   @click="onRowClick(item)"
                   @dragstart="onDragStart(index)"
                   @dragover.prevent="onDragOver(index)"
@@ -281,7 +282,13 @@
                     <span v-if="hasCcyTag(item)" class="ccy-tag">{{ item.currency }}</span>
                   </td>
                   <td role="cell" class="col-name">{{ item.name }}</td>
-                  <td role="cell" class="col-price right num" data-testid="watchlist-row-price">{{ priceText(item) }}</td>
+                  <td role="cell" class="col-price right num" data-testid="watchlist-row-price">
+                    <!-- ● 與 sr-only「即時」只在 ws 列(stream live 且 GET 後收過 tick);FX / 債券永不出現(P-W6) -->
+                    <span v-if="item.quoteSource === 'ws'" class="row-live" data-testid="watchlist-row-live"><span
+                      class="live-dot"
+                      aria-hidden="true"
+                    /><span class="sr-only">{{ t(lang, 'liveQuoteRowLive') }}</span></span>{{ priceText(item) }}
+                  </td>
                   <td
                     role="cell"
                     class="col-change right num"
@@ -317,7 +324,11 @@
 // Phase 04.2 Plan 23(WATCH-03、D-14 / D-15 / D-17 / D-18 / D-20):Watchlist 頁整頁重建。
 // 清單與報價只經 getRuntimeApiClients().watchlist(鐵律 1 / 3;judgment §3:元件不 import mock store)。
 // 頁級 `lists` / `activeListId` 是唯一狀態來源;04.2-24 在此之上疊加即時報價(data-quote-source 加 `ws`)。
+// 即時報價只經 getRuntimeApiClients().quotes + useLiveQuotes(D-24:元件不直接建立瀏覽器連線)。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import LiveQuoteStatus from '../components/LiveQuoteStatus.vue';
+import { useLiveQuotes } from '../composables/useLiveQuotes';
+import { useQuoteRefresh } from '../composables/useQuoteRefresh';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
@@ -341,6 +352,19 @@ const tablistEl = ref<HTMLElement | null>(null);
 const titleEl = ref<HTMLElement | null>(null);
 
 const activeList = computed(() => lists.value?.find(list => list.id === activeListId.value) ?? null);
+
+// ── 即時報價(WATCH-04;D-21 / D-23)──────────────────────────────
+const quotes = getRuntimeApiClients().quotes;
+const NO_ROWS: readonly AssetDto[] = [];
+/** 作用中清單的列;陣列被替換(GET 重讀、操作回應)時 useLiveQuotes 以當下 ticks 為新基準。 */
+const activeRows = computed<readonly AssetDto[]>(() => activeList.value?.items ?? NO_ROWS);
+/** 最後一次 GET 成功的前端收到時間(「更新於」的下限,U-19)。 */
+const restFetchedAt = ref<number | null>(null);
+const live = useLiveQuotes(activeRows, quotes, { restFetchedAt });
+const liveRows = live.rows;
+const lastUpdatedAt = live.lastUpdatedAt;
+const streamStatus = computed(() => quotes.status.value);
+
 const atListLimit = computed(() => (lists.value?.length ?? 0) >= WATCHLIST_MAX_LISTS);
 
 function watchlistApi() {
@@ -367,6 +391,7 @@ async function loadLists() {
   loadError.value = null;
   try {
     lists.value = await getRuntimeApiClients().watchlist.list();
+    restFetchedAt.value = Date.now();
     ensureActive();
   } catch (error) {
     loadError.value = toApiError(error);
@@ -379,6 +404,7 @@ async function loadLists() {
 async function reloadLists() {
   try {
     lists.value = await watchlistApi().list();
+    restFetchedAt.value = Date.now();
     ensureActive();
   } catch {
     // 保留舊值:操作錯誤區已說明狀況,讀取失敗不再疊一層錯誤。
@@ -902,10 +928,11 @@ function hasCcyTag(item: AssetDto): boolean {
   return item.assetType === 'STOCK' || item.assetType === 'CRYPTO';
 }
 
-/** 本 plan 只有 REST 報價;04.2-24 疊加 `ws`。 */
-function quoteSource(item: AssetDto): 'rest' | 'none' {
-  return item.latestPrice !== null ? 'rest' : 'none';
-}
+// 只 watch 作用中清單的 STOCK / CRYPTO(U-20);resyncSeq / 每 5 分鐘 / 回前景靜默重讀 GET(不閃 loading,失敗保留舊值)。
+// 排序尚未儲存或寫入進行中時略過:重讀回應會用伺服器舊順序蓋掉本地排序。
+useQuoteRefresh(activeRows, quotes, reloadLists, {
+  canRefresh: () => lists.value !== null && !reorderSaving.value && !busy.value,
+});
 
 onMounted(loadLists);
 </script>
@@ -958,6 +985,9 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
   border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
 }
 .quote-note { margin: 12px 0 0; }
+/* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
+.row-live { display: inline-flex; align-items: center; margin-right: 4px; vertical-align: middle; }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--up); }
 
 .limit-hint { margin: 0 0 16px; }
 .name-form { display: flex; flex-direction: column; min-width: 0; }

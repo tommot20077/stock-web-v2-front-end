@@ -957,9 +957,15 @@ function rowLive(symbol: string): HTMLElement | null {
   return row(symbol).querySelector<HTMLElement>('[data-testid="watchlist-row-live"]');
 }
 
-/** U-26:非 live 狀態下,頁面文字除了「即時報價」本身之外不得出現「即時」,也不得有任何即時圓點。 */
+/**
+ * U-26:非 live 狀態下,頁面文字除了「即時報價」本身之外不得出現「即時」,也不得有任何即時圓點。
+ * 表格下方的 `watchlist-quote-note` 是 §8 規定常駐的圖例(說明 ● 的意思),不是即時宣稱,檢查時排除。
+ */
 function expectNoLiveClaims() {
-  const text = (requireTestid('watchlist-page').textContent ?? '').replace(/即時報價/g, '');
+  const page = requireTestid('watchlist-page').cloneNode(true) as HTMLElement;
+  page.querySelector('[data-testid="watchlist-quote-note"]')?.remove();
+  // 「即時報價」(狀態列本身的名詞)與「非即時」(被取代附註的否定說法)不是即時宣稱。
+  const text = (page.textContent ?? '').replace(/即時報價|非即時/g, '');
   expect(text).not.toContain('即時');
   expect(text).not.toContain('●');
   expect(document.body.querySelector('[data-testid="watchlist-row-live"]')).toBeNull();
