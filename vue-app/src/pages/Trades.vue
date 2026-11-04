@@ -6,6 +6,21 @@
         <button class="btn-ghost" data-testid="trades-export" :disabled="exporting" @click="exportCsv">
           {{ t(lang, 'export') }}
         </button>
+        <!-- 04.2-21(D-28):頁籤專屬的記錄動作在匯出與新增交易之間;中性 .btn-ghost,主要 CTA 仍是新增交易 -->
+        <button
+          v-if="activeFilter === 'dividend'"
+          type="button"
+          class="btn-ghost"
+          data-testid="trades-record-dividend"
+          @click="openRecordDialog('cashDividend', $event)"
+        >+ {{ t(lang, 'tradesRecordDividend') }}</button>
+        <button
+          v-else-if="activeFilter === 'shareAdjustment'"
+          type="button"
+          class="btn-ghost"
+          data-testid="trades-record-share-adjustment"
+          @click="openRecordDialog('stockDividend', $event)"
+        >+ {{ t(lang, 'tradesRecordShareAdjustment') }}</button>
         <button class="btn-accent" data-testid="trades-add-trade" @click="$emit('order')">+ {{ t(lang, 'addTrade') }}</button>
       </div>
     </div>
@@ -38,7 +53,15 @@
       ><span data-testid="trades-chip">{{ chipLabel(c) }}</span></button>
     </div>
 
-    <div class="card" data-testid="trades-table" :class="{ 'block-refreshing': tradesRefreshing }" :aria-busy="tradesRefreshing">
+    <!-- 04.2-21:tabindex=-1 是焦點回落點 —— 沖銷成功後該列的按鈕已消失,關閉對話框時焦點落在這裡 -->
+    <div
+      ref="tableCard"
+      class="card"
+      data-testid="trades-table"
+      tabindex="-1"
+      :class="{ 'block-refreshing': tradesRefreshing }"
+      :aria-busy="tradesRefreshing"
+    >
       <!-- U-05 / U-06:重讀期間保留整張表格,只在區塊頂端加一條指示列 -->
       <div v-if="!live && tradesRefreshing" class="refresh-note" data-testid="trades-refreshing">
         {{ t(lang, 'portfolioRefreshing') }}
@@ -49,7 +72,7 @@
         role="status"
         data-testid="trades-refresh-error"
       >
-        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div>{{ staleText }}</div>
         <div class="details">
           <span data-testid="trades-refresh-error-code">{{ tradesRefreshError.code }}</span>
           <span v-if="tradesRefreshError.traceId" data-testid="trades-refresh-trace-id">
@@ -65,7 +88,8 @@
         「已記錄,但不在目前的檢視範圍」比讓使用者以為沒記錄成功好。這不是錯誤,故不用錯誤色。
       -->
       <div v-if="notInCurrentView" class="view-hint" data-testid="trades-not-in-current-view">
-        {{ t(lang, 'tradeNotInCurrentView') }}
+        <!-- 04.2-21:股利 / 股數調整的新紀錄用活動列文案(UI-SPEC §Interaction 3) -->
+        {{ t(lang, eventNotInView ? 'tradesActivityNotInView' : 'tradeNotInCurrentView') }}
       </div>
       <!-- D-28:各列金額以該筆交易標的的幣別顯示(API mode 才渲染;mock 沒有幣別資料) -->
       <div
@@ -88,7 +112,28 @@
           {{ t(lang, 'authRetry') }}
         </button>
       </div>
-      <div v-else-if="!live && !apiTrades.length" class="block-state" data-testid="trades-empty">
+      <!-- 04.2-21:股利 / 股數調整頁籤的空狀態帶記錄動作(兩模式);其他頁籤(API mode)沿用 noTrades -->
+      <div v-else-if="emptyKind === 'dividend'" class="empty-block" data-testid="trades-dividend-empty">
+        <div class="empty-title">{{ t(lang, 'tradesDividendEmpty') }}</div>
+        <div>{{ t(lang, 'tradesDividendEmptyBody') }}</div>
+        <button
+          type="button"
+          class="btn-ghost-sm empty-action"
+          data-testid="trades-empty-record-dividend"
+          @click="openRecordDialog('cashDividend', $event)"
+        >+ {{ t(lang, 'tradesRecordDividend') }}</button>
+      </div>
+      <div v-else-if="emptyKind === 'shareAdjustment'" class="empty-block" data-testid="trades-share-adjustment-empty">
+        <div class="empty-title">{{ t(lang, 'tradesShareAdjustmentEmpty') }}</div>
+        <div>{{ t(lang, 'tradesShareAdjustmentEmptyBody') }}</div>
+        <button
+          type="button"
+          class="btn-ghost-sm empty-action"
+          data-testid="trades-empty-record-share-adjustment"
+          @click="openRecordDialog('stockDividend', $event)"
+        >+ {{ t(lang, 'tradesRecordShareAdjustment') }}</button>
+      </div>
+      <div v-else-if="emptyKind === 'default'" class="block-state" data-testid="trades-empty">
         {{ t(lang, 'noTrades') }}
       </div>
       <table v-else>
@@ -122,47 +167,20 @@
             <th style="padding-right:16px">{{ t(lang, 'cashColStatus') }}</th>
           </tr>
         </thead>
-        <!-- mock 路徑:client-side 篩選在無分頁下是正確的,逐字保留 Phase 3 之前的行為 -->
-        <tbody v-if="live">
-          <tr
-            v-for="(tr, i) in filteredTrades"
-            :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note"
-            data-testid="trades-row"
-            :data-kind="mockKind(tr)"
-            :class="{ fresh: i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym }"
-          >
-            <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tr.d }}</td>
-            <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
-            <td style="font-weight:500">
-              {{ tr.sym }}
-              <!-- U-12:不只靠顏色與動畫 —— 色盲 / 高對比 / 動畫播完的使用者都要看得出是哪一列 -->
-              <span
-                v-if="i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym"
-                class="pill fresh-badge"
-                data-testid="trades-fresh-badge"
-              >{{ t(lang, 'freshBadge') }}</span>
-            </td>
-            <td class="num" style="text-align:right">{{ tr.qty }}</td>
-            <td class="num" style="text-align:right">${{ fmtNum(tr.px) }}</td>
-            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.qty * tr.px, 0) }}</td>
-            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ tr.fee }}</td>
-            <td style="color:var(--fg-dim)">{{ tr.note || '—' }}</td>
-            <!-- mock 靜態列沒有可沖銷的 id,也不會被沖銷 → 狀態欄恆空(UI-SPEC §Interaction 0) -->
-            <td class="col-status"></td>
-          </tr>
-        </tbody>
         <!--
-          API 路徑:整份列表就是後端當前頁的回應,前端不再做任何本地篩選或排序(T-03-15)。
+          活動列 tbody。API 路徑:整份列表就是後端當前頁的回應,前端不再做任何本地篩選或排序(T-03-15)。
+          04.2-21 mock 路徑:本 session 由 mock 記錄的股利 / 股數調整走同一份模板(可沖銷),排在靜態交易列之前
+          (UI-SPEC §Interaction 0:client-side 合併;mock 無分頁,合併是正確的)。
           :key 用活動列的 id(uuid,04.2-20 前為 TradeDto.id),取代原本的多欄拼接 key —— 同內容不同筆的紀錄才不會撞 key。
           D-13:fresh 的來源是 effectiveLastFill(API mode 由 post-trade refetch 提供)。
         -->
-        <tbody v-else>
+        <tbody v-if="activityRows.length">
           <tr
-            v-for="(tr, i) in apiTrades"
+            v-for="(tr, i) in activityRows"
             :key="tr.id"
             data-testid="trades-row"
             :data-kind="tr.kind"
-            :class="{ fresh: i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym }"
+            :class="{ fresh: isActivityFresh(tr, i) }"
           >
             <!-- UI-SPEC §Interaction 3 欄位表:交易 = executedAt 日期;現金股利 = 本機 YYYY-MM-DD HH:mm;股數調整 = effectiveDate 原字串 -->
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ activityDate(tr) }}</td>
@@ -179,7 +197,7 @@
               <span v-if="tr.currency" class="ccy-tag" data-testid="trades-ccy-tag">{{ tr.currency }}</span>
               <!-- U-12:不只靠顏色與動畫的線索,mock / API 兩條路徑一致 -->
               <span
-                v-if="i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym"
+                v-if="isActivityFresh(tr, i)"
                 class="pill fresh-badge"
                 data-testid="trades-fresh-badge"
               >{{ t(lang, 'freshBadge') }}</span>
@@ -215,9 +233,48 @@
             <!-- U-18 慣例:「是否已沖銷」只取後端欄位,前端不推導;04.2-21 在此欄放「沖銷這筆」 -->
             <td class="col-status">
               <span v-if="tr.reversed" class="status-pill" data-testid="trades-reversed-pill">{{ t(lang, 'cashReversed') }}</span>
+              <!-- 04.2-21(D-13):只有後端判定可沖銷、未被沖銷、本身不是沖銷列的事件列;BUY / SELL 永不出現 -->
+              <button
+                v-if="canReverse(tr)"
+                type="button"
+                class="btn-ghost-sm"
+                data-testid="trades-reverse"
+                :aria-label="reverseAria(tr)"
+                @click="openReversal(tr, $event)"
+              >{{ t(lang, 'cashReverseThis') }}</button>
             </td>
           </tr>
         </tbody>
+        <!-- mock 路徑:client-side 篩選在無分頁下是正確的,逐字保留 Phase 3 之前的行為 -->
+        <tbody v-if="live">
+          <tr
+            v-for="(tr, i) in filteredTrades"
+            :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note"
+            data-testid="trades-row"
+            :data-kind="mockKind(tr)"
+            :class="{ fresh: i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym }"
+          >
+            <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tr.d }}</td>
+            <td><span :class="['pill', tr.type.toLowerCase()]">{{ tr.type }}</span></td>
+            <td style="font-weight:500">
+              {{ tr.sym }}
+              <!-- U-12:不只靠顏色與動畫 —— 色盲 / 高對比 / 動畫播完的使用者都要看得出是哪一列 -->
+              <span
+                v-if="i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym"
+                class="pill fresh-badge"
+                data-testid="trades-fresh-badge"
+              >{{ t(lang, 'freshBadge') }}</span>
+            </td>
+            <td class="num" style="text-align:right">{{ tr.qty }}</td>
+            <td class="num" style="text-align:right">${{ fmtNum(tr.px) }}</td>
+            <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.qty * tr.px, 0) }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">${{ tr.fee }}</td>
+            <td style="color:var(--fg-dim)">{{ tr.note || '—' }}</td>
+            <!-- mock 靜態列沒有可沖銷的 id,也不會被沖銷 → 狀態欄恆空(UI-SPEC §Interaction 0) -->
+            <td class="col-status"></td>
+          </tr>
+        </tbody>
+
       </table>
     </div>
 
@@ -234,11 +291,26 @@
         @click="goToPage(1)"
       >{{ t(lang, 'nextPage') }}</button>
     </div>
+
+    <!--
+      04.2-21:本頁自己的「股利與股數調整」對話框實例。頁首 / 空狀態開啟時不帶標的(typeahead,無持倉也能記,D-03);
+      「沖銷這筆」只帶 reversalOf(值全取自該列)。開啟者負責 reversalConflict 後的重讀與「按鈕已消失」時的焦點回落。
+    -->
+    <HoldingEventDialog
+      :open="dialogOpen"
+      :lang="lang"
+      :initial-mode="dialogMode"
+      :reversal-of="dialogReversal"
+      @close="onDialogClose"
+      @recorded="onDialogRecorded"
+      @reversal-conflict="onReversalConflict"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, h as createElement, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import HoldingEventDialog from '../components/HoldingEventDialog.vue';
 import { t, tf } from '../i18n';
 import { fmtNum } from '../data';
 import { fmtMoneyAmount, fmtSignedQuantity } from '../moneyFormat';
@@ -248,16 +320,24 @@ import type { ActivityListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
   apiLastFill,
+  clearLastCreatedHoldingEvent,
   clearLastCreatedTrade,
   clearLastFill,
+  lastCreatedHoldingEventId,
   lastCreatedTradeId,
   portfolioRevision,
+  portfolioRevisionCause,
+  type PortfolioRevisionCause,
 } from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
 import type { PortfolioActivityKind } from '../services/apiTypes';
 
-const props = defineProps<{ lang: Lang }>();
+const props = defineProps<{
+  lang: Lang;
+  /** 04.2-21(U-11):掛載時預選的頁籤 id(例:現金頁連結傳 `'dividend'`);只在掛載時套用一次,無效值退回「全部」。 */
+  initialFilter?: string;
+}>();
 defineEmits<{ (e: 'order'): void }>();
 
 // judgment §3:頁面只認 domain service,永不 import mock store。
@@ -307,7 +387,10 @@ function isTypeChip(id: ChipId): id is TypeChipId {
 }
 
 const chips = computed<ChipId[]>(() => [...TYPE_CHIPS, live ? MOCK_YEAR_CHIP : YEAR_CHIP]);
-const activeFilter = ref<ChipId>('all');
+/** U-11:initialFilter 只在 setup 讀一次 —— 之後由使用者自己切換,prop 不再左右頁籤。 */
+const activeFilter = ref<ChipId>(
+  props.initialFilter && chips.value.includes(props.initialFilter) ? props.initialFilter : 'all',
+);
 
 function chipLabel(id: ChipId): string {
   return isTypeChip(id) ? t(props.lang, CHIP_LABEL_KEYS[id]) : id;
@@ -406,9 +489,57 @@ function queryParams(): ActivityListParams {
  */
 const tradesRefreshing = ref(false);
 const tradesRefreshError = ref<BlockError | null>(null);
+/** 最近一次重讀的觸發來源;stale 文案依它選(U-09 / T-04.2-46)。 */
+const tradesRefreshCause = ref<PortfolioRevisionCause | null>(null);
+
+/** 交易 → 「交易已記錄」;股利 / 股數調整 → 「紀錄已寫入」。事件寫入不得顯示「交易已記錄」。 */
+const staleText = computed(() => {
+  const cause = tradesRefreshCause.value;
+  return t(props.lang, cause === null || cause === 'trade' ? 'portfolioStaleAfterTrade' : 'portfolioStaleAfterCashEntry');
+});
+
+/**
+ * 04.2-21:mock 事件列的重讀訊號。mock 事件狀態在 adapter 模組內(非 reactive),
+ * 於 portfolioRevision 變動或沖銷衝突時遞增,讓 `mockEventRows` 重新取值。
+ */
+const mockEventsVersion = ref(0);
+
+/** 活動列 tbody 的資料:API = 後端當前頁;mock = 本 session 的 mock 事件(依當前頁籤篩選,最新在前)。 */
+const activityRows = computed<PortfolioActivityDto[]>(() => (live ? mockEventRows.value : apiTrades.value));
+
+/**
+ * 股利 / 股數調整新紀錄是否不在目前的結果集內(判定只比 id,理由同 {@link inResultSet})。
+ * API mode 重讀還沒落地前不下結論。
+ */
+const eventNotInView = computed(() => {
+  const created = lastCreatedHoldingEventId.value;
+  if (created === null) return false;
+  if (!live && (tradesRefreshing.value || tradesPage.value === null)) return false;
+  return !activityRows.value.some(row => row.id === created);
+});
 
 /** D-11 提示的顯示條件。重讀還沒落地前不下結論 —— 否則提示會在重讀期間先閃一下再消失。 */
-const notInCurrentView = computed(() => !live && !tradesRefreshing.value && !inResultSet.value);
+const notInCurrentView = computed(() => eventNotInView.value || (!live && !tradesRefreshing.value && !inResultSet.value));
+
+/**
+ * 「新」標記:股利 / 股數調整只比 `lastCreatedHoldingEventId`;交易沿用 D-13 的第 0 列 + lastFill 規則
+ * (只套在交易列,事件列不會因為同代號而被標成新)。
+ */
+function isActivityFresh(row: PortfolioActivityDto, index: number): boolean {
+  const created = lastCreatedHoldingEventId.value;
+  if (created !== null && row.id === created) return true;
+  const fill = effectiveLastFill.value;
+  return !live && index === 0 && isTrade(row) && fill !== null && row.symbol === fill.sym;
+}
+
+/** 04.2-21:空狀態的種類;null = 有列(或 mock 的其他頁籤:維持既有的空表格)。 */
+const emptyKind = computed<'dividend' | 'shareAdjustment' | 'default' | null>(() => {
+  const count = live ? mockEventRows.value.length + filteredTrades.value.length : apiTrades.value.length;
+  if (count > 0) return null;
+  if (activeFilter.value === 'dividend') return 'dividend';
+  if (activeFilter.value === 'shareAdjustment') return 'shareAdjustment';
+  return live ? null : 'default';
+});
 
 interface LoadTradesOptions {
   /** true = 保留舊列的重讀(U-05);false / 省略 = 會清空列表的一般載入。 */
@@ -479,6 +610,7 @@ function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
   if (options.refresh !== true) {
     clearLastCreatedTrade();
     clearLastFill();
+    clearLastCreatedHoldingEvent();
   }
   void loadTrades(options);
 }
@@ -486,6 +618,7 @@ function applyQueryChange(mutate: () => void, options: LoadTradesOptions = {}) {
 function selectChip(chip: ChipId) {
   if (live) {
     activeFilter.value = chip;
+    clearLastCreatedHoldingEvent();
     return;
   }
   applyQueryChange(() => {
@@ -513,6 +646,7 @@ function goToPage(delta: number) {
   pageNo.value = next;
   clearLastCreatedTrade();
   clearLastFill();
+  clearLastCreatedHoldingEvent();
   void loadTrades();
 }
 
@@ -525,6 +659,7 @@ onMounted(() => {
 // UI-SPEC §9:「新」標記的壽命到頁面 unmount 為止(App.vue 的 v-if 切頁會卸載本頁),不靠計時器。
 onUnmounted(() => {
   clearLastFill();
+  clearLastCreatedHoldingEvent();
 });
 
 /*
@@ -534,10 +669,84 @@ onUnmounted(() => {
  * 正好就是那個入口的既有語意。
  */
 watch(portfolioRevision, () => {
-  // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 與 onMounted 同一條規則。
-  if (live) return;
+  // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 只讓 mock 事件列重新取值。
+  if (live) {
+    mockEventsVersion.value += 1;
+    return;
+  }
+  // UI-SPEC §11:只有交易、股利、股數調整會改變活動列表;入出金與基準幣變更重讀只會把使用者踢回第 1 頁。
+  const cause = portfolioRevisionCause.value;
+  if (cause !== 'trade' && cause !== 'dividend' && cause !== 'shareAdjustment') return;
+  tradesRefreshCause.value = cause;
   applyQueryChange(() => {}, { refresh: true });
 });
+
+// =============== 04.2-21:股利與股數調整對話框(D-28 / D-13) ===============
+type RecordMode = 'cashDividend' | 'stockDividend';
+
+const dialogOpen = ref(false);
+const dialogMode = ref<RecordMode>('cashDividend');
+const dialogReversal = ref<PortfolioActivityDto | null>(null);
+const tableCard = ref<HTMLElement | null>(null);
+let openerEl: HTMLElement | null = null;
+let openedFromRow = false;
+let recordedWhileOpen = false;
+
+function beginDialog(event: Event, fromRow: boolean) {
+  // 再次開啟對話框 = 使用者不再需要上一筆的「新」標記與不在本頁提示。
+  clearLastCreatedHoldingEvent();
+  openerEl = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  openedFromRow = fromRow;
+  recordedWhileOpen = false;
+}
+
+/** 頁首 / 空狀態:不帶標的(對話框顯示 typeahead,無持倉也能記現金股利,D-03)。 */
+function openRecordDialog(mode: RecordMode, event: Event) {
+  beginDialog(event, false);
+  dialogMode.value = mode;
+  dialogReversal.value = null;
+  dialogOpen.value = true;
+}
+
+/** 「沖銷這筆」:只帶 reversalOf,值全取自該列(D-13)。 */
+function openReversal(row: PortfolioActivityDto, event: Event) {
+  beginDialog(event, true);
+  dialogReversal.value = row;
+  dialogOpen.value = true;
+}
+
+function onDialogRecorded() {
+  recordedWhileOpen = true;
+}
+
+/** 沖銷衝突:對話框只通知,這裡立刻重讀(一般載入,不宣稱「紀錄已寫入」)。 */
+function onReversalConflict() {
+  if (live) {
+    mockEventsVersion.value += 1;
+    return;
+  }
+  void loadTrades();
+}
+
+async function onDialogClose() {
+  dialogOpen.value = false;
+  dialogReversal.value = null;
+  // 對話框關閉時已同步把焦點還給開啟者;開啟者已不在(沖銷成功後消失的按鈕、空狀態裡的動作鈕)時改落在表格卡。
+  await nextTick();
+  const opener = openerEl;
+  openerEl = null;
+  if (!opener || !opener.isConnected || (openedFromRow && recordedWhileOpen)) tableCard.value?.focus();
+}
+
+/** UI-SPEC §Interaction 3:`沖銷這筆` 的顯示條件(reversible 由後端判定;股數調整只有該標的最新一筆為 true)。 */
+function canReverse(row: PortfolioActivityDto): boolean {
+  const isEvent = row.kind === 'CASH_DIVIDEND' || row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT';
+  return isEvent && row.reversible && !row.reversed && row.reversalOfId == null;
+}
+
+function reverseAria(row: PortfolioActivityDto): string {
+  return tf(props.lang, 'tradesReverseAria', { date: activityDate(row), symbol: row.symbol ?? '—', type: kindLabel(row) });
+}
 
 const SortArrow = (p: { k: string; sk: string; sd: 'asc' | 'desc' }) =>
   p.k === p.sk ? createElement('span', { class: 'sort-a' }, p.sd === 'asc' ? '↑' : '↓') : null;
@@ -616,22 +825,44 @@ function kindPillClass(row: PortfolioActivityDto): string {
 }
 
 // =============== mock mode:以下篩選與 Phase 3 之前逐字相同 ===============
+/**
+ * 04.2-21:mock 股利寫進 mock 交易的 DIV 列已由事件列代表(可沖銷),靜態列表排除它,同一筆才不會出現兩次。
+ */
+const mockStaticTrades = computed<Trade[]>(() => (live ? mockTrades.value.filter(tr => !live.isHoldingEventTrade(tr)) : []));
+
 const filteredTrades = computed(() => {
   switch (activeFilter.value) {
     case 'buy':
-      return mockTrades.value.filter(tr => tr.type === 'BUY');
+      return mockStaticTrades.value.filter(tr => tr.type === 'BUY');
     case 'sell':
-      return mockTrades.value.filter(tr => tr.type === 'SELL');
+      return mockStaticTrades.value.filter(tr => tr.type === 'SELL');
     case 'dividend':
-      return mockTrades.value.filter(tr => tr.type === 'DIV');
-    // mock 交易沒有股數調整(mock 拆股 / 配股只攤薄持倉,不寫交易列)→ 恆為空
+      return mockStaticTrades.value.filter(tr => tr.type === 'DIV');
+    // mock 交易沒有股數調整(mock 拆股 / 配股只攤薄持倉,不寫交易列)→ 靜態列恆為空;本 session 事件見 mockEventRows
     case 'shareAdjustment':
       return [];
     case MOCK_YEAR_CHIP:
-      return mockTrades.value.filter(tr => tr.d.startsWith('2026'));
+      return mockStaticTrades.value.filter(tr => tr.d.startsWith('2026'));
     default:
-      return mockTrades.value;
+      return mockStaticTrades.value;
   }
+});
+
+/**
+ * 04.2-21(UI-SPEC §Interaction 0):本 session 由 mock 記錄的事件列,依當前頁籤 client-side 篩選、最新在前。
+ * 買 / 賣頁籤不含事件;年度頁籤以畫面上的日期欄比對寫死的 2026(與靜態列同規則)。
+ */
+const mockEventRows = computed<PortfolioActivityDto[]>(() => {
+  void mockEventsVersion.value;
+  if (!live) return [];
+  const id = activeFilter.value;
+  return [...live.holdingEvents].reverse().filter(row => {
+    if (id === 'all') return true;
+    if (id === 'dividend') return row.kind === 'CASH_DIVIDEND';
+    if (id === 'shareAdjustment') return row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT';
+    if (id === MOCK_YEAR_CHIP) return activityDate(row).startsWith(MOCK_YEAR_CHIP);
+    return false;
+  });
 });
 
 // =============== CSV ===============
@@ -696,7 +927,8 @@ function exportCsv() {
   }
   // mock 路徑:來源仍是 filteredTrades、檔名同前;表頭與 API 共用。mock 列沒有的資料欄位
   // (currency / tax / ratio / reversal_of / reversed)留空不猜;靜態 DIV 列 type 以 CASH_DIVIDEND 輸出(與 data-kind 一致)。
-  downloadCsv(filteredTrades.value.map(tr => [
+  // 04.2-21:本 session 的 mock 事件列走與 API 相同的活動列 CSV 規則,排在靜態列之前(與畫面同序)。
+  downloadCsv([...mockEventRows.value.map(activityCsvRow), ...filteredTrades.value.map((tr): CsvValue[] => [
     tr.d,
     mockKind(tr),
     tr.sym,
@@ -710,7 +942,7 @@ function exportCsv() {
     tr.note,
     '',
     '',
-  ]));
+  ])]);
 }
 
 /**
@@ -753,6 +985,18 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
 .btn-ghost { background: var(--surface); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 13px; color: var(--fg); cursor: pointer; }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 04.2-21:列內「沖銷這筆」與空狀態動作(12 / 600、36px 觸控目標、中性) */
+.btn-ghost-sm {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-ghost-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 04.2-21:股利 / 股數調整頁籤的空狀態(48px 垂直留白,UI-SPEC §Spacing s-48) */
+.empty-block { padding: 48px 16px; font-size: 13px; color: var(--fg-dim); }
+.empty-title { font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 4px; }
+.empty-action { margin-top: 12px; }
 .filters { display: flex; gap: 8px; margin-bottom: 14px; }
 .chip {
   padding: 5px 12px; background: var(--surface); color: var(--fg-dim);

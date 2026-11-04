@@ -47,6 +47,14 @@ export interface PortfolioLiveMockData {
   readonly trades: Trade[];
   readonly positions: Position[];
   readonly lastFill: { sym: string; type: 'BUY' | 'SELL'; qty: number; px: number } | null;
+  /**
+   * 04.2-21:本 session 由 mock holdingEventApi 記錄的股利 / 股數調整(活動列形狀,依建立順序,回傳 clone)。
+   * Trades mock 模式以此與靜態交易列合併(UI-SPEC §Interaction 0)。**不是** reactive:事件狀態在 adapter 模組內,
+   * 頁面於 `portfolioRevision` 變動時重讀。
+   */
+  readonly holdingEvents: PortfolioActivityDto[];
+  /** 04.2-21:這列 mock 交易是否由 mock 股利寫入 —— 該筆已由 {@link holdingEvents} 代表,靜態列表需排除以免出現兩次。 */
+  isHoldingEventTrade(trade: Trade): boolean;
 }
 
 /**
@@ -291,6 +299,12 @@ export function createMockPortfolioApi(): PortfolioApi {
     },
     get lastFill() {
       return useMockPortfolioStore().lastFill;
+    },
+    get holdingEvents() {
+      return listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+    },
+    isHoldingEventTrade(trade) {
+      return isMockHoldingEventTradeRow(trade);
     },
   };
 
