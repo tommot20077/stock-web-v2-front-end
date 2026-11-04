@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { defineComponent, h, nextTick, ref } from 'vue';
 import HoldingEventDialog from './HoldingEventDialog.vue';
 // 原始碼字面(Vite `?raw`):鎖住行為測試抓不到的「這段程式碼不存在」(沿用 CashEntryDialog.test.ts 的手法)。
 import holdingEventDialogSource from './HoldingEventDialog.vue?raw';
@@ -56,6 +56,7 @@ function okResponse(data: unknown): Response {
 interface RoutedFetchOptions {
   dividends?: (init: RequestInit | undefined) => Response | Promise<Response>;
   adjustments?: (init: RequestInit | undefined) => Response | Promise<Response>;
+  refresh?: () => Response | Promise<Response>;
 }
 
 /** 只路由本對話框會碰到的端點;其他一律丟錯,讓「元件偷打了別的 API」立刻可見。 */
@@ -63,7 +64,7 @@ function holdingEventFetch(options: RoutedFetchOptions = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes('/auth/refresh')) {
-      return jsonResponse({ success: true, data: {}, error: null, meta: {} });
+      return options.refresh ? options.refresh() : jsonResponse({ success: true, data: {}, error: null, meta: {} });
     }
     if (url.includes('/portfolio/dividends')) {
       return options.dividends ? options.dividends(init) : okResponse(RECORDED_DIVIDEND);
@@ -588,5 +589,445 @@ describe('HoldingEventDialog — 拆股 / 合股(D-08)', () => {
     expect(holdingEventDialogSource).toMatch(/@media \(max-width: 399px\)\s*\{[^@]*\.ft\s*\{[^}]*flex-direction:\s*column-reverse/);
     expect(holdingEventDialogSource).toMatch(/\.ratio-group\s*\{[^}]*gap:\s*12px/);
     expect(holdingEventDialogSource).toMatch(/\.ratio-group \.inp\.big\s*\{[^}]*width:\s*96px/);
+  });
+});
+
+// 以下 Task 3:錯誤分派、key 生命週期、防連點與 a11y(D-13 / T-04.2-41 / T-04.2-42)。
+
+const BACKEND_MESSAGE_CANARY = 'BackendMessageMustNotReachTheDom';
+const FIELD_VALUE_CANARY = 'FieldValueCanaryMustNotReachTheDom';
+
+/**
+ * 後端錯誤信封。`fields` 預設 **null**(後端真實形狀);`message` 一律放「絕不得進入 DOM」的字串。
+ */
+function failure(
+  code: string,
+  options: { status?: number; traceId?: string; fields?: Record<string, string> | null } = {},
+): Response {
+  return jsonResponse(
+    {
+      success: false,
+      data: null,
+      error: { code, message: BACKEND_MESSAGE_CANARY, fields: options.fields ?? null },
+      meta: { traceId: options.traceId ?? 'trace-holding-event' },
+    },
+    options.status ?? 400,
+  );
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+/**
+ * 可預測的 key 產生器。**必須連 `getRandomValues` 一起代理** —— 整包換掉 `crypto`
+ * 會讓其他依賴 Web Crypto 的程式碼壞掉。`cleanupMounted()` 的 `vi.unstubAllGlobals()` 會還原。
+ */
+function stubUuids() {
+  let n = 0;
+  const randomUUID = vi.fn(() => `key-${++n}`);
+  const real = globalThis.crypto;
+  vi.stubGlobal('crypto', {
+    randomUUID,
+    getRandomValues: (array: ArrayBufferView) => (real as Crypto).getRandomValues(array as never),
+    subtle: (real as Crypto).subtle,
+  });
+  return randomUUID;
+}
+
+async function fillValidDividend(value = '100') {
+  await typeInto('holding-event-amount', value);
+}
+
+function errorText(): string {
+  return requireTestid('holding-event-error').textContent ?? '';
+}
+
+describe('HoldingEventDialog — 重複送出阻擋(T-04.2-41)', () => {
+  it('doubleClickSubmitsOnlyOnce', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const { fetchImpl } = await mountDialog({ fetchImpl: holdingEventFetch({ dividends: () => pending.promise }) });
+    await fillValidDividend();
+
+    await submit();
+    await submit();
+
+    expect(dividendCalls(fetchImpl), '連點兩次只得送出一次').toHaveLength(1);
+  });
+
+  it('freezesTheWholeDialogWhileSubmitting', async () => {
+    stubUuids();
+    const pending = deferred<Response>();
+    const { onClose } = await mountDialog({ fetchImpl: holdingEventFetch({ dividends: () => pending.promise }) });
+    await fillValidDividend();
+    await submit();
+
+    expect(submitButton().disabled, '送出中必須有明確的 :disabled').toBe(true);
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'recordingTrade'));
+    for (const id of [
+      'holding-event-amount', 'holding-event-tax', 'holding-event-paid-at', 'holding-event-note',
+      'holding-event-mode-cash-dividend', 'holding-event-mode-stock-dividend', 'holding-event-mode-split',
+      'holding-event-cancel',
+    ]) {
+      expect((requireTestid(id) as HTMLButtonElement | HTMLInputElement).disabled, `${id} 送出中應 disabled`).toBe(true);
+    }
+    expect(requireTestid('holding-event-dialog').getAttribute('aria-busy')).toBe('true');
+    const status = requireTestid('holding-event-submitting-status');
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent?.trim()).toBe(t('zh', 'recordingTrade'));
+
+    // ✕ / 遮罩 / Esc 都不得關閉(in-flight 的寫入不可被中途丟棄)。
+    await click(requireTestid('holding-event-close'));
+    await click(document.body.querySelector<HTMLElement>('.mask')!);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushAsync();
+    expect(onClose, '送出中不得關閉').not.toHaveBeenCalled();
+
+    pending.resolve(okResponse(RECORDED_DIVIDEND));
+    await flushAsync();
+    requireTestid('holding-event-result');
+  });
+});
+
+describe('HoldingEventDialog — Idempotency-Key 生命週期(D-13)', () => {
+  it('openingDoesNotMintAKeyAndSubmitMintsExactlyOne', async () => {
+    const randomUUID = stubUuids();
+    await mountDialog();
+    expect(randomUUID).not.toHaveBeenCalled();
+
+    await fillValidDividend();
+    await submit();
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('keepsTheKeyAfterANetworkFailureAndSaysRetryIsSafe', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('Failed to fetch');
+          return okResponse(RECORDED_DIVIDEND);
+        },
+      }),
+    });
+    await fillValidDividend();
+
+    await submit();
+    expect(errorText()).toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe('NETWORK_ERROR');
+    expect(testid('holding-event-error-trace-id'), 'traceId 為 null 時整格不渲染').toBeNull();
+    await submit();
+
+    expect(keysOf(dividendCalls(fetchImpl))).toEqual(['key-1', 'key-1']);
+  });
+
+  it('keepsTheKeyAfterA5xxAndSaysTheOutcomeIsUncertain', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => {
+          calls += 1;
+          return calls === 1 ? failure('INTERNAL_ERROR', { status: 500 }) : okResponse(RECORDED_DIVIDEND);
+        },
+      }),
+    });
+    await fillValidDividend();
+
+    await submit();
+    expect(errorText()).toContain(t('zh', 'holdingEventErrUnknown'));
+    await submit();
+
+    expect(keysOf(dividendCalls(fetchImpl))).toEqual(['key-1', 'key-1']);
+  });
+
+  it('discardsTheKeyAfterKeyReusedForBothEndpoints', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('DIVIDEND_IDEMPOTENCY_KEY_REUSED', { status: 409 }),
+        adjustments: () => failure('SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED', { status: 409 }),
+      }),
+    });
+    await fillValidDividend();
+
+    await submit();
+    expect(errorText()).toContain(t('zh', 'holdingEventErrKeyReused'));
+    await submit();
+    expect(keysOf(dividendCalls(fetchImpl)), '照文案重新送出必須換新 key').toEqual(['key-1', 'key-2']);
+
+    await click(requireTestid('holding-event-mode-stock-dividend'));
+    await typeInto('holding-event-shares', '5');
+    await submit();
+    expect(errorText()).toContain(t('zh', 'holdingEventErrKeyReused'));
+    await submit();
+    expect(keysOf(adjustmentCalls(fetchImpl))).toEqual(['key-3', 'key-4']);
+  });
+
+  it('mintsANewKeyAfterAnyFieldOrModeChange', async () => {
+    stubUuids();
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => failure('INTERNAL_ERROR', { status: 500 }) }),
+    });
+    await fillValidDividend('100');
+    await submit();
+
+    await typeInto('holding-event-note', 'n');
+    await submit();
+
+    // 切模式再切回來:欄位被清空也算「動過」。
+    await click(requireTestid('holding-event-mode-split'));
+    await click(requireTestid('holding-event-mode-cash-dividend'));
+    await fillValidDividend('100');
+    await submit();
+
+    expect(keysOf(dividendCalls(fetchImpl))).toEqual(['key-1', 'key-2', 'key-3']);
+  });
+
+  it('neverRendersTheKeyOrTheBackendMessage', async () => {
+    stubUuids();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => failure('INTERNAL_ERROR', { status: 500, traceId: 'trace-500' }) }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe('INTERNAL_ERROR');
+    expect(requireTestid('holding-event-error-trace-id').textContent).toContain('trace-500');
+    expect(bodyText()).not.toContain('key-1');
+    expect(document.body.innerHTML).not.toContain('key-1');
+    expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+  });
+});
+
+describe('HoldingEventDialog — 錯誤分派(UI-SPEC §錯誤狀態)', () => {
+  it('mapsEachBottomErrorCodeToItsCopy', async () => {
+    const cases: Array<[string, number, string]> = [
+      ['VALIDATION_FAILED', 400, 'holdingEventErrValidation'],
+      ['ASSET_NOT_FOUND', 404, 'holdingEventErrAsset'],
+      ['AUTH_FORBIDDEN', 403, 'holdingEventErrForbidden'],
+      ['SOMETHING_ELSE_FORBIDDEN', 403, 'holdingEventErrForbidden'],
+      ['AUTH_CSRF_TOKEN_INVALID', 403, 'cashErrCsrf'],
+      ['AUTH_CSRF_TOKEN_MISSING', 403, 'cashErrCsrf'],
+      ['DIVIDEND_IDEMPOTENCY_KEY_REUSED', 409, 'holdingEventErrKeyReused'],
+      ['INTERNAL_ERROR', 500, 'holdingEventErrUnknown'],
+      ['UNKNOWN_FUTURE_CODE', 409, 'holdingEventErrUnknown'],
+    ];
+    for (const [code, status, key] of cases) {
+      await mountDialog({ fetchImpl: holdingEventFetch({ dividends: () => failure(code, { status }) }) });
+      await fillValidDividend();
+      await submit();
+
+      expect(errorText(), code).toContain(t('zh', key));
+      expect(requireTestid('holding-event-error').getAttribute('role')).toBe('alert');
+      expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe(code);
+      expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+      cleanupMounted();
+    }
+  });
+
+  it('assetNotFoundWithFieldsSymbolStaysAtTheBottom', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('ASSET_NOT_FOUND', { status: 404, fields: { symbol: FIELD_VALUE_CANARY } }),
+      }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrAsset'));
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+
+  it('insufficientHoldingInFormModeShowsNoHoldingCopy', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({ adjustments: () => failure('TRADE_INSUFFICIENT_HOLDING', { status: 409 }) }),
+      props: { initialMode: 'split' },
+    });
+    await typeInto('holding-event-ratio-new', '4');
+    await typeInto('holding-event-ratio-old', '1');
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrNoHolding'));
+  });
+
+  it('validationFieldsAreShownPerFieldWithoutLeakingValues', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('VALIDATION_FAILED', {
+          fields: { amount: FIELD_VALUE_CANARY, paidAt: FIELD_VALUE_CANARY },
+        }),
+      }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(fieldError('amount')).toBe(t('zh', 'holdingEventErrAmount'));
+    expect(fieldError('paidAt')).toBe(t('zh', 'holdingEventErrPaidAt'));
+    const input = requireTestid('holding-event-amount');
+    const error = requireTestid('holding-event-field-error-amount');
+    expect(error.id).toBe('holding-event-amount-error');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(error.id);
+    expect(error.getAttribute('role'), '欄位錯誤不加 role=alert').toBeNull();
+    expect(testid('holding-event-error'), '欄位級呈現時底部不重複').toBeNull();
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+    expect(document.body.innerHTML).not.toContain(FIELD_VALUE_CANARY);
+  });
+
+  it('effectiveDateFieldErrorCoversFutureAndOrderingRule', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        adjustments: () => failure('VALIDATION_FAILED', { fields: { effectiveDate: FIELD_VALUE_CANARY } }),
+      }),
+      props: { initialMode: 'stockDividend' },
+    });
+    await typeInto('holding-event-shares', '5');
+    await submit();
+
+    expect(fieldError('effectiveDate')).toBe(t('zh', 'holdingEventErrEffectiveDate'));
+    expect(t('zh', 'holdingEventErrEffectiveDate')).toContain('先沖銷較晚的那筆');
+    expect(requireTestid('holding-event-effective-date').getAttribute('aria-invalid')).toBe('true');
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+
+  it('ratioSideFieldsMapToTheRatioError', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        adjustments: () => failure('VALIDATION_FAILED', { fields: { ratioOld: FIELD_VALUE_CANARY } }),
+      }),
+      props: { initialMode: 'split' },
+    });
+    await typeInto('holding-event-ratio-new', '4');
+    await typeInto('holding-event-ratio-old', '1');
+    await submit();
+
+    expect(fieldError('ratio')).toBe(t('zh', 'holdingEventErrRatio'));
+    expect(testid('holding-event-error')).toBeNull();
+  });
+
+  it('unmappableFieldsFallBackToTheBottomValidationCopy', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('VALIDATION_FAILED', { fields: { 'Idempotency-Key': FIELD_VALUE_CANARY } }),
+      }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrValidation'));
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+
+  it('doesNotShowA401InsideTheDialog', async () => {
+    const onRefreshFailed = vi.fn();
+    configureApiClientSessionHandlers({ onRefreshFailed });
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('AUTH_TOKEN_EXPIRED', { status: 401 }),
+        refresh: () => failure('AUTH_REFRESH_FAILED', { status: 401 }),
+      }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(onRefreshFailed, '401 由 apiClient 升級成全域 session 狀態').toHaveBeenCalled();
+    expect(testid('holding-event-error'), '401 不得在對話框內顯示').toBeNull();
+  });
+
+  it('declaresTheCodeToCopyTableAndNeverUsesOtherWriteSignals', () => {
+    expect(holdingEventDialogSource).toMatch(/const SUBMIT_ERROR_COPY: Record<string, string> = \{/);
+    expect(holdingEventDialogSource).toMatch(/function handleSubmitFailure\(/);
+    expect(holdingEventDialogSource).toMatch(/function ensureIdempotencyKey\(/);
+    expect(holdingEventDialogSource).not.toMatch(/notifyTradeCreated|notifyCashEntryCreated/);
+    // 元件只經 service interface(鐵律 1 / 3)。
+    expect(holdingEventDialogSource).not.toMatch(/stores\/mockPortfolio|\bfetch\(/);
+  });
+});
+
+describe('HoldingEventDialog — 關閉與焦點', () => {
+  it('closesViaCloseButtonEscapeMaskAndDone', async () => {
+    const { onClose } = await mountDialog();
+
+    await click(requireTestid('holding-event-close'));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await click(document.body.querySelector<HTMLElement>('.mask')!);
+    await click(requireTestid('holding-event-cancel'));
+    expect(onClose).toHaveBeenCalledTimes(4);
+
+    await fillValidDividend();
+    await submit();
+    await click(requireTestid('holding-event-done'));
+    expect(onClose).toHaveBeenCalledTimes(5);
+  });
+
+  it('returnsFocusToTheOpenerAfterClosing', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', holdingEventFetch());
+    resetRuntimeApiClientsForTests();
+    const opener = document.createElement('button');
+    opener.textContent = 'opener';
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const open = ref(true);
+    const Host = defineComponent({
+      setup: () => () => h(HoldingEventDialog, {
+        open: open.value,
+        lang: 'zh',
+        symbol: 'AAPL',
+        holding: { totalQuantity: 10, currency: 'USD' },
+        onClose: () => { open.value = false; },
+      }),
+    });
+    mountWithPinia(Host);
+    await flushAsync();
+    expect(document.activeElement).toBe(requireTestid('holding-event-amount'));
+
+    await click(requireTestid('holding-event-close'));
+    expect(testid('holding-event-dialog')).toBeNull();
+    expect(document.activeElement, '關閉後焦點回到開啟者').toBe(opener);
+  });
+
+  it('recordAnotherResetsTheFormAndKeepsTheLockedSymbol', async () => {
+    await mountDialog();
+    await fillValidDividend();
+    await submit();
+
+    await click(requireTestid('holding-event-record-another'));
+    expect(testid('holding-event-result')).toBeNull();
+    expect((requireTestid('holding-event-amount') as HTMLInputElement).value).toBe('');
+    expect(requireTestid('holding-event-symbol-locked').textContent).toContain('AAPL');
+    expect(document.activeElement).toBe(requireTestid('holding-event-amount'));
+  });
+});
+
+describe('HoldingEventDialog — 文案禁止用語(D-11)', () => {
+  it('neverRendersTheForbiddenTermInAnyModeOrLanguage', async () => {
+    const forbidden = ['公司' + '行動', 'corporate action', 'Corporate action'];
+    for (const lang of ['zh', 'en'] as const) {
+      await mountDialog({ lang, fetchImpl: adjustmentFetch(adjustmentDto()) });
+      for (const id of ['holding-event-mode-cash-dividend', 'holding-event-mode-stock-dividend', 'holding-event-mode-split']) {
+        await click(requireTestid(id));
+        for (const word of forbidden) expect(bodyText(), `${lang} ${id}`).not.toContain(word);
+      }
+      await click(requireTestid('holding-event-mode-stock-dividend'));
+      await typeInto('holding-event-shares', '5');
+      await submit();
+      requireTestid('holding-event-result');
+      for (const word of forbidden) expect(bodyText(), `${lang} result`).not.toContain(word);
+      cleanupMounted();
+    }
   });
 });
