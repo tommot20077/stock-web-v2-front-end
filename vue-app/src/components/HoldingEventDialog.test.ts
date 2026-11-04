@@ -42,8 +42,6 @@ const RECORDED_DIVIDEND: DividendDto = {
   reversed: false,
 };
 
-const BACKEND_MESSAGE_CANARY = 'BackendMessageMustNotReachTheDom';
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
