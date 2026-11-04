@@ -525,8 +525,27 @@ function focusPrimaryField() {
   target?.focus();
 }
 
+/** 開啟當下的焦點元素;關閉時把焦點還給它(開啟者)。 */
+let returnFocusTarget: HTMLElement | null = null;
+
+/**
+ * 關閉時**同步**還焦點(pre-flush,早於開啟者自己排的 `nextTick`):
+ * 開啟者若要改落點(例如成功後消失的 `沖銷這筆` → 表格卡),它的 `nextTick` 會在此之後執行而勝出。
+ * 開啟者已不在 DOM 時不動,交給開啟者處理。
+ */
+function restoreFocus() {
+  const target = returnFocusTarget;
+  returnFocusTarget = null;
+  if (target && target !== document.body && target.isConnected) target.focus();
+}
+
 watch(() => props.open, async (open) => {
-  if (!open) return;
+  if (!open) {
+    restoreFocus();
+    return;
+  }
+  const active = document.activeElement;
+  returnFocusTarget = active instanceof HTMLElement ? active : null;
   resetForm();
   await nextTick();
   focusPrimaryField();
@@ -846,16 +865,62 @@ async function submitEvent() {
   }
 }
 
-const submitErrorMessage = computed(() => (submitError.value ? t(props.lang, 'holdingEventErrUnknown') : ''));
+/**
+ * 底部錯誤依 `error.code` 分派(不假設錯誤順序);每個 code 對應 UI-SPEC §錯誤狀態的一條文案。
+ * 沖銷模式的對應(`TRADE_INSUFFICIENT_HOLDING` → `holdingEventErrReversalNoHolding`、三種沖銷衝突)由 04.2-19 接上。
+ */
+const SUBMIT_ERROR_COPY: Record<string, string> = {
+  VALIDATION_FAILED: 'holdingEventErrValidation',
+  DIVIDEND_IDEMPOTENCY_KEY_REUSED: 'holdingEventErrKeyReused',
+  SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED: 'holdingEventErrKeyReused',
+  // form 模式(配股 / 拆股):除權日或目前沒有持倉(D-06 / D-09)。
+  TRADE_INSUFFICIENT_HOLDING: 'holdingEventErrNoHolding',
+  ASSET_NOT_FOUND: 'holdingEventErrAsset',
+  AUTH_FORBIDDEN: 'holdingEventErrForbidden',
+  AUTH_CSRF_TOKEN_INVALID: 'cashErrCsrf',
+  // 前端合成(`apiClient` 的 `ensureCsrfToken`:bootstrap 後仍拿不到 cookie),後端不會送。
+  AUTH_CSRF_TOKEN_MISSING: 'cashErrCsrf',
+  // 前端合成的診斷碼:非 ApiClientError(連線失敗);唯一能保證「再送一次不會重複」的情境。
+  NETWORK_ERROR: 'cashErrNetwork',
+};
 
-/** 送出失敗的統一落點;key 預設保留(這次沒寫入或結果未知,但意圖沒變)。 */
+/** 換新 key 才能脫困的 code:同一把 key 照文案重送只會再吃一次 409,形成無出路的迴圈。 */
+const KEY_REUSED_CODES = ['DIVIDEND_IDEMPOTENCY_KEY_REUSED', 'SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED'];
+
+/** 其他(含 5xx)= 結果不確定:`holdingEventErrUnknown` 說「可能已經寫入」並指向 Trades 頁籤,不斷言未寫入。 */
+const submitErrorMessage = computed(() => {
+  const error = submitError.value;
+  if (!error) return '';
+  const key = SUBMIT_ERROR_COPY[error.code] ?? (error.status === 403 ? 'holdingEventErrForbidden' : 'holdingEventErrUnknown');
+  return t(props.lang, key);
+});
+
+/**
+ * 送出失敗的統一落點。
+ *
+ * **key 的處置:預設一律保留** —— 「這次沒寫入(或結果未知),但意圖沒變」,沿用同一把重送是安全且正確的。
+ * 網路失敗、5xx、`VALIDATION_FAILED`、`TRADE_INSUFFICIENT_HOLDING`、CSRF / 403、401 都走這條。
+ * **例外是 `*_IDEMPOTENCY_KEY_REUSED`:必須丟棄 key。**
+ *
+ * `fields` 只在 `VALIDATION_FAILED` 時做欄位級呈現:`ASSET_NOT_FOUND` 也帶 `fields.symbol`,
+ * 但它的文案(請重新選擇標的)屬於底部區,不是「欄位格式錯」。
+ */
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
-    ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
+    ? {
+        code: error.code,
+        traceId: error.requestId,
+        fields: error.code === 'VALIDATION_FAILED' ? error.fields : null,
+        status: error.status,
+      }
     : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+
   // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
+  // key 保留:登入回來後重送的是同一個意圖。
   if (described.status === 401) return;
+
   submitError.value = described;
+  if (KEY_REUSED_CODES.includes(described.code)) currentKey.value = null;
 }
 
 async function recordAnother() {
