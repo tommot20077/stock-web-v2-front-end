@@ -289,6 +289,17 @@ function focusAuthPanel() {
   authPanelRef.value?.$el?.querySelector('h2')?.focus();
 }
 
+/**
+ * 04.2-review WR-05:登出或 refresh 過期會讓即時報價串流停在 closed(ticket 401 / 連續 4001)。
+ * 同分頁重新登入(或 session 恢復)後頁面可能一直掛著、不會再 watch,所以在 session 進入 authenticated 時
+ * 讓 closed 的串流重連一次。replaced(被別處接手)刻意不動,只接受使用者手動重連(04.2-14)。
+ */
+watch(() => sessionState.value.status, (next, prev) => {
+  if (!apiMode || next !== 'authenticated' || prev === 'authenticated') return;
+  const quotes = getRuntimeApiClients().quotes;
+  if (quotes.status.value === 'closed') quotes.reconnect();
+});
+
 onMounted(() => {
   if (apiMode) void restoreSession();
 });

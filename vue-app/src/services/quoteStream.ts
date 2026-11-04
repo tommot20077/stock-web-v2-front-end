@@ -144,6 +144,7 @@ type Timer = ReturnType<typeof setTimeout>;
  * connecting ──ticket 失敗(非 401)/ socket 建立失敗──► degraded ──backoff──► connecting
  * live ──close 4000 / 4003(*) / 4008/4009/4400/4500/1006──► degraded ──backoff(1,2,4,8,16,30,30… s)──► connecting
  * live / connecting ──close 4001──► connecting(立即重取 ticket 一次;再 4001 或 ticket 401 → closed)
+ * closed ──新的 watch() 或 reconnect()(App 在 session 回到 authenticated 時呼叫)──► connecting(重設 4001 重試額度;WR-05)
  * 任何 ──close 4002 或 auth_expired reason=session_replaced──► replaced(不自動重連;reconnect() 才回 connecting)
  * 任何 ──visibility hidden──► close(1000) ──► idle(保留訂閱集合)
  * idle ──visibility visible 且有消費者──► connecting(重取 ticket,WELCOME 後 resyncSeq += 1)
@@ -458,7 +459,16 @@ export function createHttpQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
   }
 
   function ensureConnected(): void {
-    if (disposed || status.value !== 'idle' || isHidden()) return;
+    if (disposed || isHidden()) return;
+    if (status.value === 'closed') {
+      // WR-05:closed 只由認證失敗造成(dispose 已被 disposed 擋下)。新的消費者出現(例如重新登入後頁面重新掛載)
+      // 視同 idle:重設 4001 重試額度與退避再連線一次;若仍未登入,ticket 401 會再回到 closed。
+      // replaced 不在此列——只接受使用者手動 reconnect()(04.2-14)。
+      authRetryUsed = false;
+      backoffAttempt = 0;
+    } else if (status.value !== 'idle') {
+      return;
+    }
     void connect();
   }
 
