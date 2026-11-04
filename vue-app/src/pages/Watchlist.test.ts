@@ -1243,3 +1243,58 @@ describe('Watchlist 頁 — 過時 GET 回應守門(04.2-review WR-06)', () => {
     expect(rowSymbols()).toEqual(['NVDA', 'MSFT']);
   });
 });
+
+// =====================================================================================
+// 04.2-review WR-07:排序待送佇列要分清單;A 的 PUT 在飛時改排 B,A 的最新順序不得遺失。
+// =====================================================================================
+
+describe('Watchlist 頁 — 排序待送佇列分清單(04.2-review WR-07)', () => {
+  function bodiesFor(fetchImpl: WatchlistFetch, listId: string): string[][] {
+    return callsTo(fetchImpl, 'PUT', `/watchlists/${listId}/items/order`)
+      .map(([, init]) => (JSON.parse(String(init?.body)) as { assetIds: string[] }).assetIds);
+  }
+
+  it('A 的 PUT 在飛 → A 再改一次 → 切到 B 並改排 → A 的 PUT 完成後,A 的最新順序與 B 的順序都會送出', async () => {
+    const listA = watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT']);
+    const listB = watchlistDto('w2', '科技', ['TSLA', 'AMD', 'INTC']);
+    let releaseFirst: (() => void) | null = null;
+    const fetchImpl = watchlistFetch([listA, listB], {
+      reorder: (listId, assetIds, call) => (call === 0
+        ? new Promise<Response>(resolve => {
+          releaseFirst = () => resolve(apiSuccess({ ...listA, items: assetIds.map(id => listA.items.find(item => item.uuid === id)!) }));
+        })
+        : undefined),
+    });
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    fakeDebounceTimers();
+
+    // 1. A 移一列 → debounce 到 → PUT #1(A)在飛
+    await press(moveButton('AAPL', 'down'));
+    await advance(500);
+    expect(bodiesFor(fetchImpl, 'w1')).toHaveLength(1);
+
+    // 2. A 再移一列 → A 待送
+    await press(moveButton('MSFT', 'up'));
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT', 'AAPL']);
+
+    // 3. 切到 B,4. B 移一列
+    await press(tab('w2'));
+    expect(rowSymbols()).toEqual(['TSLA', 'AMD', 'INTC']);
+    await press(moveButton('TSLA', 'down'));
+    expect(rowSymbols()).toEqual(['AMD', 'TSLA', 'INTC']);
+
+    // 5. PUT #1 完成;讓所有 debounce / 排隊的請求跑完
+    releaseFirst!();
+    await settle();
+    await advance(500);
+    await settle();
+    await advance(500);
+    await settle();
+
+    const aBodies = bodiesFor(fetchImpl, 'w1');
+    expect(aBodies.at(-1), 'A 的第二次排序必須送出').toEqual([uuidOf(listA, 'NVDA'), uuidOf(listA, 'MSFT'), uuidOf(listA, 'AAPL')]);
+    expect(bodiesFor(fetchImpl, 'w2')).toEqual([[uuidOf(listB, 'AMD'), uuidOf(listB, 'TSLA'), uuidOf(listB, 'INTC')]]);
+    expect(testid('watchlist-reorder-saving')).toBeNull();
+  });
+});
