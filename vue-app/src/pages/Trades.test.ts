@@ -1443,3 +1443,268 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
     expect(apiLastFill.value, 'App.vue 的 v-if 切頁會卸載本頁,標記不得活過這一刻').toBeNull();
   });
 });
+
+describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-SPEC §Interaction 3)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  /** 本機 `YYYY-MM-DD`(與畫面同一個時區基準;測試不寫死時區)。 */
+  function localDate(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+  function localDateTime(iso: string): string {
+    const d = new Date(iso);
+    return `${localDate(iso)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  const UUIDS = {
+    cash: '11111111-aaaa-4bbb-8ccc-000000000001',
+    cashOrig: '11111111-aaaa-4bbb-8ccc-000000000002',
+    stock: '22222222-aaaa-4bbb-8ccc-000000000001',
+    split: '33333333-aaaa-4bbb-8ccc-000000000001',
+    reverse: '44444444-aaaa-4bbb-8ccc-000000000001',
+    adjRev: '55555555-aaaa-4bbb-8ccc-000000000001',
+    adjOrig: '55555555-aaaa-4bbb-8ccc-000000000002',
+    buy: '66666666-aaaa-4bbb-8ccc-000000000001',
+  };
+
+  function mixedItems(): PortfolioActivityDto[] {
+    return [
+      trade({ id: UUIDS.buy, symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, executedAt: '2026-10-31T09:30:00Z' }),
+      activity({
+        id: UUIDS.cash,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120,
+        withholdingTax: 30,
+        occurredAt: '2026-10-30T01:15:00Z',
+        reversed: true,
+      }),
+      activity({
+        id: UUIDS.cashOrig,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'MSFT',
+        currency: 'USD',
+        amount: 50,
+        withholdingTax: 0,
+        occurredAt: '2026-10-29T03:00:00Z',
+        reversalOfId: UUIDS.cash,
+        reversalOfOccurredAt: '2026-10-30T01:15:00Z',
+      }),
+      activity({
+        id: UUIDS.stock,
+        kind: 'STOCK_DIVIDEND',
+        symbol: '2330',
+        currency: 'TWD',
+        quantity: 50,
+        effectiveDate: '2026-08-15',
+        occurredAt: '2026-08-14T16:00:00Z',
+      }),
+      activity({
+        id: UUIDS.split,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+      }),
+      activity({
+        id: UUIDS.reverse,
+        kind: 'SPLIT',
+        symbol: 'GE',
+        currency: 'USD',
+        quantity: -50,
+        ratioNew: 1,
+        ratioOld: 2,
+        effectiveDate: '2026-06-01',
+        occurredAt: '2026-05-31T16:00:00Z',
+        reversed: true,
+      }),
+      activity({
+        id: UUIDS.adjRev,
+        kind: 'SPLIT',
+        symbol: 'GE',
+        currency: 'USD',
+        quantity: -50,
+        ratioNew: 1,
+        ratioOld: 2,
+        effectiveDate: '2026-06-01',
+        occurredAt: '2026-05-31T16:00:00Z',
+        reversalOfId: UUIDS.reverse,
+        reversalOfEffectiveDate: '2026-06-01',
+      }),
+    ];
+  }
+
+  async function mountMixed() {
+    const fetchMock = scriptedFetch(() => success(page({ items: mixedItems(), totalElements: 7, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+    expect(rows()).toHaveLength(7);
+  }
+
+  function rowById(index: number): HTMLElement {
+    return rows()[index];
+  }
+
+  function cellsOf(row: HTMLElement): HTMLTableCellElement[] {
+    return [...row.querySelectorAll<HTMLTableCellElement>('td')];
+  }
+
+  function expectDash(cell: HTMLTableCellElement, label: string) {
+    expect(cell.textContent?.trim(), `${label} 不適用 → —`).toBe('—');
+    const dash = cell.querySelector('[aria-hidden="true"]');
+    expect(dash, `${label} 的 — 為 aria-hidden`).toBeTruthy();
+    expect(dash!.classList.contains('na')).toBe(true);
+  }
+
+  it('表頭新增最後一欄「狀態」(cashColStatus),API 與 mock 同欄序', async () => {
+    await mountMixed();
+    const ths = [...document.body.querySelectorAll<HTMLElement>('thead th')];
+    expect(ths).toHaveLength(9);
+    expect(ths[8].textContent?.trim()).toBe(t('en', 'cashColStatus'));
+    for (const row of rows()) expect(cellsOf(row)).toHaveLength(9);
+  });
+
+  it('BUY / SELL 列沿用既有欄位與 pill 原字串,類型格改用 .kind-pill(12 / 600)', async () => {
+    await mountMixed();
+    const buy = rowById(0);
+    expect(buy.dataset.kind).toBe('BUY');
+    const pill = buy.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.textContent?.trim()).toBe('BUY');
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('buy')).toBe(true);
+    const cells = cellsOf(buy);
+    expect(cells[0].textContent?.trim()).toBe('2026-10-31');
+    expect(cells[3].textContent?.trim()).toBe('3');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(cells[8].textContent?.trim(), '交易列狀態欄為空').toBe('');
+  });
+
+  it('CASH_DIVIDEND:本機 YYYY-MM-DD HH:mm、.kind-pill.div、數量 / 價格 / 手續費為 —、總額 + 預扣稅行', async () => {
+    await mountMixed();
+    const row = rowById(1);
+    expect(row.dataset.kind).toBe('CASH_DIVIDEND');
+    const cells = cellsOf(row);
+    expect(cells[0].textContent?.trim()).toBe(localDateTime('2026-10-30T01:15:00Z'));
+    const pill = row.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('div')).toBe(true);
+    expect(pill.textContent?.trim()).toBe(t('en', 'activityKindCashDividend'));
+    expectDash(cells[3], 'qty');
+    expectDash(cells[4], 'price');
+    expectDash(cells[6], 'fee');
+    expect(row.querySelector('[data-testid="trades-tax-line"]')?.textContent?.trim())
+      .toBe(t('en', 'tradesTaxLine').replace('{amount}', '30.00'));
+    // withholdingTax = 0 → 不渲染預扣稅行
+    expect(rowById(2).querySelector('[data-testid="trades-tax-line"]')).toBeNull();
+  });
+
+  it('STOCK_DIVIDEND:日期為 effectiveDate 原字串、數量帶號、價格 / 總額 / 手續費為 —、中性 pill', async () => {
+    await mountMixed();
+    const row = rowById(3);
+    expect(row.dataset.kind).toBe('STOCK_DIVIDEND');
+    const cells = cellsOf(row);
+    expect(cells[0].textContent?.trim()).toBe('2026-08-15');
+    const pill = row.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.textContent?.trim()).toBe(t('en', 'activityKindStockDividend'));
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('div')).toBe(false);
+    expect(cells[3].textContent?.trim()).toBe('+50');
+    expectDash(cells[4], 'price');
+    expectDash(cells[5], 'total');
+    expectDash(cells[6], 'fee');
+  });
+
+  it('SPLIT:ratioNew > ratioOld 為「拆股」、反之「合股」;數量帶號 + 比例行 new : old', async () => {
+    await mountMixed();
+    const split = rowById(4);
+    expect(split.dataset.kind).toBe('SPLIT');
+    expect(split.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim()).toBe(t('en', 'activityKindSplit'));
+    const qty = cellsOf(split)[3];
+    expect(qty.querySelector('[data-testid="trades-ratio-line"]')?.textContent?.trim()).toBe('4 : 1');
+    expect(qty.textContent?.replace(/\s+/g, ' ').trim()).toBe('+300 4 : 1');
+    expectDash(cellsOf(split)[5], 'total');
+
+    const reverse = rowById(5);
+    expect(reverse.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim())
+      .toBe(t('en', 'activityKindReverseSplit'));
+    expect(cellsOf(reverse)[3].querySelector('[data-testid="trades-ratio-line"]')?.textContent?.trim()).toBe('1 : 2');
+    expect(cellsOf(reverse)[3].textContent).toContain('-50');
+  });
+
+  it('沖銷列:pill 下方「沖銷 {date} 的紀錄」以原紀錄日期指回(股利用 reversalOfOccurredAt 本機日期、調整用 reversalOfEffectiveDate)', async () => {
+    await mountMixed();
+    const cashReversal = rowById(2).querySelector('[data-testid="trades-reversal-of"]');
+    expect(cashReversal?.textContent?.trim())
+      .toBe(t('en', 'cashReversalOf').replace('{date}', localDate('2026-10-30T01:15:00Z')));
+    // 指回行在類型格內(pill 下方)
+    expect(cellsOf(rowById(2))[1].contains(cashReversal)).toBe(true);
+
+    const adjReversal = rowById(6).querySelector('[data-testid="trades-reversal-of"]');
+    expect(adjReversal?.textContent?.trim()).toBe(t('en', 'cashReversalOf').replace('{date}', '2026-06-01'));
+
+    // 非沖銷列不渲染指回行
+    for (const index of [0, 1, 3, 4, 5]) {
+      expect(rowById(index).querySelector('[data-testid="trades-reversal-of"]'), `row ${index}`).toBeNull();
+    }
+  });
+
+  it('被沖銷列:金額 / 股數加刪除線 + 狀態欄「已沖銷」pill;未被沖銷列無此標記', async () => {
+    await mountMixed();
+    const cash = rowById(1);
+    const amount = cellsOf(cash)[5].querySelector<HTMLElement>('.is-reversed');
+    expect(amount, '股利金額刪除線').toBeTruthy();
+    expect(amount!.textContent).toContain('120.00');
+    expect(cellsOf(cash)[8].querySelector('[data-testid="trades-reversed-pill"]')?.textContent?.trim())
+      .toBe(t('en', 'cashReversed'));
+
+    const reverse = rowById(5);
+    const qty = cellsOf(reverse)[3].querySelector<HTMLElement>('.is-reversed');
+    expect(qty, '股數刪除線').toBeTruthy();
+    expect(qty!.textContent).toContain('-50');
+    expect(reverse.querySelector('[data-testid="trades-reversed-pill"]')).toBeTruthy();
+
+    for (const index of [0, 2, 3, 4, 6]) {
+      const row = rowById(index);
+      expect(row.querySelector('[data-testid="trades-reversed-pill"]'), `row ${index}`).toBeNull();
+      expect(row.querySelector('.is-reversed'), `row ${index}`).toBeNull();
+    }
+  });
+
+  it('DOM 不含任何列的 id / reversalOfId uuid(T-04.2-44)', async () => {
+    await mountMixed();
+    const html = document.body.innerHTML;
+    for (const uuid of Object.values(UUIDS)) expect(html, uuid).not.toContain(uuid);
+  });
+
+  it('.kind-pill 樣式為 12px / 600(UI-SPEC §Typography 遷移規則第 9 列);mock tbody 的 .pill 不動', () => {
+    const block = sourceBlock('.kind-pill {', '}');
+    expect(block).toContain('font-size: 12px');
+    expect(block).toContain('font-weight: 600');
+    expect(block).toContain('white-space: nowrap');
+    expect(tradesSource).toContain(":class=\"['pill', tr.type.toLowerCase()]\"");
+  });
+
+  it('mock 模式:靜態 DIV 示範列以 CASH_DIVIDEND 呈現(data-kind)、無沖銷相關標記;表格同樣有狀態欄', async () => {
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = [
+      { d: '2026-05-16', type: 'BUY', sym: 'AAA', qty: 2, px: 10, fee: 1, note: 'first' },
+      { d: '2026-01-15', type: 'DIV', sym: 'CCC', qty: 4, px: 0.5, fee: 0, note: 'cash' },
+    ];
+    await nextTick();
+
+    const ths = [...document.body.querySelectorAll<HTMLElement>('thead th')];
+    expect(ths[ths.length - 1].textContent?.trim()).toBe(t('en', 'cashColStatus'));
+    expect(rows()[0].dataset.kind).toBe('BUY');
+    expect(rows()[1].dataset.kind).toBe('CASH_DIVIDEND');
+    for (const row of rows()) expect(cellsOf(row)).toHaveLength(9);
+    expect(testid('trades-reversal-of')).toBeNull();
+    expect(testid('trades-reversed-pill')).toBeNull();
+    expect(document.body.querySelector('.is-reversed')).toBeNull();
+  });
+});
