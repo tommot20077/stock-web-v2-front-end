@@ -1293,7 +1293,7 @@ describe('Watchlist 頁 — 排序待送佇列分清單(04.2-review WR-07)', () 
     await settle();
 
     const aBodies = bodiesFor(fetchImpl, 'w1');
-    expect(aBodies.at(-1), 'A 的第二次排序必須送出').toEqual([uuidOf(listA, 'NVDA'), uuidOf(listA, 'MSFT'), uuidOf(listA, 'AAPL')]);
+    expect(aBodies[aBodies.length - 1], 'A 的第二次排序必須送出').toEqual([uuidOf(listA, 'NVDA'), uuidOf(listA, 'MSFT'), uuidOf(listA, 'AAPL')]);
     expect(bodiesFor(fetchImpl, 'w2')).toEqual([[uuidOf(listB, 'AMD'), uuidOf(listB, 'TSLA'), uuidOf(listB, 'INTC')]]);
     expect(testid('watchlist-reorder-saving')).toBeNull();
   });
