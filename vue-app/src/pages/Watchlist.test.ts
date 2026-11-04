@@ -342,3 +342,347 @@ describe('App:Watchlist 前往行情', () => {
     expect(document.body.querySelector('[data-testid="markets-star"]')).not.toBeNull();
   });
 });
+
+// =============== Task 2:建立 / 改名 / 刪除清單、移除項目、操作錯誤與上限 ===============
+
+async function setValue(el: HTMLInputElement, value: string) {
+  el.value = value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  await flushAsync(1);
+}
+
+async function submitForm(el: HTMLElement) {
+  const form = el.closest('form');
+  expect(form, 'enclosing form').not.toBeNull();
+  form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await flushAsync();
+}
+
+function input(id: string): HTMLInputElement {
+  return requireTestid(id) as HTMLInputElement;
+}
+
+function button(id: string): HTMLButtonElement {
+  return requireTestid(id) as HTMLButtonElement;
+}
+
+function removeButton(symbol: string): HTMLButtonElement {
+  const el = row(symbol).querySelector<HTMLButtonElement>('[data-testid="watchlist-remove"]');
+  expect(el, `watchlist-remove in ${symbol}`).not.toBeNull();
+  return el!;
+}
+
+describe('Watchlist 頁 — 建立清單', () => {
+  it('+ 新增清單(中性 .btn-ghost-sm)→ 建立表單、輸入框聚焦;Enter 送出 → 新 tab 作用中、表單收起、焦點在新 tab', async () => {
+    const fetchImpl = watchlistFetch([defaultList()]);
+    await mountApi(fetchImpl);
+
+    const newList = button('watchlist-new-list');
+    expect(newList.classList.contains('btn-ghost-sm')).toBe(true);
+    expect(testid('watchlist-create-form')).toBeNull();
+    await click(newList);
+
+    requireTestid('watchlist-create-form');
+    const name = input('watchlist-create-name');
+    expect(document.activeElement).toBe(name);
+    expect(name.getAttribute('maxlength')).toBe('30');
+
+    await setValue(name, '  半導體  ');
+    await submitForm(name);
+
+    const posts = callsTo(fetchImpl, 'POST', '/watchlists');
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ name: '半導體' });
+    expect(testid('watchlist-create-form')).toBeNull();
+    expect(tabs()).toHaveLength(2);
+    const created = tab('wl-created-1');
+    expect(created.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(created);
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('半導體');
+    requireTestid('watchlist-empty');
+  });
+
+  it('Esc 取消:表單收起、不送出、焦點回到 + 新增清單', async () => {
+    const fetchImpl = watchlistFetch([defaultList()]);
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-new-list'));
+    await key(input('watchlist-create-name'), 'Escape');
+
+    expect(testid('watchlist-create-form')).toBeNull();
+    expect(callsTo(fetchImpl, 'POST', '/watchlists')).toHaveLength(0);
+    expect(document.activeElement).toBe(button('watchlist-new-list'));
+  });
+
+  it('名稱自檢:trim 後空白 / 超過 30 字 → watchlistErrName;同名 → watchlistErrDuplicateName;送出鈕 disabled 且不送出', async () => {
+    const fetchImpl = watchlistFetch([defaultList()]);
+    await mountApi(fetchImpl);
+    await click(button('watchlist-new-list'));
+    const name = input('watchlist-create-name');
+
+    await setValue(name, '   ');
+    expect(requireTestid('watchlist-name-error').textContent).toContain(t('zh', 'watchlistErrName'));
+    expect(button('watchlist-create-submit').disabled).toBe(true);
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+
+    await setValue(name, 'x'.repeat(31));
+    expect(requireTestid('watchlist-name-error').textContent).toContain(t('zh', 'watchlistErrName'));
+    expect(button('watchlist-create-submit').disabled).toBe(true);
+
+    await setValue(name, '我的自選');
+    expect(requireTestid('watchlist-name-error').textContent).toContain(t('zh', 'watchlistErrDuplicateName'));
+    expect(button('watchlist-create-submit').disabled).toBe(true);
+
+    await submitForm(name);
+    expect(callsTo(fetchImpl, 'POST', '/watchlists')).toHaveLength(0);
+
+    await setValue(name, 'x'.repeat(30));
+    expect(testid('watchlist-name-error')).toBeNull();
+    expect(button('watchlist-create-submit').disabled).toBe(false);
+  });
+
+  it('20 個清單 → + 新增清單 disabled + 上限文案;19 個時可用', async () => {
+    const twenty = Array.from({ length: 20 }, (_, i) => watchlistDto(`w${i}`, `清單 ${i}`, []));
+    await mountApi(watchlistFetch(twenty));
+
+    expect(button('watchlist-new-list').disabled).toBe(true);
+    expect(requireTestid('watchlist-limit-lists').textContent?.trim()).toBe(t('zh', 'watchlistListsLimitReached'));
+
+    cleanupMounted();
+    await mountApi(watchlistFetch(twenty.slice(0, 19)));
+    expect(button('watchlist-new-list').disabled).toBe(false);
+    expect(testid('watchlist-limit-lists')).toBeNull();
+  });
+
+  it('後端 400 fields.watchlists → 操作錯誤區 watchlistErrListLimit + 診斷列', async () => {
+    const fetchImpl = watchlistFetch([defaultList()], {
+      create: () => apiFailure('VALIDATION_FAILED', 'trace-limit', 400, { watchlists: 'at most 20' }),
+    });
+    await mountApi(fetchImpl);
+    await click(button('watchlist-new-list'));
+    await setValue(input('watchlist-create-name'), '第 21 個');
+    await click(button('watchlist-create-submit'));
+
+    const opError = requireTestid('watchlist-op-error');
+    expect(opError.getAttribute('role')).toBe('alert');
+    expect(opError.textContent).toContain(t('zh', 'watchlistErrListLimit'));
+    expect(requireTestid('watchlist-op-error-code').textContent?.trim()).toBe('VALIDATION_FAILED');
+    expect(requireTestid('watchlist-op-error-trace-id').textContent).toContain('trace-limit');
+    expect(document.body.textContent).not.toContain('BackendMessageMustNotReachTheDom');
+    expect(tabs()).toHaveLength(1);
+  });
+});
+
+describe('Watchlist 頁 — 改名', () => {
+  it('改名 → 輸入框預填現名並聚焦 → 儲存名稱 → PATCH,tab 與標題更新', async () => {
+    const fetchImpl = watchlistFetch([defaultList(), watchlistDto('w2', 'AI 概念', ['NVDA'])]);
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-rename'));
+    const name = input('watchlist-rename-input');
+    expect(name.value).toBe('我的自選');
+    expect(document.activeElement).toBe(name);
+
+    await setValue(name, '長線');
+    await click(button('watchlist-rename-save'));
+
+    const patches = callsTo(fetchImpl, 'PATCH', '/watchlists/w1');
+    expect(patches).toHaveLength(1);
+    expect(JSON.parse(String(patches[0][1]?.body))).toEqual({ name: '長線' });
+    expect(testid('watchlist-rename-input')).toBeNull();
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('長線');
+    expect(tab('w1').textContent).toContain('長線');
+  });
+
+  it('改名自檢:與其他清單同名 → watchlistErrDuplicateName 且儲存 disabled;維持原名可存;取消回原狀', async () => {
+    const fetchImpl = watchlistFetch([defaultList(), watchlistDto('w2', 'AI 概念', ['NVDA'])]);
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-rename'));
+    const name = input('watchlist-rename-input');
+    await setValue(name, 'AI 概念');
+    expect(requireTestid('watchlist-name-error').textContent).toContain(t('zh', 'watchlistErrDuplicateName'));
+    expect(button('watchlist-rename-save').disabled).toBe(true);
+
+    await setValue(name, '我的自選');
+    expect(testid('watchlist-name-error')).toBeNull();
+
+    await click(button('watchlist-rename-cancel'));
+    expect(testid('watchlist-rename-input')).toBeNull();
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('我的自選');
+    expect(callsTo(fetchImpl, 'PATCH', '/watchlists')).toHaveLength(0);
+  });
+
+  it('後端 409 重名 → 操作錯誤區 watchlistErrDuplicateName', async () => {
+    const fetchImpl = watchlistFetch([defaultList()], {
+      rename: () => apiFailure('DUPLICATE_RESOURCE', 'trace-dup', 409, { name: 'already exists' }),
+    });
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-rename'));
+    await setValue(input('watchlist-rename-input'), '別的分頁剛建的名字');
+    await click(button('watchlist-rename-save'));
+
+    expect(requireTestid('watchlist-op-error').textContent).toContain(t('zh', 'watchlistErrDuplicateName'));
+    expect(requireTestid('watchlist-op-error-code').textContent?.trim()).toBe('DUPLICATE_RESOURCE');
+  });
+});
+
+describe('Watchlist 頁 — 刪除清單', () => {
+  it('刪除 → 行內確認(名稱與檔數)、焦點在取消、無唯一清單附註;確認 → DELETE,作用中改為第一個清單', async () => {
+    const fetchImpl = watchlistFetch([defaultList(), watchlistDto('w2', 'AI 概念', ['NVDA', 'META'])]);
+    await mountApi(fetchImpl);
+    await click(tab('w2'));
+
+    await click(button('watchlist-delete'));
+    const confirm = requireTestid('watchlist-delete-confirm');
+    expect(confirm.getAttribute('role')).toBe('group');
+    expect(confirm.textContent).toContain(tf('zh', 'watchlistDeleteConfirm', { name: 'AI 概念', n: 2 }));
+    expect(confirm.textContent).not.toContain(t('zh', 'watchlistDeleteLastNote'));
+    expect(document.activeElement).toBe(button('watchlist-delete-confirm-cancel'));
+    expect(button('watchlist-delete-confirm-submit').classList.contains('btn-danger')).toBe(true);
+
+    await click(button('watchlist-delete-confirm-submit'));
+    expect(callsTo(fetchImpl, 'DELETE', '/watchlists/w2')).toHaveLength(1);
+    expect(testid('watchlist-delete-confirm')).toBeNull();
+    expect(tabs().map(el => el.getAttribute('data-list-id'))).toEqual(['w1']);
+    expect(tab('w1').getAttribute('aria-selected')).toBe('true');
+    expect(rowSymbols()).toEqual(['AAPL', 'USD/TWD']);
+  });
+
+  it('取消 → 確認區收起、不送出、焦點回到刪除清單', async () => {
+    const fetchImpl = watchlistFetch([defaultList()]);
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-delete'));
+    await click(button('watchlist-delete-confirm-cancel'));
+    expect(testid('watchlist-delete-confirm')).toBeNull();
+    expect(callsTo(fetchImpl, 'DELETE', '/watchlists')).toHaveLength(0);
+    expect(document.activeElement).toBe(button('watchlist-delete'));
+  });
+
+  it('只剩一個清單 → 確認區另顯示 watchlistDeleteLastNote;刪除後重讀,顯示後端重建的空「我的自選」', async () => {
+    const fetchImpl = watchlistFetch([defaultList()]);
+    await mountApi(fetchImpl);
+
+    await click(button('watchlist-delete'));
+    expect(requireTestid('watchlist-delete-confirm').textContent).toContain(t('zh', 'watchlistDeleteLastNote'));
+    await click(button('watchlist-delete-confirm-submit'));
+
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(tabs().map(el => el.getAttribute('data-list-id'))).toEqual(['wl-default-1']);
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('我的自選');
+    requireTestid('watchlist-empty');
+  });
+});
+
+describe('Watchlist 頁 — 移除項目', () => {
+  it('✕(36 × 36、aria-label 帶清單名與代號)→ 立即 DELETE(以 uuid)、不觸發 chart、焦點移到下一列的 ✕', async () => {
+    const list = watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT']);
+    const fetchImpl = watchlistFetch([list]);
+    const on = await mountApi(fetchImpl);
+
+    const remove = removeButton('AAPL');
+    expect(remove.getAttribute('aria-label')).toBe(tf('zh', 'watchlistRemoveAria', { name: '我的自選', symbol: 'AAPL' }));
+    await click(remove);
+
+    expect(callsTo(fetchImpl, 'DELETE', `/watchlists/w1/items/${list.items[0].uuid}`)).toHaveLength(1);
+    expect(on.chart).not.toHaveBeenCalled();
+    expect(testid('watchlist-delete-confirm')).toBeNull();
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT']);
+    expect(document.activeElement).toBe(removeButton('NVDA'));
+    expect(requireTestid('watchlist-count').textContent?.trim()).toBe(tf('zh', 'watchlistCount', { n: 2 }));
+  });
+
+  it('移除最後一列 → 焦點移到清單名稱', async () => {
+    await mountApi(watchlistFetch([watchlistDto('w1', '我的自選', ['AAPL', 'NVDA'])]));
+
+    await click(removeButton('NVDA'));
+    expect(rowSymbols()).toEqual(['AAPL']);
+    expect(document.activeElement).toBe(requireTestid('watchlist-toolbar-name'));
+  });
+});
+
+describe('Watchlist 頁 — 操作錯誤', () => {
+  it('WATCHLIST_NOT_FOUND → watchlistErrNotFound + 診斷列並重讀清單;下一次成功操作清除錯誤', async () => {
+    let failRemove = true;
+    const fetchImpl = watchlistFetch([watchlistDto('w1', '我的自選', ['AAPL', 'NVDA'])], {
+      removeItem: () => (failRemove ? apiFailure('WATCHLIST_NOT_FOUND', 'trace-nf', 404) : undefined),
+    });
+    await mountApi(fetchImpl);
+
+    await click(removeButton('AAPL'));
+    const opError = requireTestid('watchlist-op-error');
+    expect(opError.getAttribute('role')).toBe('alert');
+    expect(opError.textContent).toContain(t('zh', 'watchlistErrNotFound'));
+    expect(requireTestid('watchlist-op-error-code').textContent?.trim()).toBe('WATCHLIST_NOT_FOUND');
+    expect(requireTestid('watchlist-op-error-trace-id').textContent).toContain('trace-nf');
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+
+    failRemove = false;
+    await click(removeButton('AAPL'));
+    expect(testid('watchlist-op-error')).toBeNull();
+    expect(rowSymbols()).toEqual(['NVDA']);
+  });
+
+  it('5xx(結果不確定)→ watchlistErrUnknown 並重讀;切換 tab 清除錯誤', async () => {
+    const fetchImpl = watchlistFetch([defaultList(), watchlistDto('w2', 'AI 概念', ['NVDA'])], {
+      removeItem: () => apiFailure('INTERNAL_ERROR', 'trace-500', 500),
+    });
+    await mountApi(fetchImpl);
+
+    await click(removeButton('AAPL'));
+    expect(requireTestid('watchlist-op-error').textContent).toContain(t('zh', 'watchlistErrUnknown'));
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+
+    await click(tab('w2'));
+    expect(testid('watchlist-op-error')).toBeNull();
+  });
+
+  it('403 / CSRF / 網路失敗 → 各自文案,不重讀', async () => {
+    const cases: Array<[() => Response | Promise<Response>, string]> = [
+      [() => apiFailure('AUTH_FORBIDDEN', 'trace-403', 403), 'watchlistErrForbidden'],
+      [() => apiFailure('AUTH_CSRF_TOKEN_INVALID', 'trace-csrf', 403), 'watchlistErrCsrf'],
+      [() => Promise.reject(new TypeError('offline')), 'watchlistErrNetwork'],
+    ];
+    for (const [respond, copyKey] of cases) {
+      const fetchImpl = watchlistFetch([defaultList()], { remove: respond });
+      await mountApi(fetchImpl);
+      await click(button('watchlist-delete'));
+      await click(button('watchlist-delete-confirm-submit'));
+
+      expect(requireTestid('watchlist-op-error').textContent, copyKey).toContain(t('zh', copyKey));
+      expect(callsTo(fetchImpl, 'GET', '/watchlists'), copyKey).toHaveLength(1);
+      expect(tabs(), copyKey).toHaveLength(1);
+      cleanupMounted();
+    }
+  });
+});
+
+describe('Watchlist 頁 — mock mode 清單管理', () => {
+  it('mock mode 可建立、改名、刪除清單與移除項目(經 mock watchlistApi)', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    resetRuntimeApiClientsForTests();
+    mountWithPinia(Watchlist, { lang: 'zh' });
+    await flushAsync();
+
+    await click(button('watchlist-new-list'));
+    await setValue(input('watchlist-create-name'), '新清單');
+    await click(button('watchlist-create-submit'));
+    expect(tabs()).toHaveLength(4);
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('新清單');
+
+    await click(button('watchlist-rename'));
+    await setValue(input('watchlist-rename-input'), '改過的');
+    await click(button('watchlist-rename-save'));
+    expect(requireTestid('watchlist-toolbar-name').textContent?.trim()).toBe('改過的');
+
+    await click(button('watchlist-delete'));
+    await click(button('watchlist-delete-confirm-submit'));
+    expect(tabs()).toHaveLength(3);
+    expect(rowSymbols()).toEqual(['AAPL', 'NVDA', '2330.TW', 'MSFT']);
+
+    await click(removeButton('NVDA'));
+    expect(rowSymbols()).toEqual(['AAPL', '2330.TW', 'MSFT']);
+  });
+});

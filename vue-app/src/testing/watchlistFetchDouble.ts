@@ -58,6 +58,12 @@ export interface WatchlistRoutes {
   addItem?: (listId: string, symbol: string) => Response | Promise<Response> | undefined;
   /** 覆寫 `DELETE /watchlists/{id}/items/{assetId}`;回傳 undefined 時走預設行為。 */
   removeItem?: (listId: string, assetId: string) => Response | Promise<Response> | undefined;
+  /** 覆寫 `PATCH /watchlists/{id}`(改名);回傳 undefined 時走預設行為。 */
+  rename?: (listId: string, name: string) => Response | Promise<Response> | undefined;
+  /** 覆寫 `DELETE /watchlists/{id}`;回傳 undefined 時走預設行為。 */
+  remove?: (listId: string) => Response | Promise<Response> | undefined;
+  /** 覆寫 `PUT /watchlists/{id}/items/order`;參數含第幾次 PUT(0 起算);回傳 undefined 時走預設行為。 */
+  reorder?: (listId: string, assetIds: string[], call: number) => Response | Promise<Response> | undefined;
 }
 
 function clone(lists: WatchlistDto[]): WatchlistDto[] {
@@ -68,6 +74,8 @@ export function watchlistFetch(initial: WatchlistDto[], routes: WatchlistRoutes 
   let lists = clone(initial);
   let listGets = 0;
   let created = 0;
+  let defaults = 0;
+  let reorders = 0;
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -78,6 +86,11 @@ export function watchlistFetch(initial: WatchlistDto[], routes: WatchlistRoutes 
       const call = listGets;
       listGets += 1;
       if (routes.list) return routes.list(call);
+      // D-17:0 個清單時後端在 GET 重建空的「我的自選」。
+      if (lists.length === 0) {
+        defaults += 1;
+        lists = [{ id: `wl-default-${defaults}`, name: '我的自選', items: [] }];
+      }
       return apiSuccess(clone(lists));
     }
     if (path === '/watchlists' && method === 'POST') {
@@ -87,6 +100,43 @@ export function watchlistFetch(initial: WatchlistDto[], routes: WatchlistRoutes 
       created += 1;
       const list: WatchlistDto = { id: `wl-created-${created}`, name, items: [] };
       lists = [...lists, list];
+      return apiSuccess(clone([list])[0]);
+    }
+    const listMatch = path.match(/^\/watchlists\/([^/]+)$/);
+    if (listMatch) {
+      const listId = decodeURIComponent(listMatch[1]);
+      const list = lists.find(candidate => candidate.id === listId);
+      if (method === 'PATCH') {
+        const name = String(body.name);
+        const override = routes.rename?.(listId, name);
+        if (override) return override;
+        if (!list) return apiFailure('WATCHLIST_NOT_FOUND', 'trace-404', 404);
+        list.name = name;
+        return apiSuccess(clone([list])[0]);
+      }
+      if (method === 'DELETE') {
+        const override = routes.remove?.(listId);
+        if (override) return override;
+        if (!list) return apiFailure('WATCHLIST_NOT_FOUND', 'trace-404', 404);
+        lists = lists.filter(candidate => candidate.id !== listId);
+        return apiSuccess(null);
+      }
+    }
+    const orderMatch = path.match(/^\/watchlists\/([^/]+)\/items\/order$/);
+    if (orderMatch && method === 'PUT') {
+      const listId = decodeURIComponent(orderMatch[1]);
+      const assetIds = (body.assetIds as string[]) ?? [];
+      const call = reorders;
+      reorders += 1;
+      const override = routes.reorder?.(listId, assetIds, call);
+      if (override) return override;
+      const list = lists.find(candidate => candidate.id === listId);
+      if (!list) return apiFailure('WATCHLIST_NOT_FOUND', 'trace-404', 404);
+      const byId = new Map(list.items.map(item => [item.uuid, item]));
+      const sameSet = assetIds.length === list.items.length && assetIds.every(id => byId.has(id))
+        && new Set(assetIds).size === assetIds.length;
+      if (!sameSet) return apiFailure('WATCHLIST_ORDER_CONFLICT', 'trace-409', 409);
+      list.items = assetIds.map(id => byId.get(id)!);
       return apiSuccess(clone([list])[0]);
     }
     const itemMatch = path.match(/^\/watchlists\/([^/]+)\/items(?:\/([^/]+))?$/);
