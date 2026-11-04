@@ -149,6 +149,20 @@
             <span class="hint" data-testid="watchlist-count">{{ tf(lang, 'watchlistCount', { n: activeList.items.length }) }}</span>
           </div>
           <div v-if="!renaming" class="toolbar-actions">
+            <span
+              v-if="reorderSaving"
+              class="hint saving-note"
+              role="status"
+              data-testid="watchlist-reorder-saving"
+            >{{ t(lang, 'watchlistReorderSaving') }}</span>
+            <button
+              type="button"
+              class="btn-ghost-sm"
+              data-testid="watchlist-reorder"
+              :aria-pressed="reordering ? 'true' : 'false'"
+              :disabled="activeList.items.length === 0 && !reordering"
+              @click="toggleReorder"
+            >{{ t(lang, reordering ? 'watchlistReorderDone' : 'watchlistReorder') }}</button>
             <button
               ref="renameBtnEl"
               type="button"
@@ -213,9 +227,10 @@
 
         <template v-else>
           <div class="table-wrap">
-            <table role="table" data-testid="watchlist-table">
+            <table role="table" data-testid="watchlist-table" :class="{ reordering }">
               <thead role="rowgroup">
                 <tr role="row">
+                  <th role="columnheader" class="col-grip"></th>
                   <th role="columnheader" class="col-sym">{{ t(lang, 'symbol') }}</th>
                   <th role="columnheader" class="col-name">{{ t(lang, 'name') }}</th>
                   <th role="columnheader" class="col-price right">{{ t(lang, 'price') }}</th>
@@ -226,14 +241,41 @@
               </thead>
               <tbody role="rowgroup">
                 <tr
-                  v-for="item in activeList.items"
+                  v-for="(item, index) in activeList.items"
                   :key="item.uuid"
                   role="row"
+                  :class="dropClass(index)"
+                  :draggable="reordering ? 'false' : 'true'"
                   data-testid="watchlist-row"
                   :data-symbol="item.symbol"
                   :data-quote-source="quoteSource(item)"
-                  @click="emit('chart', { sym: item.symbol })"
+                  @click="onRowClick(item)"
+                  @dragstart="onDragStart(index)"
+                  @dragover.prevent="onDragOver(index)"
+                  @drop.prevent="onDrop(index)"
+                  @dragend="clearDrag"
                 >
+                  <td role="cell" class="col-grip">
+                    <div v-if="reordering" class="move-group">
+                      <button
+                        type="button"
+                        class="icon-btn"
+                        data-testid="watchlist-move-up"
+                        :aria-label="tf(lang, 'watchlistMoveUp', { symbol: item.symbol })"
+                        :disabled="index === 0"
+                        @click.stop="move(index, -1, 'up')"
+                      ><span aria-hidden="true">↑</span></button>
+                      <button
+                        type="button"
+                        class="icon-btn"
+                        data-testid="watchlist-move-down"
+                        :aria-label="tf(lang, 'watchlistMoveDown', { symbol: item.symbol })"
+                        :disabled="index === activeList.items.length - 1"
+                        @click.stop="move(index, 1, 'down')"
+                      ><span aria-hidden="true">↓</span></button>
+                    </div>
+                    <span v-else class="grip" aria-hidden="true">⋮⋮</span>
+                  </td>
                   <td role="cell" class="col-sym">
                     <span class="sym">{{ item.symbol }}</span>
                     <span v-if="hasCcyTag(item)" class="ccy-tag">{{ item.currency }}</span>
@@ -249,6 +291,7 @@
                   <td role="cell" class="col-vol right num">{{ volumeText(item) }}</td>
                   <td role="cell" class="col-act right">
                     <button
+                      v-if="!reordering"
                       type="button"
                       class="icon-btn"
                       data-testid="watchlist-remove"
@@ -262,6 +305,8 @@
             </table>
           </div>
           <p class="hint quote-note" data-testid="watchlist-quote-note">{{ t(lang, 'watchlistQuoteNote') }}</p>
+          <!-- 排序播報:每次移動以 role=status 讀出新位置 -->
+          <p class="sr-only" role="status">{{ moveAnnouncement }}</p>
         </template>
       </section>
     </template>
@@ -272,7 +317,7 @@
 // Phase 04.2 Plan 23(WATCH-03、D-14 / D-15 / D-17 / D-18 / D-20):Watchlist 頁整頁重建。
 // 清單與報價只經 getRuntimeApiClients().watchlist(鐵律 1 / 3;judgment §3:元件不 import mock store)。
 // 頁級 `lists` / `activeListId` 是唯一狀態來源;04.2-24 在此之上疊加即時報價(data-quote-source 加 `ws`)。
-import { computed, nextTick, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
@@ -357,6 +402,7 @@ const opError = ref<OpError | null>(null);
 const ERROR_COPY: Record<string, string> = {
   DUPLICATE_RESOURCE: 'watchlistErrDuplicateName',
   WATCHLIST_NOT_FOUND: 'watchlistErrNotFound',
+  WATCHLIST_ORDER_CONFLICT: 'watchlistErrOrderConflict',
   ASSET_NOT_FOUND: 'watchlistErrAsset',
   AUTH_FORBIDDEN: 'watchlistErrForbidden',
   AUTH_CSRF_TOKEN_INVALID: 'watchlistErrCsrf',
@@ -384,15 +430,21 @@ const opErrorCopy = computed(() => (opError.value ? t(props.lang, errorCopyKey(o
 /** 文案承諾「清單已重新整理」的情境:清單不存在、結果不確定。 */
 function needsReload(error: OpError): boolean {
   const copyKey = errorCopyKey(error);
-  return copyKey === 'watchlistErrNotFound' || copyKey === 'watchlistErrUnknown';
+  return copyKey === 'watchlistErrNotFound' || copyKey === 'watchlistErrUnknown' || copyKey === 'watchlistErrOrderConflict';
 }
 
-/** 操作失敗的統一落點;401 不在這裡顯示(apiClient 已升級為全域 SessionBanner)。 */
-async function failOp(error: unknown) {
+/**
+ * 操作失敗的統一落點;401 不在這裡顯示(apiClient 已升級為全域 SessionBanner)。
+ * `alwaysReload`:排序失敗一律回到伺服器順序(樂觀重排已改了畫面)。
+ */
+async function failOp(error: unknown, alwaysReload = false) {
   const described = describeError(error);
-  if (described.status === 401) return;
+  if (described.status === 401) {
+    if (alwaysReload) await reloadLists();
+    return;
+  }
   opError.value = described;
-  if (needsReload(described)) await reloadLists();
+  if (alwaysReload || needsReload(described)) await reloadLists();
 }
 
 // ── 名稱自檢(trim 後 1–30 字、不與其他清單同名)────────────────────
@@ -598,7 +650,13 @@ async function removeItem(item: AssetDto) {
     await failOp(failure);
     return;
   }
-  replaceList(updated);
+  if (reorderSaving.value) {
+    // 尚有未送出 / 在飛的排序:保留本地順序只去掉這一檔,待送的整份順序才與伺服器集合一致。
+    const current = lists.value?.find(candidate => candidate.id === list.id);
+    if (current) replaceList({ ...current, items: current.items.filter(candidate => candidate.uuid !== item.uuid) });
+  } else {
+    replaceList(updated);
+  }
   opError.value = null;
   await nextTick();
   // 焦點移到下一列的 ✕(原位置的新列);沒有下一列 → 清單名稱。
@@ -607,6 +665,145 @@ async function removeItem(item: AssetDto) {
   if (next) next.focus();
   else titleEl.value?.focus();
 }
+
+// ── 排序(U-17:拖拉 + 排序模式 ↑ ↓;樂觀重排、500 ms debounce、單一請求在飛、失敗重讀)────────
+const REORDER_DEBOUNCE_MS = 500;
+const reordering = ref(false);
+const moveAnnouncement = ref('');
+const reorderInFlight = ref(false);
+/** 有尚未送出的本地順序(debounce 中或等前一個請求完成)。 */
+const pendingReorderListId = ref<string | null>(null);
+let reorderTimer: ReturnType<typeof setTimeout> | null = null;
+
+const reorderSaving = computed(() => reorderInFlight.value || pendingReorderListId.value !== null);
+
+function toggleReorder() {
+  reordering.value = !reordering.value;
+  clearDrag();
+}
+
+function onRowClick(item: AssetDto) {
+  if (reordering.value) return;
+  emit('chart', { sym: item.symbol });
+}
+
+/** 本地重排(樂觀)並排程儲存;回傳被移動的項目。 */
+function reorderLocal(from: number, to: number): AssetDto | null {
+  const list = activeList.value;
+  if (!list || from === to || from < 0 || to < 0 || from >= list.items.length || to >= list.items.length) return null;
+  const items = [...list.items];
+  const [moved] = items.splice(from, 1);
+  items.splice(to, 0, moved);
+  replaceList({ ...list, items });
+  scheduleReorderSave(list.id);
+  return moved;
+}
+
+function scheduleReorderSave(listId: string) {
+  // 換了清單還有待送的順序 → 先送出前一份,不讓它被覆蓋。
+  if (pendingReorderListId.value && pendingReorderListId.value !== listId) flushReorderNow();
+  pendingReorderListId.value = listId;
+  if (reorderTimer) clearTimeout(reorderTimer);
+  reorderTimer = setTimeout(() => {
+    reorderTimer = null;
+    void sendReorder();
+  }, REORDER_DEBOUNCE_MS);
+}
+
+function flushReorderNow() {
+  if (reorderTimer) {
+    clearTimeout(reorderTimer);
+    reorderTimer = null;
+  }
+  void sendReorder();
+}
+
+/** 送整份順序;同時間只有一個請求在飛,在飛期間的新變更等它完成後再送最新順序。 */
+async function sendReorder() {
+  if (reorderInFlight.value) return;
+  const listId = pendingReorderListId.value;
+  if (!listId) return;
+  const list = lists.value?.find(candidate => candidate.id === listId);
+  pendingReorderListId.value = null;
+  if (!list) return;
+
+  reorderInFlight.value = true;
+  let failure: unknown = null;
+  let updated: WatchlistDto | null = null;
+  try {
+    updated = await getRuntimeApiClients().watchlist.reorder(listId, list.items.map(item => item.uuid));
+  } catch (error) {
+    failure = error;
+  }
+  reorderInFlight.value = false;
+
+  if (!updated) {
+    // 失敗:丟棄同一清單後續待送的順序,回到伺服器順序(重讀)。
+    if (pendingReorderListId.value === listId) {
+      pendingReorderListId.value = null;
+      if (reorderTimer) {
+        clearTimeout(reorderTimer);
+        reorderTimer = null;
+      }
+    }
+    await failOp(failure, true);
+    return;
+  }
+  opError.value = null;
+  // 在飛期間又有新順序 → 回應已過時,不覆蓋本地;等計時器到或立即送最新的。
+  if (pendingReorderListId.value === null) replaceList(updated);
+  else if (!reorderTimer) void sendReorder();
+}
+
+async function move(index: number, delta: number, direction: 'up' | 'down') {
+  const moved = reorderLocal(index, index + delta);
+  if (!moved) return;
+  const position = index + delta + 1;
+  moveAnnouncement.value = tf(props.lang, 'watchlistMovedAnnounce', { symbol: moved.symbol, pos: position });
+  await nextTick();
+  // 焦點跟著被移動的列停在同一顆按鈕;那顆變 disabled(到頂 / 到底)時改到另一顆。
+  const rowEl = [...document.querySelectorAll<HTMLElement>(`#${PANEL_ID} [data-testid="watchlist-row"]`)][index + delta];
+  const same = rowEl?.querySelector<HTMLButtonElement>(`[data-testid="watchlist-move-${direction}"]`);
+  const other = rowEl?.querySelector<HTMLButtonElement>(`[data-testid="watchlist-move-${direction === 'up' ? 'down' : 'up'}"]`);
+  if (same && !same.disabled) same.focus();
+  else (other && !other.disabled ? other : same)?.focus();
+}
+
+// HTML5 DnD(滑鼠,≥ 640px):指示線在目標列上緣(往上拖)/ 下緣(往下拖)。
+const dragFrom = ref(-1);
+const dragOver = ref(-1);
+
+function onDragStart(index: number) {
+  if (reordering.value) return;
+  dragFrom.value = index;
+}
+
+function onDragOver(index: number) {
+  if (dragFrom.value < 0) return;
+  dragOver.value = index;
+}
+
+function onDrop(index: number) {
+  const from = dragFrom.value;
+  clearDrag();
+  if (from < 0) return;
+  reorderLocal(from, index);
+}
+
+function clearDrag() {
+  dragFrom.value = -1;
+  dragOver.value = -1;
+}
+
+function dropClass(index: number): string {
+  if (dragFrom.value < 0 || dragOver.value !== index || dragFrom.value === index) return '';
+  return dragFrom.value > index ? 'drop-before' : 'drop-after';
+}
+
+// 離開頁面時還在 debounce 的順序立即送出,不讓最後一次移動遺失。
+onBeforeUnmount(() => {
+  if (reorderTimer) flushReorderNow();
+});
 
 async function focusTab(listId: string) {
   await nextTick();
@@ -629,6 +826,9 @@ function selectTab(listId: string) {
   if (listId !== activeListId.value) {
     closeRename();
     confirmingDelete.value = false;
+    clearDrag();
+    // 前一個清單還在 debounce 的順序立即送出。
+    if (reorderTimer) flushReorderNow();
   }
   opError.value = null;
   activeListId.value = listId;
@@ -795,6 +995,14 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .col-act { white-space: nowrap; }
+.col-grip { width: 32px; white-space: nowrap; }
+.grip { font-size: 12px; color: var(--fg-dim); cursor: grab; user-select: none; }
+.move-group { display: flex; gap: 8px; }
+table.reordering tbody tr { cursor: default; }
+.saving-note { align-self: center; }
+/* 拖放指示線:2px --fg(不用 accent) */
+tbody tr.drop-before { box-shadow: inset 0 2px 0 var(--fg); }
+tbody tr.drop-after { box-shadow: inset 0 -2px 0 var(--fg); }
 .icon-btn {
   width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px;
   background: transparent; color: var(--fg-dim); font: inherit; font-size: 13px; cursor: pointer;
@@ -831,6 +1039,10 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
   td.col-change { grid-area: change; }
   td.col-vol { display: none; }
   td.col-act { grid-area: act; align-self: center; }
+  /* 窄螢幕不渲染把手(觸控無 HTML5 DnD);排序模式的 ↑ ↓ 放進 act 區,✕ 讓位 */
+  td.col-grip { display: none; }
+  table.reordering td.col-grip { display: block; grid-area: act; align-self: center; }
+  table.reordering td.col-act { display: none; }
 }
 
 .btn-ghost-sm {
