@@ -6,6 +6,8 @@ import { t } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import {
+  apiFailure,
+  apiSuccess,
   callsTo,
   watchlistDto,
   watchlistFetch,
@@ -137,5 +139,35 @@ describe('Chart Watch 按鈕(mock mode)', () => {
 
     expect(watchButton().textContent).toContain(t('zh', 'chartWatchIn'));
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// 04.2-review WR-06:選擇器要求重讀(retry)後,在飛的 GET 不得蓋掉之後選擇器寫入的回應 DTO。
+describe('Chart 過時清單回應守門(04.2-review WR-06)', () => {
+  it('勾選 wl-1 失敗觸發重讀;GET 在飛時勾選 wl-2 成功 → 較舊的 GET 後到不得把按鈕切回未收藏', async () => {
+    let releaseStale: (() => void) | null = null;
+    const snapshot = () => [watchlistDto('wl-1', '我的自選', []), watchlistDto('wl-2', 'AI', [])];
+    const fetchImpl = watchlistFetch(snapshot(), {
+      list: call => (call === 0
+        ? apiSuccess(snapshot())
+        : new Promise<Response>(resolve => { releaseStale = () => resolve(apiSuccess(snapshot())); })),
+      addItem: listId => (listId === 'wl-1' ? apiFailure('INTERNAL_ERROR', 'trace-500', 500) : undefined),
+    });
+    await mountApiChart(fetchImpl);
+
+    watchButton().click();
+    await flushAsync();
+    pickerCheckbox('wl-1').click();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+
+    pickerCheckbox('wl-2').click();
+    await flushAsync();
+    expect(glyph()).toBe('★');
+
+    releaseStale!();
+    await flushAsync();
+    expect(glyph(), '較舊的 GET 不得蓋掉較新的寫入回應').toBe('★');
+    expect(pickerCheckbox('wl-2').checked).toBe(true);
   });
 });

@@ -1153,3 +1153,93 @@ describe('Watchlist 頁 — 即時報價疊加(04.2-24)', () => {
     expect(rowSymbols()).toEqual(['BTC', 'AAPL', 'USD/TWD']);
   });
 });
+
+// =====================================================================================
+// 04.2-review WR-06:較舊的 GET 回應(靜默重讀 / 重試)不得蓋掉較新的本地狀態。
+// =====================================================================================
+
+describe('Watchlist 頁 — 過時 GET 回應守門(04.2-review WR-06)', () => {
+  const three = () => watchlistDto('w1', '我的自選', ['AAPL', 'NVDA', 'MSFT']);
+
+  it('靜默重讀在飛時移除 AAPL:DELETE 先回、較舊的 GET 後到 → AAPL 不得復活', async () => {
+    const stale = pendingResponse();
+    const fetchImpl = watchlistFetch([three()], {
+      list: call => (call === 0 ? apiSuccess([three()]) : stale.promise),
+    });
+    await mountApi(fetchImpl);
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+
+    await click(removeButton('AAPL'));
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT']);
+
+    stale.resolve(apiSuccess([three()]));
+    await flushAsync();
+    expect(rowSymbols(), '較舊的 GET 不得讓已移除的項目復活').toEqual(['NVDA', 'MSFT']);
+  });
+
+  it('靜默重讀在飛時本地重排:較舊的 GET 後到不得還原順序,隨後的 PUT 送出使用者的新順序', async () => {
+    const list = three();
+    const stale = pendingResponse();
+    const fetchImpl = watchlistFetch([list], {
+      list: call => (call === 0 ? apiSuccess([three()]) : stale.promise),
+    });
+    await mountApi(fetchImpl);
+    await click(button('watchlist-reorder'));
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    fakeDebounceTimers();
+
+    await press(moveButton('AAPL', 'down'));
+    expect(rowSymbols()).toEqual(['NVDA', 'AAPL', 'MSFT']);
+
+    stale.resolve(apiSuccess([three()]));
+    await settle();
+    expect(rowSymbols(), '較舊的 GET 不得還原樂觀重排').toEqual(['NVDA', 'AAPL', 'MSFT']);
+
+    await advance(500);
+    expect(putBodies(fetchImpl)).toEqual([[uuidOf(list, 'NVDA'), uuidOf(list, 'AAPL'), uuidOf(list, 'MSFT')]]);
+  });
+
+  it('靜默重讀在飛時建立清單:較舊的 GET 後到不得讓新清單消失、作用中 tab 不跳回第一個', async () => {
+    const stale = pendingResponse();
+    const fetchImpl = watchlistFetch([defaultList()], {
+      list: call => (call === 0 ? apiSuccess([defaultList()]) : stale.promise),
+    });
+    await mountApi(fetchImpl);
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+
+    await click(button('watchlist-new-list'));
+    const name = input('watchlist-create-name');
+    await setValue(name, '半導體');
+    await submitForm(name);
+    expect(tab('wl-created-1').getAttribute('aria-selected')).toBe('true');
+
+    stale.resolve(apiSuccess([defaultList()]));
+    await flushAsync();
+    expect(tabs(), '較舊的 GET 不得移除剛建立的清單').toHaveLength(2);
+    expect(tab('wl-created-1').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('項目移除在飛時不做靜默重讀(canRefresh 納入 removing)', async () => {
+    const removal = pendingResponse();
+    const list = three();
+    const fetchImpl = watchlistFetch([list], {
+      removeItem: () => removal.promise,
+    });
+    await mountApi(fetchImpl);
+
+    await click(removeButton('AAPL'));
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists'), '移除在飛時不得發出靜默重讀').toHaveLength(1);
+
+    removal.resolve(apiSuccess({ ...list, items: list.items.filter(item => item.symbol !== 'AAPL') }));
+    await flushAsync();
+    expect(rowSymbols()).toEqual(['NVDA', 'MSFT']);
+  });
+});
