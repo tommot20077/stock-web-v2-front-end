@@ -1,14 +1,17 @@
 import { expect, type Page, type Route } from '@playwright/test';
 import type {
   AllocationSliceDto,
+  AssetDto,
   CashBalanceDto,
   HoldingDto,
   PaginatedResponse,
+  PortfolioActivityDto,
   PortfolioSummaryDto,
   SectorAllocationDto,
   TradeDto,
 } from '../../src/services/apiTypes';
 import type { CashEntryDto } from '../../src/services/cashApi';
+import type { WatchlistDto } from '../../src/services/watchlistApi';
 
 /**
  * Phase 04.1 版面測試用的 /api/v1/* 攔截器與型別化 DTO fixture。
@@ -112,6 +115,9 @@ const SUMMARY: PortfolioSummaryDto = {
   cashBalances: CASH_BALANCES,
   allocation: ALLOCATION,
   sectorAllocation: SECTOR_ALLOCATION,
+  // Phase 04.2(DIV-02):有股利收入且有預扣稅 → Overview KPI #4 / Positions 總損益卡都渲染最長的 dividendIncomeLineWithTax
+  dividendIncome: 123456789.12,
+  dividendTaxWithheld: 30864197.28,
 };
 
 function holding(
@@ -180,6 +186,155 @@ const TRADES: TradeDto[] = [
   trade(9, { symbol: '7203.T', type: 'SELL', currency: 'JPY' }),
 ];
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function activity(
+  index: number,
+  overrides: Partial<PortfolioActivityDto> & Pick<PortfolioActivityDto, 'kind' | 'symbol' | 'currency'>,
+): PortfolioActivityDto {
+  const day = pad2(28 - index);
+  return {
+    id: `22222222-2222-4222-8222-2222222222${pad2(index)}`,
+    occurredAt: `2026-10-${day}T10:00:00+08:00`,
+    effectiveDate: null,
+    createdAt: `2026-10-${day}T10:00:05+08:00`,
+    quantity: null,
+    price: null,
+    fee: null,
+    amount: null,
+    withholdingTax: null,
+    ratioNew: null,
+    ratioOld: null,
+    note: null,
+    reversalOfId: null,
+    reversalOfOccurredAt: null,
+    reversalOfEffectiveDate: null,
+    reversed: false,
+    reversible: false,
+    ...overrides,
+  };
+}
+
+/** 交易列:amount = quantity × price,後端以 scale 8 捨入(trading-portfolio-contract〈PortfolioActivityDto〉)。 */
+function tradeActivity(
+  index: number,
+  overrides: Partial<PortfolioActivityDto> & Pick<PortfolioActivityDto, 'kind' | 'symbol' | 'currency'>,
+): PortfolioActivityDto {
+  const quantity = overrides.quantity ?? 123456;
+  const price = overrides.price ?? 1234.56;
+  return activity(index, {
+    quantity,
+    price,
+    fee: 1234.5,
+    amount: Math.round(quantity * price * 1e8) / 1e8,
+    ...overrides,
+  });
+}
+
+/**
+ * Phase 04.2(PORT-13)Trades 混合活動列(L14 / L5 / L9):買 / 賣 / 現金股利含預扣稅 / 配股 / 拆股 / 合股
+ * (en pill `Reverse split` 最長)/ 沖銷列 / 已沖銷原列 / 500 字備註。可沖銷列會渲染「沖銷這筆」(狀態欄最寬)。
+ */
+export const ACTIVITIES: PortfolioActivityDto[] = [
+  tradeActivity(0, { kind: 'BUY', symbol: '2330.TW', currency: 'TWD', note: LONG_NOTE }),
+  tradeActivity(1, { kind: 'SELL', symbol: 'AAPL', currency: 'USD' }),
+  activity(2, {
+    kind: 'CASH_DIVIDEND', symbol: 'AAPL', currency: 'USD',
+    amount: 1234567.89, withholdingTax: 308641.97, note: 'Q3 dividend', reversible: true,
+  }),
+  activity(3, {
+    kind: 'STOCK_DIVIDEND', symbol: '2330.TW', currency: 'TWD',
+    quantity: 12345.6789, effectiveDate: '2026-10-25', reversible: true,
+  }),
+  activity(4, {
+    kind: 'SPLIT', symbol: '7203.T', currency: 'JPY',
+    quantity: -61728, ratioNew: 1, ratioOld: 2, effectiveDate: '2026-10-24', reversible: true,
+  }),
+  activity(5, {
+    kind: 'SPLIT', symbol: 'NVDA', currency: 'USD',
+    quantity: 370368, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-10-23',
+  }),
+  activity(6, {
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67,
+    note: 'Reversal of wrong dividend',
+    reversalOfId: '22222222-2222-4222-8222-222222222207', reversalOfOccurredAt: '2026-10-21T10:00:00+08:00',
+  }),
+  activity(7, {
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67, reversed: true,
+  }),
+  activity(8, {
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19',
+    reversalOfId: '22222222-2222-4222-8222-222222222209', reversalOfEffectiveDate: '2026-10-19',
+  }),
+  activity(9, {
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19', reversed: true,
+  }),
+  tradeActivity(10, { kind: 'BUY', symbol: 'BTC-USD', currency: 'USD', note: 'long note with spaces '.repeat(10) }),
+  tradeActivity(11, { kind: 'SELL', symbol: '7203.T', currency: 'JPY', price: 2987654.32 }),
+];
+
+/** 30 字清單名稱:無空白的寬拉丁字母 + 中文(tab 單行省略、工具列 overflow-wrap、picker 換行的最壞情況)。 */
+export const LONG_LIST_NAME = `${'M'.repeat(10)}${'W'.repeat(10)}超長清單名稱測試字元`;
+
+function asset(
+  index: number,
+  overrides: Partial<AssetDto> & Pick<AssetDto, 'symbol' | 'name' | 'assetType' | 'currency'>,
+): AssetDto {
+  return {
+    uuid: `33333333-3333-4333-8333-3333333333${pad2(index)}`,
+    market: 'US',
+    sector: null,
+    tradeable: true,
+    latestPrice: 1234.56,
+    change: 12.34,
+    changePercent: 1.01,
+    volumeText: '123.4M',
+    high: 1240,
+    low: 1220,
+    ...overrides,
+  };
+}
+
+/** 作用中清單 12 檔:股票 / 加密 / FX / 債券 / 無報價(價格與漲跌全 —)、超長名稱、9 位數價格。 */
+export const WATCHLIST_ITEMS: AssetDto[] = [
+  asset(0, { symbol: 'AAPL', name: 'Apple Inc.', assetType: 'STOCK', currency: 'USD', latestPrice: 218.4, change: 1.42, changePercent: 0.66 }),
+  asset(1, {
+    symbol: '2330.TW', name: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)',
+    assetType: 'STOCK', currency: 'TWD', market: 'TW', latestPrice: 945, change: -12, changePercent: -1.25,
+  }),
+  asset(2, { symbol: 'BTC', name: 'Bitcoin', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 67842.4, volumeText: '$28.4B' }),
+  asset(3, { symbol: 'USD/TWD', name: '美元/新台幣', assetType: 'FX', currency: 'TWD', market: 'FX', tradeable: false, latestPrice: 32.418, change: 0.024, changePercent: 0.07, volumeText: null }),
+  asset(4, {
+    symbol: 'EUR/USD', name: '歐元/美元', assetType: 'FX', currency: 'USD', market: 'FX', tradeable: false,
+    latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
+  }),
+  asset(5, {
+    symbol: 'US10Y', name: 'US 10-Year Treasury', assetType: 'BOND', currency: 'USD', tradeable: false,
+    latestPrice: 4.218, change: 0.014, changePercent: null, volumeText: null, high: null, low: null,
+  }),
+  asset(6, { symbol: 'MSFT', name: 'Microsoft Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 123456789.12, change: -1234567.89, changePercent: -0.99 }),
+  asset(7, {
+    symbol: 'NOQUOTE', name: 'Asset Without Any Quote Yet', assetType: 'STOCK', currency: 'USD',
+    latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
+  }),
+  asset(8, { symbol: 'ETH', name: 'Ethereum', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 3482.18 }),
+  asset(9, {
+    symbol: 'JP10Y', name: 'Japan 10-Year', assetType: 'BOND', currency: 'JPY', market: 'JP', tradeable: false,
+    latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
+  }),
+  asset(10, { symbol: 'NVDA', name: 'NVIDIA Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 1142.83 }),
+  asset(11, { symbol: '7203.T', name: 'Toyota Motor Corporation', assetType: 'STOCK', currency: 'JPY', market: 'JP', latestPrice: 2987654.32 }),
+];
+
+/** 20 個清單(上限):第一個(作用中)為 30 字名稱 + 12 檔;每 5 個再放一個 30 字中文名稱。 */
+export const WATCHLISTS: WatchlistDto[] = Array.from({ length: 20 }, (_, index) => {
+  if (index === 0) return { id: 'layout-list-00', name: LONG_LIST_NAME, items: WATCHLIST_ITEMS };
+  const name = index % 5 === 0 ? '長期觀察的半導體與電子零組件供應鏈清單'.repeat(2).slice(0, 30) : `清單 ${index}`;
+  return { id: `layout-list-${pad2(index)}`, name, items: WATCHLIST_ITEMS.slice(0, index % 3) };
+});
+
 export interface FailPathOptions {
   /** 失敗回應 meta.traceId。 */
   traceId: string;
@@ -190,6 +345,19 @@ export interface MockPortfolioApiOptions {
   failPaths?: Record<string, FailPathOptions>;
   /** POST cash-entries 在這個 promise 解決前不回應(測送出中狀態);解決後回 201 風格的成功。 */
   cashPostGate?: Promise<void>;
+  /** POST portfolio/dividends 與 share-adjustments 在這個 promise 解決前不回應(測送出中狀態);解決後回 503。 */
+  holdingEventPostGate?: Promise<void>;
+  /**
+   * 即時報價 WS 情境(UI-SPEC §9;不需真後端):
+   * - 省略 / `degraded`:ticket 恆 503 → stream 進 degraded(握手前就失敗,不開 socket)
+   * - `replaced`:ticket 成功,`page.routeWebSocket` 接手握手並以 4002 關閉 → replaced(不自動重連)
+   * - `live`:ticket 成功,WS 送 WELCOME,對每個 SUBSCRIBE 的 channel 回一筆 TICK → live + 該列 ws
+   */
+  ws?: 'degraded' | 'replaced' | 'live';
+  /** ticket 在這個 promise 解決前一律 503(degraded);解決後才依 `ws` 情境回應 —— 先量 degraded、再量 replaced。 */
+  ticketGate?: Promise<void>;
+  /** 覆寫 GET /watchlists 的回應(預設 20 個清單的 WATCHLISTS)。 */
+  watchlists?: WatchlistDto[];
 }
 
 function envelope<T>(data: T): { success: true; data: T; error: null; meta: { traceId: string } } {
@@ -209,8 +377,8 @@ function paginate<T>(all: T[], url: URL, defaultSize: number): PaginatedResponse
 }
 
 /**
- * 攔下全部 /api/v1/*:csrf / me 形狀沿用 L1,portfolio / trades / cash-entries 回「最寬」fixture,
- * 其他路徑 503(同 L1)。
+ * 攔下全部 /api/v1/*:csrf / me 形狀沿用 L1,portfolio / trades / activities / cash-entries / watchlists 回「最寬」fixture,
+ * WS ticket 依 `ws` 情境(預設 503 → degraded),其他路徑 503(同 L1)。
  */
 export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOptions = {}): Promise<void> {
   const unavailable = async (route: Route, traceId = 'layout-trace'): Promise<void> => {
@@ -219,6 +387,31 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
       json: { success: false, data: null, error: { code: 'SERVICE_UNAVAILABLE', message: 'layout test' }, meta: { traceId } },
     });
   };
+
+  const wsScenario = options.ws ?? 'degraded';
+  let ticketOpen = options.ticketGate === undefined;
+  void options.ticketGate?.then(() => { ticketOpen = true; });
+  if (wsScenario !== 'degraded') {
+    await page.routeWebSocket(/\/ws\/v1\/market/, (ws) => {
+      if (wsScenario === 'replaced') {
+        ws.close({ code: 4002, reason: 'session_replaced' });
+        return;
+      }
+      ws.send(JSON.stringify({ type: 'WELCOME' }));
+      ws.onMessage((raw) => {
+        const message = JSON.parse(String(raw)) as { type?: string; channels?: string[] };
+        if (message.type !== 'SUBSCRIBE') return;
+        for (const channel of message.channels ?? []) {
+          // TICK 的 price 是字串(WsBroadcastConsumer toPlainString),channel 與 data.symbol 必須一致
+          ws.send(JSON.stringify({
+            type: 'TICK',
+            channel,
+            data: { symbol: channel.slice('tick.'.length), price: '219.10', volume: '10', time: new Date().toISOString() },
+          }));
+        }
+      });
+    });
+  }
 
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
@@ -254,6 +447,27 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
     }
     if (path === '/api/v1/portfolio/holdings') {
       await route.fulfill({ json: envelope(HOLDINGS) });
+      return;
+    }
+    if (path === '/api/v1/portfolio/activities' && method === 'GET') {
+      await route.fulfill({ json: envelope(paginate(ACTIVITIES, url, 20)) });
+      return;
+    }
+    if (path === '/api/v1/watchlists' && method === 'GET') {
+      await route.fulfill({ json: envelope(options.watchlists ?? WATCHLISTS) });
+      return;
+    }
+    if (path === '/api/v1/market/ws/ticket' && method === 'POST') {
+      if (wsScenario === 'degraded' || !ticketOpen) {
+        await unavailable(route);
+        return;
+      }
+      await route.fulfill({ json: envelope({ ticket: 'layout-ticket', expiresIn: 30, wsUrl: '/ws/v1/market' }) });
+      return;
+    }
+    if ((path === '/api/v1/portfolio/dividends' || path === '/api/v1/portfolio/share-adjustments') && method === 'POST') {
+      await options.holdingEventPostGate;
+      await unavailable(route);
       return;
     }
     if (path === '/api/v1/trades' && method === 'GET') {
