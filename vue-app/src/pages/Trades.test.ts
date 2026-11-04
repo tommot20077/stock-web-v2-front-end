@@ -1625,7 +1625,8 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
     expect(split.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim()).toBe(t('en', 'activityKindSplit'));
     const qty = cellsOf(split)[3];
     expect(qty.querySelector('[data-testid="trades-ratio-line"]')?.textContent?.trim()).toBe('4 : 1');
-    expect(qty.textContent?.replace(/\s+/g, ' ').trim()).toBe('+300 4 : 1');
+    // 股數本體與第二行比例行是相鄰元素(比例行為區塊),只斷言本體文字
+    expect(qty.firstElementChild?.textContent?.trim()).toBe('+300');
     expectDash(cellsOf(split)[5], 'total');
 
     const reverse = rowById(5);

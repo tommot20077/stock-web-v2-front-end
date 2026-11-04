@@ -117,7 +117,9 @@
               @click="toggleSort('total')"
             >{{ t(lang, 'total') }}<SortArrow v-if="!live" :k="'total'" :sk="sortKey" :sd="sortDir" /></th>
             <th style="text-align:right">{{ t(lang, 'fee') }}</th>
-            <th style="padding-right:16px">{{ t(lang, 'notes') }}</th>
+            <th>{{ t(lang, 'notes') }}</th>
+            <!-- 04.2-20:兩模式同欄序,新增最後一欄「狀態」(已沖銷;04.2-21 在此放「沖銷這筆」) -->
+            <th style="padding-right:16px">{{ t(lang, 'cashColStatus') }}</th>
           </tr>
         </thead>
         <!-- mock 路徑:client-side 篩選在無分頁下是正確的,逐字保留 Phase 3 之前的行為 -->
@@ -126,6 +128,7 @@
             v-for="(tr, i) in filteredTrades"
             :key="tr.d + tr.type + tr.sym + tr.qty + tr.px + tr.fee + tr.note"
             data-testid="trades-row"
+            :data-kind="mockKind(tr)"
             :class="{ fresh: i === 0 && effectiveLastFill && tr.sym === effectiveLastFill.sym }"
           >
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ tr.d }}</td>
@@ -143,7 +146,9 @@
             <td class="num" style="text-align:right">${{ fmtNum(tr.px) }}</td>
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(tr.qty * tr.px, 0) }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ tr.fee }}</td>
-            <td style="padding-right:16px;color:var(--fg-dim)">{{ tr.note || '—' }}</td>
+            <td style="color:var(--fg-dim)">{{ tr.note || '—' }}</td>
+            <!-- mock 靜態列沒有可沖銷的 id,也不會被沖銷 → 狀態欄恆空(UI-SPEC §Interaction 0) -->
+            <td class="col-status"></td>
           </tr>
         </tbody>
         <!--
@@ -159,8 +164,15 @@
             :data-kind="tr.kind"
             :class="{ fresh: i === 0 && effectiveLastFill && tr.symbol === effectiveLastFill.sym }"
           >
+            <!-- UI-SPEC §Interaction 3 欄位表:交易 = executedAt 日期;現金股利 = 本機 YYYY-MM-DD HH:mm;股數調整 = effectiveDate 原字串 -->
             <td class="num" style="color:var(--fg-dim);padding-left:16px">{{ activityDate(tr) }}</td>
-            <td><span :class="['pill', kindPillClass(tr)]" data-testid="trades-kind-pill">{{ kindLabel(tr) }}</span></td>
+            <td>
+              <span :class="['kind-pill', kindPillClass(tr)]" data-testid="trades-kind-pill">{{ kindLabel(tr) }}</span>
+              <!-- T-04.2-44:以原紀錄日期指回,不顯示 reversalOfId -->
+              <div v-if="tr.reversalOfId != null" class="cell-hint" data-testid="trades-reversal-of">
+                {{ tf(lang, 'cashReversalOf', { date: reversalOfDate(tr) }) }}
+              </div>
+            </td>
             <td style="font-weight:600">
               {{ tr.symbol }}
               <!-- D-28 / D-30:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
@@ -172,19 +184,38 @@
                 data-testid="trades-fresh-badge"
               >{{ t(lang, 'freshBadge') }}</span>
             </td>
-            <td class="num" style="text-align:right">{{ tr.quantity }}</td>
-            <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
+            <!-- 數量:交易沿用原值;股數調整帶號(拆股 / 合股另附比例行);現金股利不適用 -->
+            <td class="num" style="text-align:right">
+              <template v-if="isTrade(tr)">{{ tr.quantity }}</template>
+              <template v-else-if="tr.kind === 'CASH_DIVIDEND'"><span class="na" aria-hidden="true">—</span></template>
+              <template v-else>
+                <span :class="{ 'is-reversed': tr.reversed }">{{ fmtSignedQuantity(tr.quantity) }}</span>
+                <div v-if="tr.kind === 'SPLIT'" class="cell-hint" data-testid="trades-ratio-line">{{ ratioText(tr) }}</div>
+              </template>
+            </td>
+            <td class="num" style="text-align:right">
+              <template v-if="isTrade(tr)">{{ fmtMoneyAmount(tr.price, tr.currency) }}</template>
+              <span v-else class="na" aria-hidden="true">—</span>
+            </td>
             <td class="num" style="text-align:right;font-weight:600">
               <template v-if="isTrade(tr)">{{ fmtMoneyAmount(tradeTotal(tr), tr.currency, 0) }}</template>
-              <template v-else>
-                {{ fmtMoneyAmount(tr.amount, tr.currency) }}
+              <template v-else-if="tr.kind === 'CASH_DIVIDEND'">
+                <span :class="{ 'is-reversed': tr.reversed }">{{ fmtMoneyAmount(tr.amount, tr.currency) }}</span>
                 <div v-if="(tr.withholdingTax ?? 0) > 0" class="cell-hint" data-testid="trades-tax-line">
                   {{ tf(lang, 'tradesTaxLine', { amount: fmtMoneyAmount(tr.withholdingTax, tr.currency) }) }}
                 </div>
               </template>
+              <span v-else class="na" aria-hidden="true">—</span>
             </td>
-            <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(tr.fee, tr.currency) }}</td>
-            <td style="padding-right:16px;color:var(--fg-dim)">{{ tr.note || '—' }}</td>
+            <td class="num" style="text-align:right;color:var(--fg-dim)">
+              <template v-if="isTrade(tr)">{{ fmtMoneyAmount(tr.fee, tr.currency) }}</template>
+              <span v-else class="na" aria-hidden="true">—</span>
+            </td>
+            <td style="color:var(--fg-dim)">{{ tr.note || '—' }}</td>
+            <!-- U-18 慣例:「是否已沖銷」只取後端欄位,前端不推導;04.2-21 在此欄放「沖銷這筆」 -->
+            <td class="col-status">
+              <span v-if="tr.reversed" class="status-pill" data-testid="trades-reversed-pill">{{ t(lang, 'cashReversed') }}</span>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -210,7 +241,7 @@
 import { computed, h as createElement, onMounted, onUnmounted, ref, watch } from 'vue';
 import { t, tf } from '../i18n';
 import { fmtNum } from '../data';
-import { fmtMoneyAmount } from '../moneyFormat';
+import { fmtMoneyAmount, fmtSignedQuantity } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
 import type { ActivityListParams } from '../services/portfolioApi';
@@ -224,6 +255,7 @@ import {
 } from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
 import type { Lang, Trade } from '../types';
+import type { PortfolioActivityKind } from '../services/apiTypes';
 
 const props = defineProps<{ lang: Lang }>();
 defineEmits<{ (e: 'order'): void }>();
@@ -510,9 +542,47 @@ watch(portfolioRevision, () => {
 const SortArrow = (p: { k: string; sk: string; sd: 'asc' | 'desc' }) =>
   p.k === p.sk ? createElement('span', { class: 'sort-a' }, p.sd === 'asc' ? '↑' : '↓') : null;
 
-/** 交易列的 occurredAt(= executedAt)是 ISO-8601,表格只顯示日期部分(既有行為)。 */
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** 本機 `YYYY-MM-DD`;無法解析時退回原字串前 10 碼(與 Cash.vue 同一套呈現)。 */
+function localDate(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** 本機 `YYYY-MM-DD HH:mm`。 */
+function localDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${localDate(iso)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/**
+ * 日期欄(UI-SPEC §Interaction 3):交易列沿用 occurredAt(= executedAt)前 10 碼(既有行為);
+ * 現金股利為本機 `YYYY-MM-DD HH:mm`;股數調整為 effectiveDate 原字串(除權日是日曆日,不做時區換算)。
+ */
 function activityDate(row: PortfolioActivityDto): string {
+  if (row.kind === 'CASH_DIVIDEND') return localDateTime(row.occurredAt);
+  if (row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT') return row.effectiveDate ?? row.occurredAt.slice(0, 10);
   return row.occurredAt.slice(0, 10);
+}
+
+/** 沖銷列指回的原紀錄日期:股利用 reversalOfOccurredAt 本機日期、股數調整用 reversalOfEffectiveDate(不輸出 uuid)。 */
+function reversalOfDate(row: PortfolioActivityDto): string {
+  if (row.kind === 'CASH_DIVIDEND') return localDate(row.reversalOfOccurredAt);
+  return row.reversalOfEffectiveDate ?? localDate(row.reversalOfOccurredAt);
+}
+
+/** 比例行 `{new} : {old}`(拆股 4 : 1、合股 1 : 2)。 */
+function ratioText(row: PortfolioActivityDto): string {
+  return `${row.ratioNew ?? '—'} : ${row.ratioOld ?? '—'}`;
+}
+
+/** mock 靜態 `DIV` 示範列以 CASH_DIVIDEND 呈現(與 mock listActivities 的 kind 一致)。 */
+function mockKind(trade: Trade): PortfolioActivityKind {
+  return trade.type === 'DIV' ? 'CASH_DIVIDEND' : trade.type;
 }
 
 function isTrade(row: PortfolioActivityDto): boolean {
@@ -525,16 +595,18 @@ function tradeTotal(row: PortfolioActivityDto): number | null {
   return row.quantity * row.price;
 }
 
-const KIND_LABEL_KEYS: Record<Exclude<PortfolioActivityDto['kind'], 'BUY' | 'SELL'>, string> = {
-  CASH_DIVIDEND: 'activityKindCashDividend',
-  STOCK_DIVIDEND: 'activityKindStockDividend',
-  SPLIT: 'activityKindSplit',
-};
-
-/** 類型 pill 文字:買 / 賣沿用既有原字串;股利 / 配股 / 拆股經 i18n。 */
+/** 類型 pill 文字:買 / 賣沿用既有原字串;股利 / 配股 / 拆股 / 合股經 i18n(拆股 vs 合股看 ratioNew > ratioOld)。 */
 function kindLabel(row: PortfolioActivityDto): string {
-  if (row.kind === 'BUY' || row.kind === 'SELL') return row.kind;
-  return t(props.lang, KIND_LABEL_KEYS[row.kind]);
+  switch (row.kind) {
+    case 'CASH_DIVIDEND':
+      return t(props.lang, 'activityKindCashDividend');
+    case 'STOCK_DIVIDEND':
+      return t(props.lang, 'activityKindStockDividend');
+    case 'SPLIT':
+      return t(props.lang, (row.ratioNew ?? 0) > (row.ratioOld ?? 0) ? 'activityKindSplit' : 'activityKindReverseSplit');
+    default:
+      return row.kind;
+  }
 }
 
 function kindPillClass(row: PortfolioActivityDto): string {
@@ -698,6 +770,28 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
 .pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
+/*
+ * 04.2-20(UI-SPEC §Typography 遷移規則第 9 列):API tbody 類型格的 pill(12 / 600)。
+ * 買 / 賣沿用既有綠 / 紅;股利沿用既有紫色字面值;配股 / 拆股 / 合股中性(--surface2 底 + --fg 字)。
+ */
+.kind-pill {
+  display: inline-block; padding: 4px 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+  background: var(--surface2); color: var(--fg);
+}
+.kind-pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.kind-pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.kind-pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
+/* 已沖銷:中性 pill(與 Cash.vue 的 .status-pill 同規格),原紀錄金額 / 股數加刪除線 */
+.status-pill {
+  display: inline-block; padding: 4px 8px; border-radius: 99px;
+  font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+  background: var(--surface2); color: var(--fg-dim);
+}
+.is-reversed { text-decoration: line-through; color: var(--fg-dim); }
+/* 不適用的儲存格(—):--fg-dim、aria-hidden(表頭已說明欄位語意) */
+.na { color: var(--fg-dim); }
+td.col-status { padding-right: 16px; white-space: nowrap; }
 /* 04.2-20:儲存格內第二行 Hint(預扣稅行 / 比例行 / 沖銷指回;UI-SPEC §Typography Hint 12/400) */
 .cell-hint { margin-top: 4px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
 /* D-28:交易列的幣別標籤。與 .fresh-badge 同尺寸規格,line-height 1.2 讓它落在既有 line box 內、不改列高。 */
