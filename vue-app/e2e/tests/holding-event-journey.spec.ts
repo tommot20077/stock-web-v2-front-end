@@ -3,7 +3,7 @@ import { apiBuy, apiRead, apiWrite, localDate } from '../support/journeyApi';
 import type { Page } from '@playwright/test';
 
 /**
- * 旅程 H:Phase 04.2 股利與股數調整,真瀏覽器 → 真後端(CI Browser E2E,後端 e2e-browser profile)。
+ * 旅程 J:Phase 04.2 股利與股數調整,真瀏覽器 → 真後端(CI Browser E2E,後端 e2e-browser profile)。
  *
  * jsdom + stub fetch 證明不了「Positions 列動作 → POST /portfolio/dividends(cookie + CSRF + Idempotency-Key)
  * → summary 重讀 → Trades 活動列表(GET /portfolio/activities)→ 沖銷」在真後端串得起來(judgment §8)。

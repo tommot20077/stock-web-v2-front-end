@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 
 /**
- * 真後端旅程的「前置資料」helper(Phase 04.2 旅程 H / W / Q)。
+ * 真後端旅程的「前置資料」helper(Phase 04.2 旅程 J / W / watchlist-live)。
  *
  * 旅程要證明的是 UI 那一段;前置的買進 / 加入清單等步驟走 API 建立,讓每條測試只走自己要證明的畫面。
  * 寫入一律帶真 cookie + `X-XSRF-TOKEN`(與 apiClient 同一條 CSRF 規則,後端 BrowserCsrfFilter 驗),
