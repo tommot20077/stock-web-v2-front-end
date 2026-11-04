@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App.vue';
 import { cleanupMounted, flushAsync, mountWithPinia } from './testUtils';
+import { resetRuntimeApiClientsForTests } from './services/pageApiClients';
 
 afterEach(() => {
   cleanupMounted();
@@ -193,5 +194,77 @@ describe('App session shell', () => {
     expect(document.body.textContent).not.toContain('總資產');
     expect(document.body.textContent).not.toContain('最近交易');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================================
+// 04.2-21 Task 3(U-11):現金頁股利連結 → App 切到 Trades 並以 initialFilter 預選「股利」頁籤。
+// =====================================================================================
+
+describe('App — 現金頁股利連結導到 Trades 股利頁籤(04.2-21 / U-11)', () => {
+  function byTestid(id: string): HTMLElement | null {
+    return document.body.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+  }
+
+  it('mock mode:點連結後 Trades 掛載且「股利」頁籤為 active;離開再從導覽回 Trades 不再套用', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    resetRuntimeApiClientsForTests();
+    vi.stubGlobal('fetch', vi.fn());
+    mountWithPinia(App);
+    await flushAsync();
+
+    byTestid('nav-cash')!.click();
+    await flushAsync();
+    byTestid('cash-page-dividend-link')!.click();
+    await flushAsync();
+
+    expect(byTestid('cash-page')).toBeNull();
+    expect(byTestid('trades-chip-dividend')!.classList.contains('active')).toBe(true);
+    expect(byTestid('trades-record-dividend')).not.toBeNull();
+
+    // 離開 Trades 後 initialFilter 被清掉:下次經導覽進入回到「全部」
+    byTestid('nav-positions')!.click();
+    await flushAsync();
+    byTestid('nav-trades')!.click();
+    await flushAsync();
+    expect(byTestid('trades-chip-all')!.classList.contains('active')).toBe(true);
+  });
+
+  it('API mode:Trades 的第一個活動列表請求含 type=DIVIDEND', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+    const summary = {
+      totalMarketValue: 0, totalCostBasis: 0, realizedPnl: 0, unrealizedPnl: 0, totalPnl: 0, roi: 0, holdingCount: 0,
+      baseCurrency: 'TWD', fxExcludedCount: 0, unconvertedCurrencies: [], dayPricePnl: null, dayPricePnlRatio: null,
+      dayPnlExcludedCount: 0, cash: 0, totalEquity: 0, cashBalances: [], allocation: [], sectorAllocation: [],
+      dividendIncome: 0, dividendTaxWithheld: 0,
+    };
+    const emptyPage = { items: [], page: 0, size: 10, totalElements: 0, totalPages: 0 };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/csrf')) {
+        document.cookie = 'XSRF-TOKEN=csrf-u11; path=/';
+        return json(apiSuccess({ cookieName: 'XSRF-TOKEN', headerName: 'X-XSRF-TOKEN' }));
+      }
+      if (path.endsWith('/me')) {
+        return json(apiSuccess({ id: 1, uuid: 'u-1', email: 'yuan@example.com', username: 'yuan', role: 'USER', status: 'ACTIVE' }));
+      }
+      if (path.includes('/portfolio/summary')) return json(apiSuccess(summary));
+      if (path.includes('/portfolio/cash-entries')) return json(apiSuccess(emptyPage));
+      if (path.includes('/portfolio/activities')) return json(apiSuccess(emptyPage));
+      return apiFailure('UNEXPECTED', 'Unexpected request', 500, 'trace-unexpected');
+    }));
+
+    mountWithPinia(App);
+    await settleSession();
+    byTestid('nav-cash')!.click();
+    await settleSession();
+    byTestid('cash-page-dividend-link')!.click();
+    await settleSession();
+
+    const activityCalls = vi.mocked(fetch).mock.calls.map(call => String(call[0])).filter(url => url.includes('/portfolio/activities'));
+    expect(activityCalls.length).toBeGreaterThan(0);
+    expect(new URLSearchParams(activityCalls[0].slice(activityCalls[0].indexOf('?') + 1)).get('type')).toBe('DIVIDEND');
+    expect(byTestid('trades-chip-dividend')!.classList.contains('active')).toBe(true);
   });
 });
