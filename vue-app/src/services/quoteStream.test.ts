@@ -287,6 +287,69 @@ describe('createQuoteStream(api) — 重連與退避(D-23)', () => {
     expect(h.sockets.sockets).toHaveLength(1);
   });
 
+  it('WR-05:auth 造成的 closed 後,新的 watch(重新登入後頁面重新掛載)會重設 4001 重試額度並重取 ticket 連線', async () => {
+    const { ApiClientError } = await import('./apiClient');
+    const h = apiHarness();
+    const release = h.stream.watch(['AAPL']);
+    await h.goLive();
+    h.issueTicket.mockRejectedValueOnce(new ApiClientError({ status: 401, code: 'AUTH_UNAUTHORIZED', message: 'unauthorized' }));
+    h.sockets.last().serverClose(4001, 'Auth expired');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.stream.status.value).toBe('closed');
+    expect(h.issueTicket).toHaveBeenCalledTimes(2);
+    release();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.stream.status.value).toBe('closed');
+
+    // 使用者重新登入;頁面重新掛載 → 新消費者
+    h.stream.watch(['AAPL']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.issueTicket).toHaveBeenCalledTimes(3);
+    expect(h.sockets.sockets).toHaveLength(2);
+    expect(h.stream.status.value).toBe('connecting');
+    h.sockets.last().serverOpen();
+    h.sockets.last().serverSend({ type: 'WELCOME' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.stream.status.value).toBe('live');
+
+    // 4001 重試額度已重設:再一次 4001 仍會先立即重取 ticket 一次
+    h.sockets.last().serverClose(4001, 'Auth expired');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.issueTicket).toHaveBeenCalledTimes(4);
+    expect(h.stream.status.value).toBe('connecting');
+  });
+
+  it('WR-05:closed 後 reconnect()(App 在 session 回到 authenticated 時呼叫)回到 connecting 並重新連線', async () => {
+    const h = apiHarness();
+    h.stream.watch(['AAPL']);
+    await h.goLive();
+    h.sockets.last().serverClose(4001, 'Auth expired');
+    await vi.advanceTimersByTimeAsync(0);
+    h.sockets.last().serverOpen();
+    h.sockets.last().serverClose(4001, 'Auth expired');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.stream.status.value).toBe('closed');
+
+    h.stream.reconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.stream.status.value).toBe('connecting');
+    expect(h.sockets.sockets).toHaveLength(3);
+  });
+
+  it('WR-05:replaced 仍只接受手動 reconnect(),新的 watch 不會自動接回(04.2-14 語意不變)', async () => {
+    const h = apiHarness();
+    h.stream.watch(['AAPL']);
+    await h.goLive();
+    h.sockets.last().serverClose(4002, 'Session replaced');
+    expect(h.stream.status.value).toBe('replaced');
+
+    h.stream.watch(['TSLA']);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.stream.status.value).toBe('replaced');
+    expect(h.issueTicket).toHaveBeenCalledOnce();
+    expect(h.sockets.sockets).toHaveLength(1);
+  });
+
   it('4003:有消費者才重連;無消費者 → idle', async () => {
     const h = apiHarness();
     const release = h.stream.watch(['AAPL']);
