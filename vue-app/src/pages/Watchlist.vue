@@ -961,7 +961,11 @@ h2 { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; ma
 .list-card { padding: 20px; }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; margin-bottom: 16px; }
-.toolbar-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; flex: 1 1 0; min-width: 0; }
+/*
+ * 04.2-25(L11):flex-basis 0 + min-width 0 讓標題永遠不觸發換行,375px en 三顆動作鈕(265px)把 30 字名稱擠成 8px。
+ * 保底 min(100%, 160px):放不下時動作鈕整組換到下一列,標題吃滿整列(LEARNINGS 2026-10-23 的換行坑)。
+ */
+.toolbar-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; flex: 1 1 0; min-width: min(100%, 160px); }
 .ttl { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; min-width: 0; }
 
 .table-wrap { overflow-x: auto; }
