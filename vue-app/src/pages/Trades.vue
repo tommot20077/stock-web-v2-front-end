@@ -997,12 +997,13 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .empty-block { padding: 48px 16px; font-size: 13px; color: var(--fg-dim); }
 .empty-title { font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 4px; }
 .empty-action { margin-top: 12px; }
-.filters { display: flex; gap: 8px; margin-bottom: 14px; }
+/* 04.2-25(L14):6 顆 chip 在 en 窄螢幕(Share adjustments + 年度)超過一列 → 換行而不是撐寬 main;chip 本身單行 */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .chip {
   padding: 5px 12px; background: var(--surface); color: var(--fg-dim);
   border: 1px solid var(--border); border-radius: 99px;
   font-size: 12px; font-weight: 500; cursor: pointer;
-  font-family: inherit;
+  font-family: inherit; white-space: nowrap;
 }
 .chip.active { background: var(--fg); color: var(--bg); border: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
