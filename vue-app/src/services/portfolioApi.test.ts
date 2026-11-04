@@ -619,3 +619,42 @@ describe('portfolioApi mock adapter — listActivities', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('portfolioApi mock adapter — live.holdingEvents / isHoldingEventTrade(04.2-21:Trades mock 模式合併)', () => {
+  it('exposes session events as activity rows (newest last) and flags the DIV trade row a mock dividend wrote', async () => {
+    const store = useMockPortfolioStore();
+    store.trades = [{ d: '2026-01-15', type: 'DIV', sym: 'AAPL', qty: 120, px: 0.24, fee: 0, note: 'static' }];
+    store.positions = [{ sym: 'AAPL', name: 'Apple Inc.', qty: 1000, avg: 100, price: 218.4, sector: 'Tech' }];
+    const api = createMockPortfolioApi();
+    expect(api.live?.holdingEvents).toEqual([]);
+
+    const events = createMockHoldingEventApi();
+    const dividend = await events.createDividend({ symbol: 'AAPL', amount: 50, withholdingTax: 5 }, 'k-1');
+    const split = await events.createShareAdjustment(
+      { symbol: 'AAPL', type: 'SPLIT', ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01' },
+      'k-2',
+    );
+
+    const rows = api.live!.holdingEvents;
+    expect(rows.map(row => row.id)).toEqual([dividend.id, split.id]);
+    for (const row of rows) expect(Object.keys(row).sort()).toEqual(ACTIVITY_FIELDS);
+    expect(rows[0]).toMatchObject({ kind: 'CASH_DIVIDEND', amount: 50, price: null, fee: null, reversible: true });
+    expect(rows[1]).toMatchObject({ kind: 'SPLIT', ratioNew: 2, ratioOld: 1, reversible: true });
+
+    // 股利事件寫進 mock 交易的那列 DIV 由事件代表;靜態示範列不是。
+    const [written, staticRow] = store.trades;
+    expect(api.live!.isHoldingEventTrade(written)).toBe(true);
+    expect(api.live!.isHoldingEventTrade(staticRow)).toBe(false);
+  });
+
+  it('returns clones: mutating a row does not leak back into mock state', async () => {
+    const store = useMockPortfolioStore();
+    store.positions = [{ sym: 'AAPL', name: 'Apple Inc.', qty: 1000, avg: 100, price: 218.4, sector: 'Tech' }];
+    await createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: 50 }, 'k-1');
+    const api = createMockPortfolioApi();
+
+    api.live!.holdingEvents[0].amount = 999;
+
+    expect(api.live!.holdingEvents[0].amount).toBe(50);
+  });
+});

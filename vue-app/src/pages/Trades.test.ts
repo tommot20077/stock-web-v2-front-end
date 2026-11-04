@@ -4,14 +4,16 @@ import Trades from './Trades.vue';
 // 原始碼字面(Vite ?raw):斷言 Trades 沒有 import mock store(PORT-04 / judgment §3)。
 // 沿用 03-03 / 03-04 的手法 —— 本專案 tsconfig 未含 @types/node,不得用 node:fs。
 import tradesSource from './Trades.vue?raw';
-import { t } from '../i18n';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { t, tf } from '../i18n';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   bumpPortfolioRevision,
+  notifyHoldingEventCreated,
   notifyTradeCreated,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
+import { resetMockHoldingEventsForTests, type DividendDto } from '../services/holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PaginatedResponse, PortfolioActivityDto, PortfolioActivityKind, TradeDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
@@ -1855,5 +1857,430 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
     expect(lines).toHaveLength(4);
     expect(lines.slice(1).every(line => /,(SPLIT|STOCK_DIVIDEND),/.test(line))).toBe(true);
     expect(dl.downloads[0]).toBe(`trades-shareadjustment-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+});
+
+// =====================================================================================
+// 04.2-21 Task 2:Trades 寫入入口(D-28 / D-13 / D-12、UI-SPEC §Interaction 3)。
+// 頁首「+ 記錄股利 / + 記錄股數調整」、空狀態動作、活動列「沖銷這筆」、寫入後重讀、fresh 與不在本頁、initialFilter。
+// =====================================================================================
+
+describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
+  afterEach(() => {
+    resetMockHoldingEventsForTests();
+  });
+
+  type Responder = (url: string) => Response | Promise<Response>;
+
+  /** 活動列表 + 對話框的兩個寫入端點;其餘一律丟錯,讓頁面偷打別的 API 立刻可見。 */
+  function eventsFetch(options: { activities: Responder; dividends?: Responder; adjustments?: Responder }): TradesFetch {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/portfolio/activities')) return options.activities(url);
+      if (url.includes('/portfolio/dividends') && options.dividends) return options.dividends(url);
+      if (url.includes('/portfolio/share-adjustments') && options.adjustments) return options.adjustments(url);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+  }
+
+  function activityUrls(fetchMock: TradesFetch): string[] {
+    return urls(fetchMock).filter(url => url.includes('/portfolio/activities'));
+  }
+
+  async function mountApi(fetchMock: TradesFetch, extraProps: Record<string, unknown> = {}) {
+    // CSRF cookie 預先備好,對話框的 POST 不需要 bootstrap 往返(HoldingEventDialog.test.ts 的同一手法)。
+    document.cookie = 'XSRF-TOKEN=csrf-trades; path=/';
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+    vi.stubGlobal('fetch', fetchMock);
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {}, ...extraProps });
+    await flushAsync();
+  }
+
+  async function clickAndFlush(el: HTMLElement) {
+    click(el);
+    await flushAsync();
+  }
+
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  function localDateTime(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  const DIV_ID = 'aaaaaaaa-1111-4bbb-8ccc-000000000001';
+  const DIV_ROW = activity({
+    id: DIV_ID,
+    kind: 'CASH_DIVIDEND',
+    symbol: 'AAPL',
+    currency: 'USD',
+    amount: 120,
+    withholdingTax: 30,
+    occurredAt: '2026-10-30T01:15:00Z',
+    reversible: true,
+  });
+
+  describe('頁首動作(D-28)', () => {
+    it('「股利」頁籤頁首渲染 .btn-ghost「+ 記錄股利」,位於匯出與新增交易之間;其他頁籤不渲染', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      expect(testid('trades-record-dividend')).toBeNull();
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+
+      clickChip('dividend');
+      await flushAsync();
+      const btn = requireTestid('trades-record-dividend');
+      expect(btn.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordDividend')}`);
+      expect(btn.classList.contains('btn-ghost')).toBe(true);
+      expect(btn.classList.contains('btn-accent')).toBe(false);
+      const order = [...btn.parentElement!.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
+      expect(order).toEqual(['trades-export', 'trades-record-dividend', 'trades-add-trade']);
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+
+      clickChip('buy');
+      await flushAsync();
+      expect(testid('trades-record-dividend')).toBeNull();
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+    });
+
+    it('「+ 記錄股利」開啟可搜尋標的的對話框(無 symbol、預設現金股利),無持倉也能記(D-03)', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }), { initialFilter: 'dividend' });
+
+      await clickAndFlush(requireTestid('trades-record-dividend'));
+
+      requireTestid('holding-event-dialog');
+      expect(requireTestid('holding-event-symbol-input').getAttribute('role')).toBe('combobox');
+      expect(testid('holding-event-symbol-locked')).toBeNull();
+      expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('「股數調整」頁籤頁首「+ 記錄股數調整」開啟預設配股的對話框', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      const btn = requireTestid('trades-record-share-adjustment');
+      expect(btn.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordShareAdjustment')}`);
+      expect(btn.classList.contains('btn-ghost')).toBe(true);
+      expect(testid('trades-record-dividend')).toBeNull();
+
+      await clickAndFlush(btn);
+      requireTestid('holding-event-symbol-input');
+      expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
+  describe('空狀態(UI Consideration:empty / Trades 股利頁籤、股數調整頁籤)', () => {
+    it('「股利」頁籤 0 列:尚無股利紀錄 + body + 「+ 記錄股利」(btn-ghost-sm),點擊開對話框', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }), { initialFilter: 'dividend' });
+
+      const empty = requireTestid('trades-dividend-empty');
+      expect(empty.textContent).toContain(t('en', 'tradesDividendEmpty'));
+      expect(empty.textContent).toContain(t('en', 'tradesDividendEmptyBody'));
+      expect(testid('trades-empty')).toBeNull();
+      const action = requireTestid('trades-empty-record-dividend');
+      expect(empty.contains(action)).toBe(true);
+      expect(action.classList.contains('btn-ghost-sm')).toBe(true);
+      expect(action.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordDividend')}`);
+
+      await clickAndFlush(action);
+      expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+      requireTestid('holding-event-symbol-input');
+    });
+
+    it('「股數調整」頁籤 0 列:尚無股數調整紀錄 + 指向持倉頁的 body + 「+ 記錄股數調整」', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      const empty = requireTestid('trades-share-adjustment-empty');
+      expect(empty.textContent).toContain(t('en', 'tradesShareAdjustmentEmpty'));
+      expect(empty.textContent).toContain(t('en', 'tradesShareAdjustmentEmptyBody'));
+      const action = requireTestid('trades-empty-record-share-adjustment');
+      expect(action.classList.contains('btn-ghost-sm')).toBe(true);
+      expect(testid('trades-dividend-empty')).toBeNull();
+
+      await clickAndFlush(action);
+      expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('其他頁籤 0 列沿用 noTrades', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('buy');
+      await flushAsync();
+
+      expect(requireTestid('trades-empty').textContent).toContain(t('en', 'noTrades'));
+      expect(testid('trades-dividend-empty')).toBeNull();
+      expect(testid('trades-share-adjustment-empty')).toBeNull();
+    });
+
+    it('mock mode:「股數調整」頁籤(mock 交易沒有股數調整)顯示同一個空狀態與動作', async () => {
+      mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+      await flushAsync();
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      requireTestid('trades-share-adjustment-empty');
+      requireTestid('trades-empty-record-share-adjustment');
+      expect(rows()).toHaveLength(0);
+    });
+  });
+
+  describe('「沖銷這筆」(D-13)', () => {
+    function reversibilityItems(): PortfolioActivityDto[] {
+      return [
+        DIV_ROW,
+        activity({ id: 'div-not-reversible', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversible: false }),
+        activity({ id: 'div-reversed', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversed: true, reversible: true }),
+        activity({ id: 'div-reversal', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversalOfId: 'x', reversible: true }),
+        activity({ id: 'split-ok', kind: 'SPLIT', symbol: 'TSLA', quantity: 300, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-07-01', reversible: true }),
+        activity({ id: 'stock-ok', kind: 'STOCK_DIVIDEND', symbol: '2330', quantity: 50, effectiveDate: '2026-08-15', reversible: true }),
+        trade({ id: 'buy-row', symbol: 'NVDA' }),
+      ];
+    }
+
+    it('只在 reversible 且未沖銷、非沖銷列的事件列出現(BUY / SELL 永不出現),aria-label 帶日期 / 代號 / 類型', async () => {
+      const items = reversibilityItems();
+      // BUY 列即使後端誤給 reversible = true 也不得出現
+      items[6] = { ...items[6], reversible: true };
+      await mountApi(eventsFetch({ activities: () => success(page({ items })) }));
+
+      const withButton = rows().filter(row => row.querySelector('[data-testid="trades-reverse"]'));
+      expect(withButton.map(row => row.getAttribute('data-kind'))).toEqual(['CASH_DIVIDEND', 'SPLIT', 'STOCK_DIVIDEND']);
+      for (const row of withButton) {
+        const btn = row.querySelector<HTMLElement>('[data-testid="trades-reverse"]')!;
+        expect(row.querySelector('td.col-status')!.contains(btn)).toBe(true);
+        expect(btn.classList.contains('btn-ghost-sm')).toBe(true);
+        expect(btn.textContent?.trim()).toBe(t('en', 'cashReverseThis'));
+      }
+      expect(withButton[0].querySelector('[data-testid="trades-reverse"]')!.getAttribute('aria-label')).toBe(
+        tf('en', 'tradesReverseAria', { date: localDateTime(DIV_ROW.occurredAt), symbol: 'AAPL', type: t('en', 'activityKindCashDividend') }),
+      );
+      expect(withButton[1].querySelector('[data-testid="trades-reverse"]')!.getAttribute('aria-label')).toBe(
+        tf('en', 'tradesReverseAria', { date: '2026-07-01', symbol: 'TSLA', type: t('en', 'activityKindSplit') }),
+      );
+    });
+
+    it('點「沖銷這筆」開啟沖銷模式;衝突(409 DIVIDEND_ALREADY_REVERSED)→ 重讀列表', async () => {
+      const fetchMock = eventsFetch({
+        activities: () => success(page({ items: [DIV_ROW] })),
+        dividends: () => failure('DIVIDEND_ALREADY_REVERSED', 'trace-conflict', 409),
+      });
+      await mountApi(fetchMock);
+      expect(activityUrls(fetchMock)).toHaveLength(1);
+
+      await clickAndFlush(requireTestid('trades-reverse'));
+      requireTestid('holding-event-reversal-original');
+
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      expect(urls(fetchMock).filter(url => url.includes('/portfolio/dividends'))).toHaveLength(1);
+      expect(activityUrls(fetchMock)).toHaveLength(2);
+    });
+
+    it('沖銷成功:列表重讀後按鈕消失,關閉對話框時焦點移到表格卡(tabindex=-1)', async () => {
+      let reversedNow = false;
+      const reversalDto: DividendDto = {
+        id: 'bbbbbbbb-2222-4bbb-8ccc-000000000001',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120,
+        withholdingTax: 30,
+        paidAt: '2026-11-04T09:30:00+08:00',
+        createdAt: '2026-11-04T09:30:05+08:00',
+        note: null,
+        reversalOfId: DIV_ID,
+        reversed: false,
+      };
+      const fetchMock = eventsFetch({
+        activities: () => success(page({
+          items: reversedNow
+            ? [
+              activity({ ...DIV_ROW, id: reversalDto.id, reversalOfId: DIV_ID, reversalOfOccurredAt: DIV_ROW.occurredAt, reversible: false }),
+              { ...DIV_ROW, reversed: true, reversible: false },
+            ]
+            : [DIV_ROW],
+        })),
+        dividends: () => {
+          reversedNow = true;
+          return success(reversalDto);
+        },
+      });
+      await mountApi(fetchMock);
+
+      await clickAndFlush(requireTestid('trades-reverse'));
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      requireTestid('holding-event-result');
+      expect(activityUrls(fetchMock)).toHaveLength(2);
+      expect(testid('trades-reverse')).toBeNull();
+
+      await clickAndFlush(requireTestid('holding-event-done'));
+      await flushAsync();
+
+      const card = requireTestid('trades-table');
+      expect(card.getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(card);
+    });
+
+    it('mock mode:靜態 DIV 示範列沒有「沖銷這筆」;本 session mock 記錄的股利列有,且不與它寫入的 DIV 交易列重複', async () => {
+      mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+      await flushAsync();
+      const store = useMockPortfolioStore();
+      store.trades = [{ d: '2026-01-15', type: 'DIV', sym: 'CCC', qty: 4, px: 0.5, fee: 0, note: 'static' }];
+      await flushAsync();
+      expect(rows()).toHaveLength(1);
+      expect(testid('trades-reverse')).toBeNull();
+
+      const dto = await getRuntimeApiClients().holdingEvents.createDividend({ symbol: 'AAPL', amount: 50 }, 'mock-key-1');
+      notifyHoldingEventCreated(dto, 'dividend');
+      await flushAsync();
+
+      // 事件列一列 + 靜態示範列一列;事件寫進 mock 交易的 DIV 列不得再出現一次
+      expect(rows()).toHaveLength(2);
+      const reverse = allTestids('trades-reverse');
+      expect(reverse).toHaveLength(1);
+      const eventRow = reverse[0].closest('[data-testid="trades-row"]')!;
+      expect(eventRow.getAttribute('data-kind')).toBe('CASH_DIVIDEND');
+      expect(eventRow.textContent).toContain('AAPL');
+      expect(eventRow.classList.contains('fresh')).toBe(true);
+
+      await clickAndFlush(reverse[0]);
+      requireTestid('holding-event-reversal-original');
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      // mock 沖銷有可見效果:原列已沖銷、按鈕消失,沖銷列出現
+      expect(testid('trades-reverse')).toBeNull();
+      requireTestid('trades-reversed-pill');
+      requireTestid('trades-reversal-of');
+    });
+  });
+
+  describe('寫入後重讀、新紀錄標記與不在本頁(D-12)', () => {
+    function manyItems(): PortfolioActivityDto[] {
+      return Array.from({ length: 25 }, (_, i) => activity({
+        id: `evt-${i}`,
+        kind: 'CASH_DIVIDEND',
+        symbol: `S${i}`,
+        amount: 1,
+        occurredAt: new Date(Date.UTC(2026, 9, 30 - i)).toISOString(),
+      }));
+    }
+
+    it("cause 'dividend' / 'shareAdjustment':列表重讀且頁碼歸 0", async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+      click(requireTestid('trades-next'));
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('1');
+
+      notifyHoldingEventCreated({ id: 'evt-0' }, 'dividend');
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('0');
+      const afterDividend = urls(fetchMock).length;
+
+      notifyHoldingEventCreated({ id: 'evt-1' }, 'shareAdjustment');
+      await flushAsync();
+      expect(urls(fetchMock)).toHaveLength(afterDividend + 1);
+    });
+
+    it("cause 'cash' / 'baseCurrency' 不影響活動列表,不重讀(UI-SPEC §11)", async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      bumpPortfolioRevision('cash');
+      bumpPortfolioRevision('baseCurrency');
+      await flushAsync();
+
+      expect(urls(fetchMock)).toHaveLength(1);
+    });
+
+    it('新紀錄在本頁:該列 fresh + 「新」,判定只比 id', async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      notifyHoldingEventCreated({ id: 'evt-3' }, 'dividend');
+      await flushAsync();
+
+      const fresh = rows().filter(row => row.classList.contains('fresh'));
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0].textContent).toContain('S3');
+      expect(fresh[0].querySelector('[data-testid="trades-fresh-badge"]')!.textContent?.trim()).toBe(t('en', 'freshBadge'));
+      expect(testid('trades-not-in-current-view')).toBeNull();
+    });
+
+    it('partial:新紀錄不在本頁 → tradesActivityNotInView(非錯誤色的說明列)', async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      notifyHoldingEventCreated({ id: 'evt-24' }, 'dividend');
+      await flushAsync();
+
+      const hint = requireTestid('trades-not-in-current-view');
+      expect(hint.textContent?.trim()).toBe(t('en', 'tradesActivityNotInView'));
+      expect(hint.classList.contains('view-hint')).toBe(true);
+      expect(rows().some(row => row.classList.contains('fresh'))).toBe(false);
+
+      // 使用者改了檢視 → 提示結束
+      clickChip('all');
+      await flushAsync();
+      expect(testid('trades-not-in-current-view')).toBeNull();
+    });
+
+    it('error(T-04.2-46):事件寫入後重讀失敗 → portfolioStaleAfterCashEntry,不得顯示「交易已記錄」', async () => {
+      let fail = false;
+      const fetchMock = scriptedFetch(() => (fail
+        ? failure('PORTFOLIO_ACTIVITIES_UNAVAILABLE', 'trace-stale')
+        : success(page({ items: [DIV_ROW] }))));
+      await mountApiTrades(fetchMock);
+
+      fail = true;
+      notifyHoldingEventCreated({ id: 'evt-x' }, 'shareAdjustment');
+      await flushAsync();
+
+      const stale = requireTestid('trades-refresh-error');
+      expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+      expect(document.body.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+    });
+
+    it("cause 'trade' 的重讀失敗仍用 portfolioStaleAfterTrade", async () => {
+      let fail = false;
+      const fetchMock = scriptedFetch(() => (fail
+        ? failure('PORTFOLIO_ACTIVITIES_UNAVAILABLE', 'trace-stale')
+        : success(page({ items: [DIV_ROW] }))));
+      await mountApiTrades(fetchMock);
+
+      fail = true;
+      bumpPortfolioRevision('trade');
+      await flushAsync();
+
+      expect(requireTestid('trades-refresh-error').textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+    });
+  });
+
+  describe('initialFilter(U-11)', () => {
+    it("initialFilter 'dividend':掛載時預選股利頁籤,第一個請求含 type=DIVIDEND;之後切換頁籤不受 prop 影響", async () => {
+      const fetchMock = eventsFetch({ activities: () => success(page({ items: [DIV_ROW] })) });
+      await mountApi(fetchMock, { initialFilter: 'dividend' });
+
+      expect(activityUrls(fetchMock)).toHaveLength(1);
+      expect(paramsOf(activityUrls(fetchMock)[0]).get('type')).toBe('DIVIDEND');
+      expect(chip('dividend').classList.contains('active')).toBe(true);
+
+      clickChip('all');
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('type')).toBeNull();
+      expect(chip('all').classList.contains('active')).toBe(true);
+    });
+
+    it('無效的 initialFilter 退回「全部」', async () => {
+      const fetchMock = eventsFetch({ activities: () => success(page()) });
+      await mountApi(fetchMock, { initialFilter: 'bogus' });
+
+      expect(paramsOf(activityUrls(fetchMock)[0]).get('type')).toBeNull();
+      expect(chip('all').classList.contains('active')).toBe(true);
+    });
   });
 });
