@@ -24,6 +24,18 @@
       </button>
     </div>
 
+    <!-- 清單載入失敗:行內提示 + 重試,不擋行情列表(UI-SPEC §Interaction 7) -->
+    <div v-if="listsError" class="wl-load-error" role="alert" data-testid="markets-watchlist-error">
+      <span class="wl-load-error-text">{{ t(lang, 'watchlistLoadFailedInline') }}</span>
+      <span class="wl-load-error-details">
+        <span>{{ listsError.code }}</span>
+        <span v-if="listsError.requestId">{{ t(lang, 'authRequestId') }} {{ listsError.requestId }}</span>
+      </span>
+      <button type="button" class="wl-retry" data-testid="markets-watchlist-retry" @click="loadLists">
+        {{ t(lang, 'authRetry') }}
+      </button>
+    </div>
+
     <div class="filters" v-if="!isBonds">
       <span
         v-for="f in filters"
@@ -433,6 +445,19 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--up) 0%, transparent); }
 }
 
+.wl-load-error {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  margin-bottom: 12px; font-size: 13px; color: var(--fg);
+}
+.wl-load-error-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.wl-load-error-details { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--fg-dim); }
+.wl-load-error-details span { overflow-wrap: anywhere; user-select: text; }
+.wl-retry {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.wl-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .filters { display: flex; gap: 8px; margin-bottom: 12px; }
 .chip {
   padding: 5px 12px; background: var(--surface); color: var(--fg-dim);
