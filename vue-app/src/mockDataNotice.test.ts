@@ -67,6 +67,30 @@ describe('尚未接後端的頁面在 API mode 標示為示範資料', () => {
   }
 });
 
+describe('Markets / Chart:示範資料標示保留並加上觀察清單例外行(D-21)', () => {
+  afterEach(() => {
+    cleanupMounted();
+    resetRuntimeApiClientsForTests();
+  });
+
+  const EXCEPTION_PAGES = PAGES.filter(page => page.name === 'Markets' || page.name === 'Chart');
+
+  for (const page of EXCEPTION_PAGES) {
+    it(`${page.name}:API mode 標示仍在,例外行 = mockDataNoticeExceptWatchlist`, async () => {
+      vi.stubEnv('VITE_DATA_MODE', 'api');
+      vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('offline in test'))));
+      resetRuntimeApiClientsForTests();
+
+      mountWithPinia(page.component, page.props);
+      await flushAsync();
+
+      expect(notice(), `${page.name} 應保留 mock-data-notice`).not.toBeNull();
+      const exception = document.body.querySelector('[data-testid="mock-data-notice-exception"]');
+      expect(exception?.textContent).toBe(t('zh', 'mockDataNoticeExceptWatchlist'));
+    });
+  }
+});
+
 describe('MockDataNotice 的 exception 例外行(U-12)', () => {
   afterEach(() => {
     cleanupMounted();
