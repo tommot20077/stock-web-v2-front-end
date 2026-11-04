@@ -18,6 +18,7 @@ import {
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
+import type { AssetDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -57,6 +58,8 @@ interface RoutedFetchOptions {
   dividends?: (init: RequestInit | undefined) => Response | Promise<Response>;
   adjustments?: (init: RequestInit | undefined) => Response | Promise<Response>;
   refresh?: () => Response | Promise<Response>;
+  /** 04.2-19 typeahead:收到的是解析出來的 `query` 參數。 */
+  assets?: (query: string) => Response | Promise<Response>;
 }
 
 /** 只路由本對話框會碰到的端點;其他一律丟錯,讓「元件偷打了別的 API」立刻可見。 */
@@ -68,6 +71,10 @@ function holdingEventFetch(options: RoutedFetchOptions = {}) {
     }
     if (url.includes('/portfolio/dividends')) {
       return options.dividends ? options.dividends(init) : okResponse(RECORDED_DIVIDEND);
+    }
+    if (url.includes('/assets')) {
+      if (!options.assets) throw new Error('assets not routed in this test');
+      return options.assets(new URL(url, 'http://localhost').searchParams.get('query') ?? '');
     }
     if (url.includes('/portfolio/share-adjustments')) {
       if (options.adjustments) return options.adjustments(init);
@@ -1029,5 +1036,389 @@ describe('HoldingEventDialog — 文案禁止用語(D-11)', () => {
       for (const word of forbidden) expect(bodyText(), `${lang} result`).not.toContain(word);
       cleanupMounted();
     }
+  });
+});
+
+// =====================================================================================
+// Phase 04.2 Plan 19 Task 1(tracer):從 Trades 開啟(無 symbol)→ 標的 typeahead → 記一筆現金股利(D-28 / D-03)。
+// 行為與七態逐項沿用 OrderTicket(combobox / listbox / aria-activedescendant / debounce 250ms / 只採最後一次結果),
+// 差異:輸入框 13px、listbox 在文件流內(U-04)。
+// =====================================================================================
+
+function assetDto(symbol: string, overrides: Partial<AssetDto> = {}): AssetDto {
+  return {
+    uuid: `asset-${symbol.toLowerCase()}`,
+    symbol,
+    name: `${symbol} Holdings`,
+    assetType: 'STOCK',
+    market: 'US',
+    currency: 'USD',
+    sector: null,
+    tradeable: true,
+    latestPrice: 100,
+    change: 1,
+    changePercent: 1,
+    volumeText: null,
+    high: null,
+    low: null,
+    ...overrides,
+  };
+}
+
+/** `ApiResponse<PageResponse<AssetDto>>`。 */
+function assetPage(items: AssetDto[], totalElements = items.length): Response {
+  return okResponse({
+    items,
+    page: 0,
+    size: 10,
+    totalElements,
+    totalPages: Math.max(1, Math.ceil(totalElements / 10)),
+  });
+}
+
+const AAPL_ASSET = assetDto('AAPL', { name: 'Apple Inc.' });
+const AAL_ASSET = assetDto('AAL', { name: 'American Airlines' });
+
+/** 從 Trades 開啟:無 symbol、無 holding。 */
+const FROM_TRADES = { symbol: null, holding: null };
+
+function symbolInput(): HTMLInputElement {
+  return requireTestid('holding-event-symbol-input') as HTMLInputElement;
+}
+
+function symbolOptionRows(): HTMLElement[] {
+  return [...document.body.querySelectorAll<HTMLElement>('[role="option"]')];
+}
+
+async function typeSymbol(value: string) {
+  await setValue(symbolInput(), value);
+}
+
+async function pressSymbolKey(key: string) {
+  symbolInput().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  await flushAsync();
+}
+
+/** fake timers 下推進時間;Node 20 的 `Response.json()` 需要較多 tick(見 testUtils.flushAsync)。 */
+async function advance(ms: number) {
+  vi.advanceTimersByTime(ms);
+  await flushAsync(16);
+}
+
+function assetQueries(fetchImpl: FetchDouble): string[] {
+  return callsTo(fetchImpl, '/assets').map(([url]) => new URL(url, 'http://localhost').searchParams.get('query') ?? '');
+}
+
+/** 搜尋並以鍵盤選定 `AAPL`(結果第一列)。 */
+async function pickAaplByKeyboard() {
+  await typeSymbol('AA');
+  await advance(250);
+  await pressSymbolKey('ArrowDown');
+  await pressSymbolKey('Enter');
+}
+
+function aaplSearchFetch(extra: RoutedFetchOptions = {}) {
+  return holdingEventFetch({
+    assets: query => (query === '' ? assetPage([]) : assetPage([AAPL_ASSET, AAL_ASSET])),
+    ...extra,
+  });
+}
+
+describe('HoldingEventDialog — 標的 typeahead(D-28 / D-03)', () => {
+  it('opensFromTradesWithAFocusedComboboxAndNoCurrency', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+
+    expect(testid('holding-event-symbol-locked'), '無 symbol 不得渲染鎖定標的').toBeNull();
+    const input = symbolInput();
+    expect(input.getAttribute('role')).toBe('combobox');
+    expect(input.getAttribute('aria-autocomplete')).toBe('list');
+    expect(input.getAttribute('aria-controls')).toBe('holding-event-symbol-options');
+    expect(input.getAttribute('aria-expanded')).toMatch(/^(true|false)$/);
+    expect(input.getAttribute('aria-labelledby')).toBe('holding-event-symbol-label');
+    // U-04:Display 層級留給金額,標的輸入框是 13px 的 `.inp`。
+    expect(input.classList.contains('inp')).toBe(true);
+    expect(input.classList.contains('big')).toBe(false);
+    expect(document.activeElement, 'Trades 開啟 → 焦點在標的輸入框').toBe(input);
+
+    expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+    expect(document.getElementById('holding-event-amount-hint')?.textContent?.trim())
+      .toBe(t('zh', 'holdingEventAmountHintNoSymbol'));
+    expect(requireTestid('holding-event-dialog').querySelector('.ccy-tag'), '未選標的不渲染幣別').toBeNull();
+  });
+
+  it('opensOnStockDividendFromTheShareAdjustmentTab', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: { ...FROM_TRADES, initialMode: 'stockDividend' } });
+
+    expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    expect(document.activeElement).toBe(symbolInput());
+  });
+
+  it('debouncesTheSearchAndShowsLoadingWithTextAndThreeSkeletons', async () => {
+    vi.useFakeTimers();
+    const pending = deferred<Response>();
+    const fetchImpl = holdingEventFetch({ assets: query => (query === 'AA' ? pending.promise : assetPage([])) });
+    await mountDialog({ fetchImpl, props: FROM_TRADES });
+    const baseline = assetQueries(fetchImpl).filter(query => query === 'AA').length;
+
+    await typeSymbol('A');
+    await typeSymbol('AA');
+    await advance(240);
+    expect(assetQueries(fetchImpl).filter(query => query === 'AA').length - baseline, '未滿 250ms 不得發出').toBe(0);
+    await advance(10);
+    expect(assetQueries(fetchImpl).slice(-1), '只帶最後一次的關鍵字').toEqual(['AA']);
+    expect(assetQueries(fetchImpl), '中間的 A 不得送出').not.toContain('A');
+
+    const loading = requireTestid('holding-event-symbol-loading');
+    expect(loading.textContent).toContain(t('zh', 'loading'));
+    expect(loading.querySelectorAll('.skeleton-row')).toHaveLength(3);
+    expect(symbolInput().getAttribute('aria-expanded')).toBe('true');
+
+    pending.resolve(assetPage([AAPL_ASSET, assetDto('AAXX', { tradeable: false })]));
+    await flushAsync(16);
+    expect(testid('holding-event-symbol-loading')).toBeNull();
+    expect(requireTestid('holding-event-symbol-options').getAttribute('role')).toBe('listbox');
+    expect(testid('holding-event-symbol-option-AAPL')).toBeTruthy();
+    expect(testid('holding-event-symbol-option-AAXX'), '只列 tradeable').toBeNull();
+  });
+
+  it('movesTheActiveOptionWithArrowKeysAndPicksWithEnter', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await typeSymbol('AA');
+    await advance(250);
+
+    const rows = symbolOptionRows();
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.id).toBeTruthy();
+      expect(row.getAttribute('aria-selected')).toBe('false');
+    }
+    await pressSymbolKey('ArrowDown');
+    expect(symbolInput().getAttribute('aria-activedescendant')).toBe(rows[0].id);
+    await pressSymbolKey('ArrowDown');
+    expect(symbolInput().getAttribute('aria-activedescendant')).toBe(rows[1].id);
+    await pressSymbolKey('ArrowUp');
+    expect(symbolInput().getAttribute('aria-activedescendant')).toBe(rows[0].id);
+    await pressSymbolKey('Enter');
+
+    expect(symbolInput().value).toBe('AAPL');
+    expect(testid('holding-event-symbol-options'), 'Enter 選定後收起').toBeNull();
+    expect(symbolInput().getAttribute('aria-expanded')).toBe('false');
+    // 選定後才顯示幣別與帶幣別的金額說明。
+    expect(requireTestid('holding-event-amount-ccy').textContent?.trim()).toBe('USD');
+    expect(document.getElementById('holding-event-amount-hint')?.textContent?.trim())
+      .toBe(tf('zh', 'holdingEventAmountHint', { code: 'USD' }));
+    expect(requireTestid('holding-event-dialog').textContent).toContain('Apple Inc.');
+  });
+
+  it('picksAnOptionWithTheMouseToo', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await typeSymbol('AA');
+    await advance(250);
+
+    requireTestid('holding-event-symbol-option-AAL').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await flushAsync();
+    expect(symbolInput().value).toBe('AAL');
+    expect(testid('holding-event-symbol-options')).toBeNull();
+  });
+
+  it('escapeClosesTheListboxBeforeItClosesTheDialog', async () => {
+    vi.useFakeTimers();
+    const { onClose } = await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await typeSymbol('AA');
+    await advance(250);
+    expect(testid('holding-event-symbol-options')).toBeTruthy();
+
+    await pressSymbolKey('Escape');
+    expect(testid('holding-event-symbol-options'), '第一次 Esc 只收起下拉').toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    await pressSymbolKey('Escape');
+    expect(onClose, '下拉已收起時 Esc 照常關閉對話框').toHaveBeenCalledTimes(1);
+  });
+
+  it('recordsACashDividendForASearchedSymbolWithoutAHolding', async () => {
+    vi.useFakeTimers();
+    const { fetchImpl, onRecorded } = await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await pickAaplByKeyboard();
+
+    await typeInto('holding-event-amount', '120');
+    expect(submitButton().disabled, '無持倉也能記現金股利(D-03)').toBe(false);
+    await submit();
+
+    const calls = dividendCalls(fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(bodiesOf(calls)[0]).toMatchObject({ symbol: 'AAPL', amount: 120, reversalOfId: null });
+    requireTestid('holding-event-result');
+    expect(onRecorded).toHaveBeenCalledWith(RECORDED_DIVIDEND);
+  });
+
+  it('recordsACashDividendForASearchedSymbolInMockMode', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('VITE_DATA_MODE', 'mock');
+    resetRuntimeApiClientsForTests();
+    const onRecorded = vi.fn();
+    mountWithPinia(HoldingEventDialog, { open: true, lang: 'zh', symbol: null, holding: null, onRecorded });
+    await flushAsync(16);
+
+    await typeSymbol('AAPL');
+    await advance(250);
+    // 精準命中可交易標的即選定(沿用 OrderTicket),下拉仍開著讓使用者看清候選。
+    expect(requireTestid('holding-event-amount-ccy').textContent?.trim()).toBeTruthy();
+    await typeInto('holding-event-amount', '12.5');
+    await submit();
+
+    requireTestid('holding-event-result');
+    expect(onRecorded).toHaveBeenCalledTimes(1);
+    expect((onRecorded.mock.calls[0][0] as DividendDto).symbol).toBe('AAPL');
+  });
+
+  it('showsSearchFailureWithDiagnosticsAndRetryWithoutBlockingOtherFields', async () => {
+    vi.useFakeTimers();
+    let fail = true;
+    const fetchImpl = holdingEventFetch({
+      assets: (query) => {
+        if (query !== 'AA') return assetPage([]);
+        return fail ? failure('ASSET_SEARCH_FAILED', { status: 500, traceId: 'trace-search' }) : assetPage([AAPL_ASSET]);
+      },
+    });
+    await mountDialog({ fetchImpl, props: FROM_TRADES });
+    await typeSymbol('AA');
+    await advance(250);
+
+    expect(requireTestid('holding-event-symbol-error').textContent).toContain(t('zh', 'symbolSearchFailed'));
+    expect(requireTestid('holding-event-symbol-error-code').textContent?.trim()).toBe('ASSET_SEARCH_FAILED');
+    expect(requireTestid('holding-event-symbol-trace-id').textContent).toContain('trace-search');
+    expect(bodyText()).not.toContain(BACKEND_MESSAGE_CANARY);
+    // 錯誤只屬於這個區塊:其他欄位仍可編輯。
+    expect((requireTestid('holding-event-amount') as HTMLInputElement).disabled).toBe(false);
+    expect((requireTestid('holding-event-note') as HTMLTextAreaElement).disabled).toBe(false);
+
+    fail = false;
+    const before = assetQueries(fetchImpl).length;
+    await click(requireTestid('holding-event-symbol-retry'));
+    await flushAsync(16);
+    expect(assetQueries(fetchImpl).length, '重試必須真的再打一次').toBe(before + 1);
+    expect(testid('holding-event-symbol-error')).toBeNull();
+    expect(testid('holding-event-symbol-option-AAPL')).toBeTruthy();
+  });
+
+  it('distinguishesEmptyNoTradableAndTruncatedResults', async () => {
+    vi.useFakeTimers();
+    const many = Array.from({ length: 10 }, (_, i) => assetDto(`SYM${i}`));
+    const fetchImpl = holdingEventFetch({
+      assets: (query) => {
+        if (query === 'ZZZZ') return assetPage([]);
+        if (query === 'BND') return assetPage([assetDto('BND1', { tradeable: false }), assetDto('BND2', { tradeable: false })]);
+        if (query === 'S') return assetPage(many, 37);
+        return assetPage([]);
+      },
+    });
+    await mountDialog({ fetchImpl, props: FROM_TRADES });
+
+    await typeSymbol('ZZZZ');
+    await advance(250);
+    expect(requireTestid('holding-event-symbol-empty').textContent).toContain(t('zh', 'symbolNoResults'));
+    expect(testid('holding-event-symbol-no-tradable')).toBeNull();
+
+    await typeSymbol('BND');
+    await advance(250);
+    expect(requireTestid('holding-event-symbol-no-tradable').textContent).toContain(t('zh', 'symbolNoTradable'));
+    expect(testid('holding-event-symbol-empty'), '有結果就不是 empty').toBeNull();
+    expect(symbolOptionRows()).toHaveLength(0);
+
+    await typeSymbol('S');
+    await advance(250);
+    expect(symbolOptionRows()).toHaveLength(10);
+    expect(requireTestid('holding-event-symbol-truncated').textContent).toContain(t('zh', 'symbolMoreResults'));
+  });
+
+  it('neverLetsAStaleSlowerResponseOverwriteTheNewerQuery', async () => {
+    vi.useFakeTimers();
+    const slow = deferred<Response>();
+    const fast = deferred<Response>();
+    const fetchImpl = holdingEventFetch({
+      assets: (query) => {
+        if (query === 'AAP') return slow.promise;
+        if (query === 'AAPL') return fast.promise;
+        return assetPage([]);
+      },
+    });
+    await mountDialog({ fetchImpl, props: FROM_TRADES });
+
+    await typeSymbol('AAP');
+    await advance(250);
+    await typeSymbol('AAPL');
+    await advance(250);
+    fast.resolve(assetPage([AAPL_ASSET]));
+    await flushAsync(16);
+    slow.resolve(assetPage([assetDto('AAPX')]));
+    await flushAsync(16);
+
+    expect(testid('holding-event-symbol-option-AAPL')).toBeTruthy();
+    expect(testid('holding-event-symbol-option-AAPX'), '舊查詢的晚到結果不得覆蓋').toBeNull();
+  });
+
+  it('withoutAPickedSymbolShowsTheSymbolErrorAndKeepsSubmitDisabled', async () => {
+    vi.useFakeTimers();
+    const { fetchImpl } = await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+
+    await typeInto('holding-event-amount', '120');
+    expect(submitButton().disabled).toBe(true);
+    // 鐵律 6:其餘欄位都合法時,送出鈕 disabled 的唯一原因必須可見。
+    expect(fieldError('symbol')).toBe(t('zh', 'holdingEventErrSymbol'));
+    expect(symbolInput().getAttribute('aria-invalid')).toBe('true');
+    expect(symbolInput().getAttribute('aria-describedby')).toContain('holding-event-symbol-error');
+    await submit();
+    expect(dividendCalls(fetchImpl)).toHaveLength(0);
+
+    await pickAaplByKeyboard();
+    expect(fieldError('symbol')).toBeUndefined();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('showsTheSymbolErrorAfterTheInputIsLeftEmpty', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    expect(fieldError('symbol'), '開啟時不提早罵人').toBeUndefined();
+
+    symbolInput().dispatchEvent(new FocusEvent('blur'));
+    await flushAsync();
+    expect(fieldError('symbol')).toBe(t('zh', 'holdingEventErrSymbol'));
+  });
+
+  it('editingTheQueryAfterAPickClearsTheSelection', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await pickAaplByKeyboard();
+    await typeInto('holding-event-amount', '120');
+    expect(submitButton().disabled).toBe(false);
+
+    await typeSymbol('AAP');
+    expect(testid('holding-event-amount-ccy'), '改了關鍵字 = 選定作廢').toBeNull();
+    expect(submitButton().disabled).toBe(true);
+  });
+
+  it('switchingModeKeepsThePickedSymbol', async () => {
+    vi.useFakeTimers();
+    await mountDialog({ fetchImpl: aaplSearchFetch(), props: FROM_TRADES });
+    await pickAaplByKeyboard();
+
+    await click(requireTestid('holding-event-mode-split'));
+    expect(symbolInput().value).toBe('AAPL');
+    await click(requireTestid('holding-event-mode-cash-dividend'));
+    expect(requireTestid('holding-event-amount-ccy').textContent?.trim()).toBe('USD');
+  });
+
+  it('keepsTheListboxInTheDocumentFlowWithSpecSizes', () => {
+    // U-04:對話框 body 會捲動,絕對定位的下拉會被裁切。
+    expect(holdingEventDialogSource).toMatch(/\.sym-pop\s*\{[^}]*margin-top:\s*8px/);
+    expect(holdingEventDialogSource).not.toMatch(/\.sym-pop\s*\{[^}]*position:\s*absolute/);
+    expect(holdingEventDialogSource).toMatch(/\.sym-list\s*\{[^}]*max-height:\s*240px[^}]*overflow-y:\s*auto/);
+    expect(holdingEventDialogSource).toMatch(/\.sym-row\s*\{[^}]*min-height:\s*44px/);
+    expect(holdingEventDialogSource).toMatch(/\.sym-row\s*\{[^}]*padding:\s*8px 12px/);
+    expect(holdingEventDialogSource).toMatch(/searchAssets\(/);
   });
 });
