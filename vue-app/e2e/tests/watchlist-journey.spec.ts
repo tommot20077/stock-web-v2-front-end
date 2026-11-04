@@ -55,7 +55,9 @@ test('W1 Markets ★ 建立「科技股」並加入 → Watchlist 頁顯示 → 
   // NVDA ★ → 勾選「科技股」(立即寫入;以回應 DTO 更新,不做樂觀更新)
   await star(page, 'NVDA').click();
   const nvdaOption = pickerOption(page, LIST_NAME);
-  await nvdaOption.getByTestId('watchlist-picker-checkbox').check();
+  // 不用 check():選擇器刻意不做樂觀更新(toggle 先把 checkbox 翻回原狀,等回應 DTO 才由 prop 勾選),
+  // check() 會在點擊當下要求狀態已翻轉而失敗;改為 click() 後等儲存結束、再斷言 DTO 驅動的勾選狀態。
+  await nvdaOption.getByTestId('watchlist-picker-checkbox').click();
   await expect(nvdaOption.getByTestId('watchlist-picker-option-saving')).toHaveCount(0);
   await expect(nvdaOption.getByTestId('watchlist-picker-checkbox')).toBeChecked();
   await page.getByTestId('watchlist-picker-close').click();
