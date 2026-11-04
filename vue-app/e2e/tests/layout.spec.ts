@@ -6,6 +6,7 @@ import {
   WATCHLIST_ITEMS,
   WATCHLISTS,
   expectNoHorizontalScroll,
+  measureOverflow,
   mockPortfolioApi,
 } from '../support/portfolioStubs';
 
@@ -768,6 +769,9 @@ for (const width of [320, 375, 768, 1280, 1440]) {
 /**
  * L12:Markets 開啟 WatchlistPicker(20 個清單、30 字名稱)—— 面板完整在視窗內(< 480px 為底部面板,左右下各 16px);
  * 清單名稱換行不溢出面板;整頁不水平捲動。
+ * 例外(deferred,非本 phase 範圍):Markets 頁首搜尋框(固定 280px)與 tabs / LIVE 列是 scaffold(a214f1b)既有骨架,
+ * < 640px 本來就撐寬 .main(UI-SPEC「既有、本 phase 不碰的頁面骨架」)。此處 < 640px 改量「開啟選擇器不增加 .main 的捲動寬」
+ * + documentElement 不捲;>= 640px 仍量 documentElement 與 .main 皆不捲。
  */
 for (const width of [320, 375, 768, 1280]) {
   for (const lang of LANGS) {
@@ -780,14 +784,33 @@ for (const width of [320, 375, 768, 1280]) {
 
       const star = page.locator('[data-testid="markets-star"][data-symbol="AAPL"]');
       await expect(star).toBeVisible();
+      const before = await measureOverflow(page);
       await star.click();
       const picker = page.getByTestId('watchlist-picker');
       await expect(picker).toBeVisible();
       await expect(page.getByTestId('watchlist-picker-option')).toHaveCount(WATCHLISTS.length);
       // 已達 20 個清單:新增清單 disabled + 上限文案(可見原因,鐵律 6)
       await expect(page.getByTestId('watchlist-picker-limit')).toBeVisible();
+      await waitForFiniteAnimations(page);
 
-      const clientWidth = await expectNoHorizontalScroll(page);
+      let clientWidth: number;
+      if (width >= 640) {
+        clientWidth = await expectNoHorizontalScroll(page);
+      } else {
+        const after = await measureOverflow(page);
+        clientWidth = after.docClient;
+        expect(after.docScroll, `頁面寬 ${after.docScroll}px 超出視窗 ${after.docClient}px`).toBeLessThanOrEqual(after.docClient);
+        expect(
+          after.mainScroll,
+          `開啟選擇器後 main 捲動寬 ${after.mainScroll}px 大於開啟前 ${before.mainScroll}px(選擇器自己撐寬了 main)`,
+        ).toBeLessThanOrEqual(Math.max(before.mainScroll, after.mainClient));
+        if (before.mainScroll > before.mainClient) {
+          test.info().annotations.push({
+            type: 'deferred',
+            description: `Markets 既有頁首 / tabs 在 ${width}px 撐寬 main:${before.mainScroll}px > ${before.mainClient}px(非選擇器造成)`,
+          });
+        }
+      }
       const panel = await boxOf(page, 'watchlist-picker');
       expectInsideViewport(panel, clientWidth, '選擇器面板');
       expect(panel.top, `面板上緣 ${panel.top}px 在視窗外`).toBeGreaterThanOrEqual(-0.5);
@@ -826,8 +849,22 @@ for (const width of [320, 375, 768, 1280]) {
   }
 }
 
+/**
+ * 等頁面上「有限次數」的 CSS 動畫跑完(對話框 mask fade / 面板 rise translateY(12px) 220ms)。
+ * 量多個元素是分次呼叫 boundingBox,開啟動畫途中量會把位移差算進去(4 workers 負載下實際出現 11.3px 假失敗);
+ * 無限動畫(骨架 pulse、即時圓點)不等。
+ */
+async function waitForFiniteAnimations(page: Page): Promise<void> {
+  await page.evaluate(() => Promise.all(
+    document.getAnimations()
+      .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+      .map((a) => a.finished.catch(() => undefined)),
+  ));
+}
+
 /** L13 用:對話框面板、footer 兩顆按鈕、模式按鈕的版面量測(面板在視窗內;footer 在面板內,< 400px 直排滿寬)。 */
 async function expectHoldingEventDialogLayout(page: Page, width: number, what: string, withModes: boolean): Promise<void> {
+  await waitForFiniteAnimations(page);
   const clientWidth = await expectNoHorizontalScroll(page);
   const panel = await boxOf(page, 'holding-event-dialog');
   expectInsideViewport(panel, clientWidth, `${what} 面板`);
