@@ -795,6 +795,8 @@ const apiKpis = computed<KpiCard[]>(() => {
 
   const roiText = fmtRatioPct(s.roi);
   const pnlSign = signTone(fmtSignedMoney(s.totalPnl, base, 0));
+  // DIV-02(D-01、U-10):roi / totalPnl 已含股利(後端),這裡只另列股利收入;兩者皆 0 不渲染。
+  const roiNotes = dividendIncomeNotes(s);
 
   return [
     {
@@ -825,9 +827,22 @@ const apiKpis = computed<KpiCard[]>(() => {
       v: roiText ?? '—',
       s: `${t(lang, 'totalPnlLabel')} ${fmtSignedMoney(s.totalPnl, base, 0)}`,
       ...pnlSign,
+      notes: roiNotes,
     },
   ];
 });
+
+/** KPI #4 的股利收入 Hint(`--fg-dim`,中性):有預扣稅另列;金額為基準幣、0 位小數(UI-SPEC §4)。 */
+function dividendIncomeNotes(s: PortfolioSummaryDto): { testid: string; text: string }[] {
+  const income = s.dividendIncome ?? 0;
+  const tax = s.dividendTaxWithheld ?? 0;
+  if (income === 0 && tax === 0) return [];
+  const amount = fmtSignedMoney(income, s.baseCurrency, 0);
+  const text = tax > 0
+    ? tf(props.lang, 'dividendIncomeLineWithTax', { amount, tax: fmtMoney(tax, s.baseCurrency, 0) })
+    : tf(props.lang, 'dividendIncomeLine', { amount });
+  return [{ testid: 'overview-kpi-dividend-income', text }];
+}
 
 const kpiCards = computed(() => (live ? mockKpis.value : apiKpis.value));
 
