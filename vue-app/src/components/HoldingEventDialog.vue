@@ -48,87 +48,215 @@
           >{{ fieldErrorText('symbol') }}</p>
 
           <div id="holding-event-type-label" class="lab">{{ t(lang, 'type') }}</div>
-          <div class="type-toggle" role="group" aria-labelledby="holding-event-type-label">
+          <div
+            class="type-toggle"
+            role="group"
+            aria-labelledby="holding-event-type-label"
+            :aria-describedby="describedBy('type')"
+          >
             <button
+              v-for="option in MODE_OPTIONS"
+              :key="option.mode"
               type="button"
-              class="type-btn active"
-              data-testid="holding-event-mode-cash-dividend"
-              aria-pressed="true"
+              :class="['type-btn', { active: mode === option.mode }]"
+              :data-testid="option.testid"
+              :aria-pressed="mode === option.mode ? 'true' : 'false'"
               :disabled="submitting"
-            >{{ t(lang, 'holdingEventModeCashDividend') }}</button>
+              @click="selectMode(option.mode)"
+            >{{ t(lang, option.labelKey) }}</button>
           </div>
+          <p
+            v-if="fieldErrorText('type')"
+            :id="fieldErrorId('type')"
+            class="field-error"
+            data-testid="holding-event-field-error-type"
+          >{{ fieldErrorText('type') }}</p>
 
-          <label class="lab" for="holding-event-amount">{{ t(lang, 'holdingEventAmount') }}</label>
-          <div class="amount-row">
+          <!-- 現金股利:實領金額(Display)、預扣稅、入帳時間 -->
+          <template v-if="mode === 'cashDividend'">
+            <label class="lab" for="holding-event-amount">{{ t(lang, 'holdingEventAmount') }}</label>
+            <div class="amount-row">
+              <input
+                id="holding-event-amount"
+                ref="amountInput"
+                v-model="amount"
+                type="text"
+                inputmode="decimal"
+                autocomplete="off"
+                class="inp big"
+                data-testid="holding-event-amount"
+                :aria-invalid="invalidAttr('amount')"
+                :aria-describedby="describedBy('amount', 'holding-event-amount-hint')"
+                :disabled="submitting"
+                @blur="touched.amount = true"
+              />
+              <span
+                v-if="selectedCurrency"
+                class="ccy-tag"
+                data-testid="holding-event-amount-ccy"
+              >{{ selectedCurrency }}</span>
+            </div>
+            <p id="holding-event-amount-hint" class="hint">{{ amountHint }}</p>
+            <p
+              v-if="fieldErrorText('amount')"
+              :id="fieldErrorId('amount')"
+              class="field-error"
+              data-testid="holding-event-field-error-amount"
+            >{{ fieldErrorText('amount') }}</p>
+
+            <label class="lab" for="holding-event-tax">{{ t(lang, 'holdingEventTax') }}</label>
             <input
-              id="holding-event-amount"
-              ref="amountInput"
-              v-model="amount"
+              id="holding-event-tax"
+              v-model="tax"
+              type="text"
+              inputmode="decimal"
+              autocomplete="off"
+              class="inp"
+              data-testid="holding-event-tax"
+              :aria-invalid="invalidAttr('withholdingTax')"
+              :aria-describedby="describedBy('withholdingTax', 'holding-event-tax-hint')"
+              :disabled="submitting"
+            />
+            <p id="holding-event-tax-hint" class="hint">{{ t(lang, 'holdingEventTaxHint') }}</p>
+            <p
+              v-if="fieldErrorText('withholdingTax')"
+              :id="fieldErrorId('withholdingTax')"
+              class="field-error"
+              data-testid="holding-event-field-error-withholdingTax"
+            >{{ fieldErrorText('withholdingTax') }}</p>
+
+            <label class="lab" for="holding-event-paid-at">{{ t(lang, 'holdingEventPaidAt') }}</label>
+            <input
+              id="holding-event-paid-at"
+              v-model="paidAt"
+              type="datetime-local"
+              class="inp"
+              data-testid="holding-event-paid-at"
+              :aria-invalid="invalidAttr('paidAt')"
+              :aria-describedby="describedBy('paidAt', 'holding-event-paid-at-hint')"
+              :max="maxPaidAt"
+              :disabled="submitting"
+              @blur="touched.paidAt = true"
+            />
+            <p id="holding-event-paid-at-hint" class="hint">{{ t(lang, 'holdingEventPaidAtHint') }}</p>
+            <p
+              v-if="fieldErrorText('paidAt')"
+              :id="fieldErrorId('paidAt')"
+              class="field-error"
+              data-testid="holding-event-field-error-paidAt"
+            >{{ fieldErrorText('paidAt') }}</p>
+
+          </template>
+
+          <!-- 配股:實領股數(Display);目前持股只顯示、不計算(D-05) -->
+          <template v-else-if="mode === 'stockDividend'">
+            <label class="lab" for="holding-event-shares">{{ t(lang, 'holdingEventShares') }}</label>
+            <input
+              id="holding-event-shares"
+              ref="sharesInput"
+              v-model="shares"
               type="text"
               inputmode="decimal"
               autocomplete="off"
               class="inp big"
-              data-testid="holding-event-amount"
-              :aria-invalid="invalidAttr('amount')"
-              :aria-describedby="describedBy('amount', 'holding-event-amount-hint')"
+              data-testid="holding-event-shares"
+              :aria-invalid="invalidAttr('quantity')"
+              :aria-describedby="describedBy('quantity', 'holding-event-shares-hint', currentQtyText ? 'holding-event-current-qty' : '')"
               :disabled="submitting"
-              @blur="touched.amount = true"
+              @blur="touched.shares = true"
             />
-            <span
-              v-if="selectedCurrency"
-              class="ccy-tag"
-              data-testid="holding-event-amount-ccy"
-            >{{ selectedCurrency }}</span>
-          </div>
-          <p id="holding-event-amount-hint" class="hint">{{ amountHint }}</p>
-          <p
-            v-if="fieldErrorText('amount')"
-            :id="fieldErrorId('amount')"
-            class="field-error"
-            data-testid="holding-event-field-error-amount"
-          >{{ fieldErrorText('amount') }}</p>
+            <p id="holding-event-shares-hint" class="hint">{{ t(lang, 'holdingEventSharesHint') }}</p>
+            <p
+              v-if="currentQtyText"
+              id="holding-event-current-qty"
+              class="hint num"
+              data-testid="holding-event-current-qty"
+            >{{ currentQtyText }}</p>
+            <p
+              v-if="fieldErrorText('quantity')"
+              :id="fieldErrorId('quantity')"
+              class="field-error"
+              data-testid="holding-event-field-error-quantity"
+            >{{ fieldErrorText('quantity') }}</p>
+          </template>
 
-          <label class="lab" for="holding-event-tax">{{ t(lang, 'holdingEventTax') }}</label>
-          <input
-            id="holding-event-tax"
-            v-model="tax"
-            type="text"
-            inputmode="decimal"
-            autocomplete="off"
-            class="inp"
-            data-testid="holding-event-tax"
-            :aria-invalid="invalidAttr('withholdingTax')"
-            :aria-describedby="describedBy('withholdingTax', 'holding-event-tax-hint')"
-            :disabled="submitting"
-          />
-          <p id="holding-event-tax-hint" class="hint">{{ t(lang, 'holdingEventTaxHint') }}</p>
-          <p
-            v-if="fieldErrorText('withholdingTax')"
-            :id="fieldErrorId('withholdingTax')"
-            class="field-error"
-            data-testid="holding-event-field-error-withholdingTax"
-          >{{ fieldErrorText('withholdingTax') }}</p>
+          <!-- 拆股 / 合股:比例 new : old(兩個 96px Display 輸入視為一個焦點元素,D-08) -->
+          <template v-else>
+            <div id="holding-event-ratio-label" class="lab">{{ t(lang, 'holdingEventRatio') }}</div>
+            <div
+              class="ratio-group"
+              role="group"
+              aria-labelledby="holding-event-ratio-label"
+              :aria-describedby="describedBy('ratio', 'holding-event-ratio-hint')"
+            >
+              <input
+                id="holding-event-ratio-new"
+                ref="ratioNewInput"
+                v-model="ratioNew"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                class="inp big num"
+                data-testid="holding-event-ratio-new"
+                :aria-label="t(lang, 'holdingEventRatioNew')"
+                :aria-invalid="invalidAttr('ratio')"
+                :disabled="submitting"
+                @blur="touched.ratio = true"
+              />
+              <span class="ratio-sep" aria-hidden="true">:</span>
+              <input
+                id="holding-event-ratio-old"
+                v-model="ratioOld"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                class="inp big num"
+                data-testid="holding-event-ratio-old"
+                :aria-label="t(lang, 'holdingEventRatioOld')"
+                :aria-invalid="invalidAttr('ratio')"
+                :disabled="submitting"
+                @blur="touched.ratio = true"
+              />
+            </div>
+            <p id="holding-event-ratio-hint" class="hint">{{ t(lang, 'holdingEventRatioHint') }}</p>
+            <!-- 讀法只是重述輸入(UI-SPEC §Money 唯一允許的前端衍生),不換算股數 -->
+            <p v-if="ratioReadText" class="hint num" data-testid="holding-event-ratio-read">{{ ratioReadText }}</p>
+            <p
+              v-if="currentQtyText"
+              class="hint num"
+              data-testid="holding-event-current-qty"
+            >{{ currentQtyText }}</p>
+            <p
+              v-if="fieldErrorText('ratio')"
+              :id="fieldErrorId('ratio')"
+              class="field-error"
+              data-testid="holding-event-field-error-ratio"
+            >{{ fieldErrorText('ratio') }}</p>
+          </template>
 
-          <label class="lab" for="holding-event-paid-at">{{ t(lang, 'holdingEventPaidAt') }}</label>
-          <input
-            id="holding-event-paid-at"
-            v-model="paidAt"
-            type="datetime-local"
-            class="inp"
-            data-testid="holding-event-paid-at"
-            :aria-invalid="invalidAttr('paidAt')"
-            :aria-describedby="describedBy('paidAt', 'holding-event-paid-at-hint')"
-            :max="maxPaidAt"
-            :disabled="submitting"
-            @blur="touched.paidAt = true"
-          />
-          <p id="holding-event-paid-at-hint" class="hint">{{ t(lang, 'holdingEventPaidAtHint') }}</p>
-          <p
-            v-if="fieldErrorText('paidAt')"
-            :id="fieldErrorId('paidAt')"
-            class="field-error"
-            data-testid="holding-event-field-error-paidAt"
-          >{{ fieldErrorText('paidAt') }}</p>
+          <!-- 配股、拆股:除權日原樣 YYYY-MM-DD,不轉時區(後端以 TradingDay.startOf 換算) -->
+          <template v-if="mode !== 'cashDividend'">
+            <label class="lab" for="holding-event-effective-date">{{ t(lang, 'holdingEventEffectiveDate') }}</label>
+            <input
+              id="holding-event-effective-date"
+              v-model="effectiveDate"
+              type="date"
+              class="inp num"
+              data-testid="holding-event-effective-date"
+              :aria-invalid="invalidAttr('effectiveDate')"
+              :aria-describedby="describedBy('effectiveDate', 'holding-event-effective-date-hint')"
+              :max="maxEffectiveDate"
+              :disabled="submitting"
+              @blur="touched.effectiveDate = true"
+            />
+            <p id="holding-event-effective-date-hint" class="hint">{{ t(lang, 'holdingEventEffectiveDateHint') }}</p>
+            <p
+              v-if="fieldErrorText('effectiveDate')"
+              :id="fieldErrorId('effectiveDate')"
+              class="field-error"
+              data-testid="holding-event-field-error-effectiveDate"
+            >{{ fieldErrorText('effectiveDate') }}</p>
+          </template>
 
           <label class="lab" for="holding-event-note">{{ t(lang, 'notes') }}</label>
           <textarea
@@ -150,7 +278,7 @@
           >{{ fieldErrorText('note') }}</p>
 
           <!-- 常駐揭露:模式說明 → 只記帳(鐵律 5)→ 寫入後不可改(append-only,錯了只能沖銷) -->
-          <p class="hint note-first">{{ tf(lang, 'holdingEventNoteCash', { code: currencyForCopy }) }}</p>
+          <p class="hint note-first">{{ modeNoteText }}</p>
           <p class="hint">{{ t(lang, 'holdingEventLedgerOnlyNote') }}</p>
           <p class="hint">{{ t(lang, 'holdingEventIrreversibleNote') }}</p>
           <p
@@ -191,6 +319,20 @@
               <div class="span-2">
                 <span>{{ t(lang, 'holdingEventPaidAt') }}</span>
                 <b class="num entry-id">{{ formatDateTime(recorded.dto.paidAt) }}</b>
+              </div>
+            </template>
+            <template v-else>
+              <div class="span-2">
+                <span>{{ t(lang, 'holdingEventQtyDelta') }}</span>
+                <b class="num" data-testid="holding-event-result-qty-delta">{{ fmtSignedQuantity(recorded.dto.quantityDelta) }}</b>
+              </div>
+              <div v-if="recorded.dto.type === 'SPLIT'" class="span-2">
+                <span>{{ t(lang, 'holdingEventRatio') }}</span>
+                <b class="num">{{ recorded.dto.ratioNew }} : {{ recorded.dto.ratioOld }}</b>
+              </div>
+              <div class="span-2">
+                <span>{{ t(lang, 'holdingEventEffectiveDate') }}</span>
+                <b class="num">{{ recorded.dto.effectiveDate }}</b>
               </div>
             </template>
             <div class="span-2">
@@ -257,7 +399,7 @@ import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyHoldingEventCreated } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import { fmtMoney, fmtSignedMoney, minorUnits } from '../moneyFormat';
+import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
 import type { PortfolioActivityDto } from '../services/apiTypes';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
 import type { Lang } from '../types';
@@ -287,8 +429,15 @@ const emit = defineEmits<{
   (e: 'reversalConflict', code: string): void;
 }>();
 
+const MODE_OPTIONS: ReadonlyArray<{ mode: HoldingEventMode; testid: string; labelKey: string }> = [
+  { mode: 'cashDividend', testid: 'holding-event-mode-cash-dividend', labelKey: 'holdingEventModeCashDividend' },
+  { mode: 'stockDividend', testid: 'holding-event-mode-stock-dividend', labelKey: 'holdingEventModeStockDividend' },
+  { mode: 'split', testid: 'holding-event-mode-split', labelKey: 'holdingEventModeSplit' },
+];
+
 type Step = 'form' | 'result';
 const step = ref<Step>('form');
+const mode = ref<HoldingEventMode>('cashDividend');
 
 const selectedSymbol = ref<string | null>(null);
 const selectedCurrency = ref<string | null>(null);
@@ -296,21 +445,28 @@ const amount = ref('');
 const tax = ref('');
 const paidAt = ref('');
 const maxPaidAt = ref('');
+const shares = ref('');
+const ratioNew = ref('');
+const ratioOld = ref('');
+const effectiveDate = ref('');
+const maxEffectiveDate = ref('');
 const note = ref('');
 
 /** 欄位被使用者離開過才算「碰過」:空欄位在 blur 前不提早罵人。 */
-const touched = reactive({ amount: false, paidAt: false });
+const touched = reactive({ amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
 
 const submitting = ref(false);
 type RecordedEvent = { kind: 'dividend'; dto: DividendDto } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
 const recorded = ref<RecordedEvent | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
+const sharesInput = ref<HTMLInputElement | null>(null);
+const ratioNewInput = ref<HTMLInputElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 
 // =================== Idempotency-Key 的生命週期(D-13 = 04.1 D-11) ===================
 // 規則 1:key 在「按下送出」那一刻產生,同一次嘗試的重試沿用同一把。
-// 規則 2:使用者自上次送出後動過任何欄位 → 下次送出換新 key(改過欄位 = 新意圖)。
+// 規則 2:使用者自上次送出後動過任何欄位(含模式)→ 下次送出換新 key(改過欄位 = 新意圖)。
 // `currentKey` 絕不得綁進任何模板節點 —— 顯示 key 只會邀請使用者去改它。
 const currentKey = ref<string | null>(null);
 const dirtySinceSubmit = ref(false);
@@ -324,31 +480,64 @@ interface SubmitError {
 }
 const submitError = ref<SubmitError | null>(null);
 
-function resetForm() {
-  step.value = 'form';
-  selectedSymbol.value = props.symbol;
-  selectedCurrency.value = props.holding?.currency ?? null;
+/** 本機日期 `YYYY-MM-DD`;除權日是標的市場的交易日,前端只以本機日期擋「晚於今天」。 */
+function todayLocalDate(): string {
+  return toLocalInputValue(new Date()).slice(0, 10);
+}
+
+/** 清空模式專屬欄位(切換模式與開啟共用);標的與備註不在此列。 */
+function resetModeFields() {
   amount.value = '';
   tax.value = '';
-  note.value = '';
+  shares.value = '';
+  ratioNew.value = '';
+  ratioOld.value = '';
   const now = new Date();
   paidAt.value = toLocalInputValue(now);
   maxPaidAt.value = toLocalInputValue(now);
-  recorded.value = null;
+  effectiveDate.value = todayLocalDate();
+  maxEffectiveDate.value = todayLocalDate();
   touched.amount = false;
   touched.paidAt = false;
+  touched.shares = false;
+  touched.ratio = false;
+  touched.effectiveDate = false;
+}
+
+function resetForm() {
+  step.value = 'form';
+  mode.value = props.initialMode;
+  selectedSymbol.value = props.symbol;
+  selectedCurrency.value = props.holding?.currency ?? null;
+  note.value = '';
+  resetModeFields();
+  recorded.value = null;
   submitError.value = null;
   currentKey.value = null;
   dirtySinceSubmit.value = false;
+}
+
+/** 開啟焦點落在該模式唯一的 Display 元素,不落在送出鈕以免 Enter 誤送。 */
+function focusPrimaryField() {
+  const target = mode.value === 'cashDividend'
+    ? amountInput.value
+    : mode.value === 'stockDividend' ? sharesInput.value : ratioNewInput.value;
+  target?.focus();
 }
 
 watch(() => props.open, async (open) => {
   if (!open) return;
   resetForm();
   await nextTick();
-  // 焦點落在唯一 Display 元素(金額),不落在送出鈕以免 Enter 誤送。
-  amountInput.value?.focus();
+  focusPrimaryField();
 }, { immediate: true });
+
+/** 切換模式保留標的與備註,清空其餘欄位與錯誤;key 由下方 watch 標 dirty。 */
+function selectMode(next: HoldingEventMode) {
+  if (submitting.value || mode.value === next) return;
+  mode.value = next;
+  resetModeFields();
+}
 
 /** 未知幣別時文案的 `{code}` 以 `—` 代替,不猜測。 */
 const currencyForCopy = computed(() => selectedCurrency.value ?? '—');
@@ -357,13 +546,45 @@ const amountHint = computed(() => (selectedSymbol.value
   ? tf(props.lang, 'holdingEventAmountHint', { code: currencyForCopy.value })
   : t(props.lang, 'holdingEventAmountHintNoSymbol')));
 
+const modeNoteText = computed(() => {
+  if (mode.value === 'stockDividend') return t(props.lang, 'holdingEventNoteStock');
+  if (mode.value === 'split') return t(props.lang, 'holdingEventNoteSplit');
+  return tf(props.lang, 'holdingEventNoteCash', { code: currencyForCopy.value });
+});
+
+/** 目前持股:只顯示開啟者給的值,不做任何加減(Phase 3 D-04)。 */
+const currentQtyText = computed(() => {
+  const quantity = props.holding?.totalQuantity;
+  if (quantity === undefined || quantity === null) return '';
+  return tf(props.lang, 'holdingEventCurrentQty', { qty: fmtQuantity(quantity) });
+});
+
 const dialogTitle = computed(() => (step.value === 'result' ? resultTitleText.value : t(props.lang, 'holdingEventTitle')));
 
-const submitLabel = computed(() => t(props.lang, 'holdingEventRecordCashDividend'));
+const SUBMIT_LABEL_KEY: Record<HoldingEventMode, string> = {
+  cashDividend: 'holdingEventRecordCashDividend',
+  stockDividend: 'holdingEventRecordStockDividend',
+  split: 'holdingEventRecordSplit',
+};
+const submitLabel = computed(() => t(props.lang, SUBMIT_LABEL_KEY[mode.value]));
 
-const resultTitleText = computed(() => t(props.lang, 'holdingEventCashDividendRecorded'));
+/** result 標題只依後端 DTO 判斷;拆 / 合依回應的 `ratioNew > ratioOld`(D-02)。 */
+const resultTitleText = computed(() => {
+  const event = recorded.value;
+  if (!event || event.kind === 'dividend') return t(props.lang, 'holdingEventCashDividendRecorded');
+  if (event.dto.type === 'STOCK_DIVIDEND') return t(props.lang, 'holdingEventStockDividendRecorded');
+  return (event.dto.ratioNew ?? 0) > (event.dto.ratioOld ?? 0)
+    ? t(props.lang, 'holdingEventSplitRecorded')
+    : t(props.lang, 'holdingEventReverseSplitRecorded');
+});
 
-const recordedTypeLabel = computed(() => t(props.lang, 'holdingEventModeCashDividend'));
+const recordedTypeLabel = computed(() => {
+  const event = recorded.value;
+  if (!event || event.kind === 'dividend') return t(props.lang, 'holdingEventModeCashDividend');
+  return event.dto.type === 'STOCK_DIVIDEND'
+    ? t(props.lang, 'holdingEventModeStockDividend')
+    : t(props.lang, 'holdingEventModeSplit');
+});
 
 /** 本機時區的 `YYYY-MM-DD HH:mm`(與入帳時間輸入框同一個時區語意)。 */
 function formatDateTime(iso: string | null | undefined): string {
@@ -372,19 +593,26 @@ function formatDateTime(iso: string | null | undefined): string {
   return Number.isNaN(time.getTime()) ? iso : toLocalInputValue(time).replace('T', ' ');
 }
 
-/** 副標:數字一律取後端回傳值。 */
+/** 副標:數字一律取後端回傳值(股利帶號金額;股數調整 `{symbol} {帶號 quantityDelta}`)。 */
 const resultSubText = computed(() => {
   const event = recorded.value;
-  if (!event || event.kind !== 'dividend') return '';
-  return fmtSignedMoney(event.dto.amount, event.dto.currency, minorUnits(event.dto.currency));
+  if (!event) return '';
+  if (event.kind === 'dividend') {
+    return fmtSignedMoney(event.dto.amount, event.dto.currency, minorUnits(event.dto.currency));
+  }
+  return `${event.dto.symbol} ${fmtSignedQuantity(event.dto.quantityDelta)}`;
 });
 
 // =================== 前端自檢(UI-SPEC §Interaction 1 欄位契約) ===================
 // 後端 Bean Validation 才是權威;這裡只是在送出前把「必定被拒」的輸入擋下並說明原因。
-// 上限與小數位數與靜態文案(holdingEventErrAmount / holdingEventErrTax)一致,文案不從錯誤訊息解析。
+// 上限與小數位數與靜態文案(holdingEventErrAmount / Tax / Shares / Ratio)一致,文案不從錯誤訊息解析。
 const MONEY_MAX = 1_000_000_000_000;
+const SHARES_MAX = 1_000_000_000;
+const RATIO_MAX = 1000;
 const MAX_DECIMALS = 8;
 const DECIMAL_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
+const INTEGER_PATTERN = /^\d+$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function decimalWithin(text: string, min: number, max: number, allowZero: boolean): boolean {
   if (!DECIMAL_PATTERN.test(text)) return false;
@@ -395,9 +623,21 @@ function decimalWithin(text: string, min: number, max: number, allowZero: boolea
   return allowZero ? value >= min : value > min;
 }
 
+function ratioSideValid(text: string): boolean {
+  if (!INTEGER_PATTERN.test(text)) return false;
+  const value = Number(text);
+  return value >= 1 && value <= RATIO_MAX;
+}
+
 const amountValid = computed(() => decimalWithin(amount.value.trim(), 0, MONEY_MAX, false));
 /** 預扣稅選填:空 = 0。 */
 const taxValid = computed(() => tax.value.trim() === '' || decimalWithin(tax.value.trim(), 0, MONEY_MAX, true));
+const sharesValid = computed(() => decimalWithin(shares.value.trim(), 0, SHARES_MAX, false));
+const ratioValid = computed(() => {
+  const n = ratioNew.value.trim();
+  const o = ratioOld.value.trim();
+  return ratioSideValid(n) && ratioSideValid(o) && Number(n) !== Number(o);
+});
 
 /** 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。 */
 function isPaidAtValid(): boolean {
@@ -407,40 +647,92 @@ function isPaidAtValid(): boolean {
 }
 const paidAtValid = computed(() => isPaidAtValid());
 
-const canSubmit = computed(() => Boolean(selectedSymbol.value) && amountValid.value && taxValid.value && paidAtValid.value);
+/** 只擋「晚於今天」;時序規則(早於最近一筆調整)由後端判斷,同一天多筆依記錄順序疊加,不擋。 */
+function isEffectiveDateValid(): boolean {
+  return DATE_PATTERN.test(effectiveDate.value) && effectiveDate.value <= todayLocalDate();
+}
+const effectiveDateValid = computed(() => isEffectiveDateValid());
+
+/** 送出前自檢(送出當下重算時間類規則)。 */
+function isFormValid(): boolean {
+  if (!selectedSymbol.value) return false;
+  if (mode.value === 'cashDividend') return amountValid.value && taxValid.value && isPaidAtValid();
+  if (mode.value === 'stockDividend') return sharesValid.value && isEffectiveDateValid();
+  return ratioValid.value && isEffectiveDateValid();
+}
+
+const canSubmit = computed(() => {
+  if (!selectedSymbol.value) return false;
+  if (mode.value === 'cashDividend') return amountValid.value && taxValid.value && paidAtValid.value;
+  if (mode.value === 'stockDividend') return sharesValid.value && effectiveDateValid.value;
+  return ratioValid.value && effectiveDateValid.value;
+});
+
+/** 比例讀法:兩邊皆合法且不相等時重述輸入(不換算股數)。 */
+const ratioReadText = computed(() => {
+  if (!ratioValid.value) return '';
+  const n = Number(ratioNew.value.trim());
+  const o = Number(ratioOld.value.trim());
+  return tf(props.lang, n > o ? 'holdingEventRatioReadSplit' : 'holdingEventRatioReadReverse', { old: o, new: n });
+});
 
 // =================== 欄位級錯誤(後端 fields + 前端自檢共用同一組節點) ===================
 /**
- * `fields` 的 key → 前端自己的 i18n 文案。
- * **只用 key 判斷「哪個欄位錯了」** —— value 是 Bean Validation 的英文預設訊息,絕不入 DOM。
+ * 前端欄位 → 自己的 i18n 文案。
+ * 後端 `fields` **只用 key 判斷「哪個欄位錯了」** —— value 是 Bean Validation 的英文預設訊息,絕不入 DOM。
  */
 const FIELD_ERROR_COPY: Record<string, string> = {
   symbol: 'holdingEventErrSymbol',
+  type: 'holdingEventErrType',
   amount: 'holdingEventErrAmount',
   withholdingTax: 'holdingEventErrTax',
   paidAt: 'holdingEventErrPaidAt',
+  quantity: 'holdingEventErrShares',
+  ratio: 'holdingEventErrRatio',
+  effectiveDate: 'holdingEventErrEffectiveDate',
   note: 'tradeErrNote',
 };
 
-const serverFieldKeys = computed(() => Object.keys(submitError.value?.fields ?? {}));
+/** 後端 `fields` 的 key 若與前端欄位名不同,在此對應(比例兩邊共用一個錯誤節點)。 */
+const SERVER_FIELD_ALIAS: Record<string, string> = { ratioNew: 'ratio', ratioOld: 'ratio' };
 
-const hasFieldLevelErrors = computed(() => serverFieldKeys.value.some(field => field in FIELD_ERROR_COPY));
+/** 每個模式畫面上真的有錯誤節點的欄位。 */
+const MODE_FIELDS: Record<HoldingEventMode, string[]> = {
+  cashDividend: ['symbol', 'type', 'amount', 'withholdingTax', 'paidAt', 'note'],
+  stockDividend: ['symbol', 'type', 'quantity', 'effectiveDate', 'note'],
+  split: ['symbol', 'type', 'ratio', 'effectiveDate', 'note'],
+};
+
+const serverFields = computed(() => Object.keys(submitError.value?.fields ?? {})
+  .map(key => SERVER_FIELD_ALIAS[key] ?? key));
+
+/**
+ * `fields` 至少有一個 key 對得到本模式的錯誤節點,才算「欄位級」呈現;
+ * 一個都對不到(例如 `Idempotency-Key`)時退回底部的一般驗證錯誤 —— 否則按了送出卻什麼都看不到。
+ */
+const hasFieldLevelErrors = computed(() => serverFields.value.some(field => MODE_FIELDS[mode.value].includes(field)));
 
 function fieldErrorId(field: string): string {
   return `holding-event-${field}-error`;
 }
 
 function localFieldInvalid(field: string): boolean {
-  if (field === 'amount') return !amountValid.value && (touched.amount || amount.value !== '');
-  if (field === 'withholdingTax') return !taxValid.value;
-  if (field === 'paidAt') return !paidAtValid.value && (touched.paidAt || paidAt.value !== '');
-  return false;
+  switch (field) {
+    case 'amount': return !amountValid.value && (touched.amount || amount.value !== '');
+    case 'withholdingTax': return !taxValid.value;
+    case 'paidAt': return !paidAtValid.value && (touched.paidAt || paidAt.value !== '');
+    case 'quantity': return !sharesValid.value && (touched.shares || shares.value !== '');
+    // 只填了一邊時不提早罵人:兩邊都有輸入(或離開過欄位)才判斷。
+    case 'ratio': return !ratioValid.value && (touched.ratio || (ratioNew.value !== '' && ratioOld.value !== ''));
+    case 'effectiveDate': return !effectiveDateValid.value && (touched.effectiveDate || effectiveDate.value !== '');
+    default: return false;
+  }
 }
 
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFieldKeys.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
+  if (serverFields.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
   return '';
 }
 
@@ -456,11 +748,14 @@ function invalidAttr(field: string): 'true' | undefined {
 }
 
 /**
- * 任何欄位變動都會讓下一次送出換新 key,並清掉上一次的送出錯誤。
+ * 任何欄位(含模式、標的)變動都會讓下一次送出換新 key,並清掉上一次的送出錯誤。
  * `flush: 'sync'` 是刻意的:使用者改完欄位可能**立刻**按送出,預設的 pre-flush 會讓那一次仍沿用舊 key。
  */
 watch(
-  () => [selectedSymbol.value, amount.value, tax.value, paidAt.value, note.value],
+  () => [
+    mode.value, selectedSymbol.value, amount.value, tax.value, paidAt.value,
+    shares.value, ratioNew.value, ratioOld.value, effectiveDate.value, note.value,
+  ],
   () => {
     dirtySinceSubmit.value = true;
     submitError.value = null;
@@ -480,30 +775,62 @@ function ensureIdempotencyKey(): string {
   return currentKey.value;
 }
 
+/** 依模式送出;回傳後端 DTO 與重讀訊號的 cause。 */
+async function createEvent(symbol: string, idempotencyKey: string): Promise<RecordedEvent> {
+  const clients = getRuntimeApiClients();
+  const noteValue = note.value ? note.value : null;
+  if (mode.value === 'cashDividend') {
+    const dto = await clients.holdingEvents.createDividend({
+      symbol,
+      amount: Number(amount.value.trim()),
+      withholdingTax: tax.value.trim() === '' ? null : Number(tax.value.trim()),
+      // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
+      paidAt: toLocalIso(new Date(paidAt.value)),
+      note: noteValue,
+      reversalOfId: null,
+    }, idempotencyKey);
+    return { kind: 'dividend', dto };
+  }
+  const isStock = mode.value === 'stockDividend';
+  const dto = await clients.holdingEvents.createShareAdjustment({
+    symbol,
+    type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
+    quantity: isStock ? Number(shares.value.trim()) : null,
+    ratioNew: isStock ? null : Number(ratioNew.value.trim()),
+    ratioOld: isStock ? null : Number(ratioOld.value.trim()),
+    // 原字串送出,不轉時區(它是標的市場的交易日)。
+    effectiveDate: effectiveDate.value,
+    note: noteValue,
+    reversalOfId: null,
+  }, idempotencyKey);
+  return { kind: 'shareAdjustment', dto };
+}
+
+/** 讓所有自檢錯誤可見(程式化觸發送出時不得靜默)。 */
+function touchAll() {
+  touched.amount = true;
+  touched.paidAt = true;
+  touched.shares = true;
+  touched.ratio = true;
+  touched.effectiveDate = true;
+}
+
 async function submitEvent() {
   if (submitting.value) return;
   submitError.value = null;
-  if (!canSubmit.value || !isPaidAtValid() || !selectedSymbol.value) {
-    // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時讓欄位錯誤可見,不得靜默。
-    touched.amount = true;
-    touched.paidAt = true;
+  const symbol = selectedSymbol.value;
+  if (!symbol || !isFormValid()) {
+    // 正常路徑到不了這裡(送出鈕已 disabled)。
+    touchAll();
     return;
   }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
   try {
-    const dto = await getRuntimeApiClients().holdingEvents.createDividend({
-      symbol: selectedSymbol.value,
-      amount: Number(amount.value.trim()),
-      withholdingTax: tax.value.trim() === '' ? null : Number(tax.value.trim()),
-      // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
-      paidAt: toLocalIso(new Date(paidAt.value)),
-      note: note.value ? note.value : null,
-      reversalOfId: null,
-    }, idempotencyKey);
-    recorded.value = { kind: 'dividend', dto };
+    const event = await createEvent(symbol, idempotencyKey);
+    recorded.value = event;
     // 冪等命中(同一把 key 拿回既有紀錄)與首次建立走完全同一條路徑;重讀同一份資料無害。
-    notifyHoldingEventCreated(dto, 'dividend');
+    notifyHoldingEventCreated(event.dto, event.kind === 'dividend' ? 'dividend' : 'shareAdjustment');
     // 下一筆是新意圖,key 不得沿用。
     currentKey.value = null;
     dirtySinceSubmit.value = false;
@@ -511,7 +838,7 @@ async function submitEvent() {
     await nextTick();
     resultTitle.value?.focus();
     // 不發 toast:result 步驟本身就是確認。
-    emit('recorded', dto);
+    emit('recorded', event.dto);
   } catch (error) {
     handleSubmitFailure(error);
   } finally {
@@ -534,7 +861,7 @@ function handleSubmitFailure(error: unknown) {
 async function recordAnother() {
   resetForm();
   await nextTick();
-  amountInput.value?.focus();
+  focusPrimaryField();
 }
 
 function onMaskClick() {
@@ -622,6 +949,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 textarea.inp { resize: vertical; }
 .amount-row { display: flex; align-items: center; gap: 8px; }
 .amount-row .inp { flex: 1 1 auto; min-width: 0; }
+/* 比例輸入組:兩個 96px Display 輸入 + 中間 `:`(視為一個焦點元素) */
+.ratio-group { display: flex; align-items: center; gap: 12px; }
+.ratio-group .inp.big { width: 96px; text-align: center; }
+.ratio-sep { font-size: 13px; font-weight: 600; color: var(--fg-dim); }
 
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
@@ -707,6 +1038,17 @@ textarea.inp { resize: vertical; }
 }
 .btn-ghost:hover:not(:disabled) { background: var(--surface); }
 .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+
+/*
+  < 400px:面板 92vw 約 294px,en `Record stock dividend` 放不下並排的兩顆按鈕(U-05)——
+  footer 改直排:主要鈕在上、滿寬;取消在下、滿寬。DOM 順序不變(取消在前),以 column-reverse 讓主要鈕在上。
+*/
+@media (max-width: 399px) {
+  .ft { flex-direction: column-reverse; gap: 8px; padding-left: 16px; padding-right: 16px; }
+  .ft .btn-accent, .ft .btn-ghost { width: 100%; min-width: 0; }
+  .btn-accent { padding-left: 16px; padding-right: 16px; }
+  .btn-done { margin-left: 0; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .mask, .dialog, .check { animation: none; }
