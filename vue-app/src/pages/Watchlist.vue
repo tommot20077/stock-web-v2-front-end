@@ -1,196 +1,410 @@
 <template>
-  <div class="page">
-    <MockDataNotice :lang="lang" />
-    <div class="row-between" style="margin-bottom:18px">
-      <div>
+  <div class="page" data-testid="watchlist-page">
+    <div class="page-head">
+      <div class="head-main">
         <h2>{{ t(lang, 'watchlist') }}</h2>
-        <div class="sub">{{ lang === 'zh' ? '自訂多個清單、拖拉排序、即時行情更新' : 'Custom lists, drag to reorder, live quotes' }}</div>
+        <!-- 04.2-24:LiveQuoteStatus 放在 h2 下方(margin-top: 4px),取代舊副標 -->
       </div>
-      <button class="btn-accent" @click="newList">+ {{ lang === 'zh' ? '新增清單' : 'New list' }}</button>
-    </div>
-
-    <!-- List tabs -->
-    <div class="tabs">
-      <button v-for="(l, i) in lists" :key="l.id"
-              :class="['tab', { on: activeIdx === i }]"
-              @click="activeIdx = i">
-        {{ l.name }} <span class="count">{{ l.syms.length }}</span>
-      </button>
-      <button class="tab-add" @click="newList">+</button>
-    </div>
-
-    <div class="card">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:32px"></th>
-            <th>{{ t(lang, 'symbol') }}</th>
-            <th>{{ t(lang, 'name') }}</th>
-            <th class="right">{{ lang === 'zh' ? '價格/殖利率' : 'Price/Yield' }}</th>
-            <th class="right">{{ t(lang, 'change') }}</th>
-            <th class="right">{{ t(lang, 'volume') }}</th>
-            <th class="right">{{ lang === 'zh' ? '走勢' : 'Trend' }}</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(s, i) in activeRows" :key="s.sym"
-              draggable="true"
-              @dragstart="onDragStart(i)"
-              @dragend="clearDrag"
-              @dragover.prevent
-              @drop="onDrop(i)"
-              @click="$emit('chart', { sym: s.sym })">
-            <td class="grip">⋮⋮</td>
-            <td class="sym">{{ s.sym }}</td>
-            <td class="dim">{{ s.name }}</td>
-            <td class="right num">{{ priceText(s) }}</td>
-            <td class="right num" :class="changeValue(s) >= 0 ? 'up' : 'dn'">
-              {{ changeText(s) }}
-            </td>
-            <td class="right num dim">{{ volumeText(s) }}</td>
-            <td class="right">
-              <svg width="60" height="20" viewBox="0 0 60 20">
-                <polyline :points="sparkPoints(s.sym)" fill="none"
-                          :stroke="changeValue(s) >= 0 ? 'var(--up)' : 'var(--dn)'" stroke-width="1.4" />
-              </svg>
-            </td>
-            <td class="right">
-              <button class="x" @click.stop="remove(s.sym)">✕</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-if="activeRows.length === 0" class="empty">
-        {{ lang === 'zh' ? '清單是空的 — 從行情頁加入標的' : 'Empty list — add symbols from Markets' }}
+      <div class="head-actions">
+        <button
+          type="button"
+          class="btn-ghost-sm"
+          data-testid="watchlist-new-list"
+          :disabled="lists === null"
+        ><span aria-hidden="true">+ </span>{{ t(lang, 'watchlistNewList') }}</button>
       </div>
     </div>
+
+    <!-- 讀取失敗(尚無清單資料):loadFailed + 診斷列(只露 code / traceId)+ 重試 -->
+    <div v-if="lists === null && loadError && !loading" class="card list-card">
+      <div class="block-error" role="alert" data-testid="watchlist-error">
+        <div>{{ t(lang, 'loadFailed') }}</div>
+        <div class="details">
+          <span data-testid="watchlist-error-code">{{ loadError.code }}</span>
+          <span v-if="loadError.requestId" data-testid="watchlist-trace-id">
+            {{ t(lang, 'authRequestId') }} {{ loadError.requestId }}
+          </span>
+        </div>
+        <button type="button" class="block-retry" data-testid="watchlist-retry" @click="loadLists">
+          {{ t(lang, 'authRetry') }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 首次載入:一律有文字,骨架只是輔助 -->
+    <div v-else-if="lists === null" class="card list-card">
+      <div class="block-state" data-testid="watchlist-loading">
+        <div>{{ t(lang, 'loading') }}</div>
+        <div class="skeleton-row" aria-hidden="true" />
+        <div class="skeleton-row" aria-hidden="true" />
+        <div class="skeleton-row" aria-hidden="true" />
+      </div>
+    </div>
+
+    <template v-else>
+      <div ref="tablistEl" class="tabs" role="tablist" :aria-label="t(lang, 'watchlist')" data-testid="watchlist-tabs">
+        <button
+          v-for="(list, index) in lists"
+          :id="tabId(list.id)"
+          :key="list.id"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ on: list.id === activeListId }"
+          :aria-selected="list.id === activeListId ? 'true' : 'false'"
+          :aria-controls="PANEL_ID"
+          :tabindex="list.id === activeListId ? 0 : -1"
+          :title="list.name"
+          data-testid="watchlist-tab"
+          :data-list-id="list.id"
+          @click="selectTab(list.id)"
+          @keydown="onTabKeydown($event, index)"
+        >
+          <span class="tab-name">{{ list.name }}</span>
+          <span class="tab-count">{{ list.items.length }}</span>
+        </button>
+      </div>
+
+      <section
+        v-if="activeList"
+        :id="PANEL_ID"
+        class="card list-card"
+        role="tabpanel"
+        :aria-labelledby="tabId(activeList.id)"
+      >
+        <div class="toolbar">
+          <div class="toolbar-title">
+            <h3 ref="titleEl" class="ttl" tabindex="-1" data-testid="watchlist-toolbar-name">{{ activeList.name }}</h3>
+            <span class="hint" data-testid="watchlist-count">{{ tf(lang, 'watchlistCount', { n: activeList.items.length }) }}</span>
+          </div>
+        </div>
+
+        <!-- 清單空:標題 + 說明 + 前往行情 -->
+        <div v-if="activeList.items.length === 0" class="empty-state" data-testid="watchlist-empty">
+          <div class="empty-title">{{ t(lang, 'watchlistEmpty') }}</div>
+          <div class="hint">{{ t(lang, 'watchlistEmptyBody') }}</div>
+          <button
+            type="button"
+            class="btn-ghost-sm empty-action"
+            data-testid="watchlist-empty-go-markets"
+            @click="emit('navigate', 'markets')"
+          >{{ t(lang, 'watchlistGoMarkets') }}</button>
+        </div>
+
+        <template v-else>
+          <div class="table-wrap">
+            <table role="table" data-testid="watchlist-table">
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th role="columnheader" class="col-sym">{{ t(lang, 'symbol') }}</th>
+                  <th role="columnheader" class="col-name">{{ t(lang, 'name') }}</th>
+                  <th role="columnheader" class="col-price right">{{ t(lang, 'price') }}</th>
+                  <th role="columnheader" class="col-change right">{{ t(lang, 'change') }}</th>
+                  <th role="columnheader" class="col-vol right">{{ t(lang, 'volume') }}</th>
+                </tr>
+              </thead>
+              <tbody role="rowgroup">
+                <tr
+                  v-for="item in activeList.items"
+                  :key="item.uuid"
+                  role="row"
+                  data-testid="watchlist-row"
+                  :data-symbol="item.symbol"
+                  :data-quote-source="quoteSource(item)"
+                  @click="emit('chart', { sym: item.symbol })"
+                >
+                  <td role="cell" class="col-sym">
+                    <span class="sym">{{ item.symbol }}</span>
+                    <span v-if="hasCcyTag(item)" class="ccy-tag">{{ item.currency }}</span>
+                  </td>
+                  <td role="cell" class="col-name">{{ item.name }}</td>
+                  <td role="cell" class="col-price right num" data-testid="watchlist-row-price">{{ priceText(item) }}</td>
+                  <td
+                    role="cell"
+                    class="col-change right num"
+                    :class="changeClass(item)"
+                    data-testid="watchlist-row-change"
+                  >{{ changeText(item) }}</td>
+                  <td role="cell" class="col-vol right num">{{ volumeText(item) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="hint quote-note" data-testid="watchlist-quote-note">{{ t(lang, 'watchlistQuoteNote') }}</p>
+        </template>
+      </section>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import MockDataNotice from '../components/MockDataNotice.vue';
-import { ref, computed, watchEffect } from 'vue';
-import { t } from '../i18n';
-import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
+// Phase 04.2 Plan 23(WATCH-03、D-14 / D-15 / D-17 / D-18 / D-20):Watchlist 頁整頁重建。
+// 清單與報價只經 getRuntimeApiClients().watchlist(鐵律 1 / 3;judgment §3:元件不 import mock store)。
+// 頁級 `lists` / `activeListId` 是唯一狀態來源;04.2-24 在此之上疊加即時報價(data-quote-source 加 `ws`)。
+import { computed, nextTick, onMounted, ref } from 'vue';
+import { t, tf } from '../i18n';
+import { ApiClientError } from '../services/apiClient';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import type { AssetDto } from '../services/apiTypes';
+import type { WatchlistDto } from '../services/watchlistApi';
 import type { Lang } from '../types';
 
 defineProps<{ lang: Lang }>();
-defineEmits<{ chart: [p: { sym: string }] }>();
+const emit = defineEmits<{
+  chart: [p: { sym: string }];
+  navigate: [page: 'markets'];
+}>();
 
-const portfolio = useMockPortfolioStore();
-const lists = computed(() => portfolio.watchlists);
-const activeIdx = ref(0);
-const dragIdx = ref(-1);
-const dragListId = ref('');
+const PANEL_ID = 'watchlist-panel';
 
-const ALL = computed(() => [...SYMBOLS, ...CRYPTO, ...FX, ...BONDS]);
-const activeList = computed(() => portfolio.watchlists[activeIdx.value]);
-const activeRows = computed(() => (activeList.value?.syms ?? [])
-  .map(s => ALL.value.find(x => x.sym === s))
-  .filter(Boolean) as any[]);
+const lists = ref<WatchlistDto[] | null>(null);
+const activeListId = ref<string | null>(null);
+const loading = ref(false);
+const loadError = ref<ApiClientError | null>(null);
+const tablistEl = ref<HTMLElement | null>(null);
+const titleEl = ref<HTMLElement | null>(null);
 
-watchEffect(() => {
-  if (activeIdx.value < 0) activeIdx.value = 0;
-  if (activeIdx.value >= portfolio.watchlists.length) {
-    activeIdx.value = Math.max(0, portfolio.watchlists.length - 1);
+const activeList = computed(() => lists.value?.find(list => list.id === activeListId.value) ?? null);
+
+function toApiError(error: unknown): ApiClientError {
+  return error instanceof ApiClientError
+    ? error
+    : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+}
+
+/** 作用中清單不存在(首次載入、被刪除)→ 改為第一個清單。 */
+function ensureActive() {
+  const current = lists.value ?? [];
+  if (!current.some(list => list.id === activeListId.value)) {
+    activeListId.value = current[0]?.id ?? null;
   }
-});
-
-function newList() {
-  portfolio.addWatchlist('New list');
-  activeIdx.value = portfolio.watchlists.length - 1;
-}
-function remove(sym: string) {
-  if (activeList.value) portfolio.removeFromWatchlist(activeList.value.id, sym);
-}
-function onDragStart(idx: number) {
-  dragIdx.value = idx;
-  dragListId.value = activeList.value?.id ?? '';
-}
-function clearDrag() {
-  dragIdx.value = -1;
-  dragListId.value = '';
-}
-function onDrop(toIdx: number) {
-  const list = activeList.value;
-  const fromIdx = dragIdx.value;
-  if (
-    list &&
-    dragListId.value === list.id &&
-    fromIdx >= 0 &&
-    toIdx >= 0 &&
-    fromIdx < list.syms.length &&
-    toIdx < list.syms.length &&
-    fromIdx !== toIdx
-  ) {
-    portfolio.moveWatchSymbol(list.id, fromIdx, toIdx);
-  }
-  clearDrag();
 }
 
-function sparkPoints(sym: string) {
-  const seed = sym.charCodeAt(0) + sym.charCodeAt(1);
-  const pts: string[] = [];
-  for (let i = 0; i < 20; i++) {
-    const v = 10 + Math.sin(i * 0.5 + seed) * 6 + Math.cos(i * 0.3 + seed) * 3;
-    pts.push(`${i * 3},${20 - v}`);
+/** 首次載入與重試;已有清單資料時(重讀)不清空畫面、不閃 loading。 */
+async function loadLists() {
+  loading.value = true;
+  loadError.value = null;
+  try {
+    lists.value = await getRuntimeApiClients().watchlist.list();
+    ensureActive();
+  } catch (error) {
+    loadError.value = toApiError(error);
+  } finally {
+    loading.value = false;
   }
-  return pts.join(' ');
 }
-function isBondRow(row: any) {
-  return row.cat === 'bond';
+
+function tabId(listId: string): string {
+  return `watchlist-tab-${listId}`;
 }
-function priceValue(row: any) {
-  return row.price ?? row.yld;
+
+function tabElement(listId: string): HTMLElement | undefined {
+  return [...(tablistEl.value?.querySelectorAll<HTMLElement>('[data-testid="watchlist-tab"]') ?? [])]
+    .find(el => el.getAttribute('data-list-id') === listId);
 }
-function priceText(row: any) {
-  const dp = row.cat === 'fx' ? 4 : isBondRow(row) ? 3 : 2;
-  const value = priceValue(row);
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  return value.toFixed(dp);
+
+function selectTab(listId: string) {
+  activeListId.value = listId;
 }
-function changeValue(row: any) {
-  return row.chgPct ?? row.chg ?? 0;
+
+/** roving tabindex:← → 循環移動、Home / End 到頭尾;移動即啟用(自動啟用),焦點跟著走並捲入可視範圍。 */
+async function onTabKeydown(event: KeyboardEvent, index: number) {
+  const current = lists.value ?? [];
+  if (current.length === 0) return;
+  let next = -1;
+  if (event.key === 'ArrowRight') next = (index + 1) % current.length;
+  else if (event.key === 'ArrowLeft') next = (index - 1 + current.length) % current.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = current.length - 1;
+  if (next < 0) return;
+  event.preventDefault();
+  const target = current[next];
+  selectTab(target.id);
+  await nextTick();
+  const el = tabElement(target.id);
+  el?.focus();
+  el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
 }
-function changeText(row: any) {
-  const value = changeValue(row);
-  if (isBondRow(row)) return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+
+// ── 報價格式(UI-SPEC §Money:觀察清單)──────────────────────────
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
-function volumeText(row: any) {
-  return row.vol ?? '—';
+
+function fixed(value: number, dp: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 }
+
+/** FX 4 位、BOND 3 位(殖利率)、其餘 2 位。 */
+function priceDp(item: AssetDto): number {
+  if (item.assetType === 'FX') return 4;
+  if (item.assetType === 'BOND') return 3;
+  return 2;
+}
+
+function priceText(item: AssetDto): string {
+  return isFiniteNumber(item.latestPrice) ? fixed(item.latestPrice, priceDp(item)) : '—';
+}
+
+/** BOND 用 change(殖利率變動),其餘用 changePercent。 */
+function changeValue(item: AssetDto): number | null {
+  const value = item.assetType === 'BOND' ? item.change : item.changePercent;
+  return isFiniteNumber(value) ? value : null;
+}
+
+function changeText(item: AssetDto): string {
+  const value = changeValue(item);
+  if (value === null) return '—';
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  const body = item.assetType === 'BOND' ? fixed(Math.abs(value), 3) : `${fixed(Math.abs(value), 2)}%`;
+  return `${sign}${body}`;
+}
+
+function changeClass(item: AssetDto): string {
+  const value = changeValue(item);
+  if (value === null) return 'na';
+  if (value > 0) return 'up';
+  if (value < 0) return 'dn';
+  return '';
+}
+
+/** 後端 volumeText 原樣;null / 空字串 → —(tick 的 volume 不得覆寫,RESEARCH P-W5)。 */
+function volumeText(item: AssetDto): string {
+  return item.volumeText ? item.volumeText : '—';
+}
+
+/** U-16:幣別標籤只對 STOCK / CRYPTO(FX 匯率與債券殖利率沒有計價幣別語意)。 */
+function hasCcyTag(item: AssetDto): boolean {
+  return item.assetType === 'STOCK' || item.assetType === 'CRYPTO';
+}
+
+/** 本 plan 只有 REST 報價;04.2-24 疊加 `ws`。 */
+function quoteSource(item: AssetDto): 'rest' | 'none' {
+  return item.latestPrice !== null ? 'rest' : 'none';
+}
+
+onMounted(loadLists);
 </script>
 
 <style scoped>
-.page { padding: 22px; }
-h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
-.sub { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
-.row-between { display: flex; justify-content: space-between; align-items: center; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.page { padding: 24px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.head-main { flex: 1 1 0; min-width: 0; }
+.head-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+h2 { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; margin: 0; }
+.hint { font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
 
-.tabs { display: flex; gap: 6px; margin-bottom: 14px; align-items: center; }
-.tab { padding: 7px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: var(--fg-dim); cursor: pointer; font-weight: 500; }
-.tab.on { background: var(--surface2); color: var(--fg); border-color: var(--fg-mute); font-weight: 600; }
-.tab .count { font-size: 10px; color: var(--fg-mute); margin-left: 4px; }
-.tab-add { padding: 7px 12px; background: transparent; border: 1px dashed var(--border); border-radius: 8px; color: var(--fg-mute); cursor: pointer; }
+/* 清單 tabs:自己的列內水平捲動,不換行、不撐頁;選中以 --fg 邊框區分(不用 accent) */
+.tabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 16px; }
+.tab {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  min-height: 36px; max-width: 200px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--fg-dim);
+  font: inherit; font-size: 12px; font-weight: 600; line-height: 1.35; cursor: pointer;
+}
+.tab.on { border-color: var(--fg); color: var(--fg); }
+.tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-count { flex: none; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
 
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
-table { width: 100%; }
-thead th { text-align: left; padding: 10px 14px; font-size: 11px; color: var(--fg-dim); font-weight: 500; border-bottom: 1px solid var(--border); }
-.right { text-align: right; }
-tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.list-card { padding: 20px; }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; margin-bottom: 16px; }
+.toolbar-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; flex: 1 1 0; min-width: 0; }
+.ttl { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; min-width: 0; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; font-size: 13px; border-collapse: collapse; }
+thead th { padding: 8px 12px; font-size: 12px; font-weight: 600; line-height: 1.35; text-align: left; color: var(--fg-dim); white-space: nowrap; }
+tbody tr { border-top: 1px solid var(--border); cursor: pointer; }
 tbody tr:hover { background: var(--surface2); }
-tbody td { padding: 10px 14px; font-size: 13px; }
-.grip { color: var(--fg-mute); cursor: grab; font-size: 10px; }
+tbody td { padding: 12px 12px; font-size: 13px; font-weight: 400; line-height: 1.45; }
+thead th:first-child, tbody td:first-child { padding-left: 0; }
+.right { text-align: right; }
 .sym { font-weight: 600; }
-.dim { color: var(--fg-dim); }
-.num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+.col-name { color: var(--fg-dim); overflow-wrap: anywhere; }
+.col-price, .col-change, .col-vol { white-space: nowrap; }
+.col-vol { color: var(--fg-dim); }
 .up { color: var(--up); }
 .dn { color: var(--dn); }
-.x { background: transparent; border: 0; color: var(--fg-mute); font-size: 12px; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
-.x:hover { background: var(--surface2); color: var(--dn); }
-.empty { padding: 40px; text-align: center; color: var(--fg-mute); font-size: 13px; }
+.na { color: var(--fg-dim); }
+.ccy-tag {
+  display: inline-block; margin-left: 4px; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
+}
+.quote-note { margin: 12px 0 0; }
+
+/*
+ * < 640px:每列堆疊成 grid(比照 Cash.vue 04.1-31),價格與漲跌不藏在卡內捲動後面。
+ *   代號 + 幣別      價格     動作
+ *   名稱            漲跌     動作
+ * 成交量不渲染;thead 以 sr-only 手法保留給輔助科技,table 元素已補明確 ARIA role。
+ */
+@media (max-width: 639px) {
+  .head-actions { margin-left: 0; }
+  table, tbody { display: block; }
+  thead {
+    position: absolute; width: 1px; height: 1px; margin: 0; padding: 0;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "sym price act"
+      "name change act";
+    gap: 4px 12px; padding: 12px 0;
+  }
+  tbody td { display: block; min-width: 0; padding: 0; }
+  tbody td:first-child { padding-left: 0; }
+  td.col-sym { grid-area: sym; }
+  td.col-name { grid-area: name; }
+  td.col-price { grid-area: price; }
+  td.col-change { grid-area: change; }
+  td.col-vol { display: none; }
+}
+
+.btn-ghost-sm {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-ghost-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.block-state { padding: 16px 0; font-size: 13px; color: var(--fg-dim); }
+.block-error { padding: 16px 0; font-size: 13px; }
+.details {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px; font-weight: 400;
+}
+.details span { overflow-wrap: anywhere; user-select: text; }
+.block-retry {
+  margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+
+.empty-state { padding: 48px 16px; text-align: center; }
+.empty-title { font-size: 13px; color: var(--fg); margin-bottom: 4px; }
+.empty-action { margin-top: 12px; }
+
+.skeleton-row {
+  height: 16px; margin: 8px 0; border-radius: 4px;
+  background: var(--surface2);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.tab:focus-visible,
+.ttl:focus-visible,
+.btn-ghost-sm:focus-visible,
+.block-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row { animation: none; }
+}
 </style>

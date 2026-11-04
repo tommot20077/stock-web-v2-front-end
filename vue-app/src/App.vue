@@ -43,7 +43,7 @@
       <Alerts v-else-if="page === 'alerts'" :lang="tweaks.lang" />
       <Notifications v-else-if="page === 'notifications'" :lang="tweaks.lang" />
       <Settings v-else-if="page === 'settings'" :lang="tweaks.lang" :theme="tweaks.theme" @set-tweak="onSettingsTweak" @toast="showToast" />
-      <Watchlist v-else-if="page === 'watchlist'" :lang="tweaks.lang" @chart="openChart" />
+      <Watchlist v-else-if="page === 'watchlist'" :lang="tweaks.lang" @chart="openChart" @navigate="page = $event" />
       <Backtest v-else-if="page === 'backtest'" :lang="tweaks.lang" />
       <Ops v-else-if="page === 'ops'" :lang="tweaks.lang" @toast="showToast" />
     </main>
