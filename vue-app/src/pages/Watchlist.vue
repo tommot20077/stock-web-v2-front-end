@@ -720,11 +720,16 @@ const REORDER_DEBOUNCE_MS = 500;
 const reordering = ref(false);
 const moveAnnouncement = ref('');
 const reorderInFlight = ref(false);
-/** 有尚未送出的本地順序(debounce 中或等前一個請求完成)。 */
-const pendingReorderListId = ref<string | null>(null);
+/**
+ * 有尚未送出本地順序的清單(debounce 中或等前一個請求完成),依排入順序。
+ * WR-07:分清單排隊——A 的 PUT 在飛時改排 B,A 的最新順序仍留在佇列裡,不被 B 覆蓋。
+ */
+const pendingReorderIds = ref<string[]>([]);
 let reorderTimer: ReturnType<typeof setTimeout> | null = null;
+/** 目前 debounce 計時器所屬的清單(同一時間至多一個;換清單排程會先 flush 前一個)。 */
+let debouncingListId: string | null = null;
 
-const reorderSaving = computed(() => reorderInFlight.value || pendingReorderListId.value !== null);
+const reorderSaving = computed(() => reorderInFlight.value || pendingReorderIds.value.length > 0);
 
 function toggleReorder() {
   reordering.value = !reordering.value;
@@ -749,32 +754,49 @@ function reorderLocal(from: number, to: number): AssetDto | null {
 }
 
 function scheduleReorderSave(listId: string) {
-  // 換了清單還有待送的順序 → 先送出前一份,不讓它被覆蓋。
-  if (pendingReorderListId.value && pendingReorderListId.value !== listId) flushReorderNow();
-  pendingReorderListId.value = listId;
+  // 換了清單還在 debounce 的順序 → 先送出(或排到在飛請求之後),不讓它被覆蓋。
+  if (debouncingListId && debouncingListId !== listId) flushReorderNow();
+  if (!pendingReorderIds.value.includes(listId)) pendingReorderIds.value = [...pendingReorderIds.value, listId];
   if (reorderTimer) clearTimeout(reorderTimer);
+  debouncingListId = listId;
   reorderTimer = setTimeout(() => {
     reorderTimer = null;
+    debouncingListId = null;
     void sendReorder();
   }, REORDER_DEBOUNCE_MS);
 }
 
-function flushReorderNow() {
+function clearReorderTimer() {
   if (reorderTimer) {
     clearTimeout(reorderTimer);
     reorderTimer = null;
   }
+  debouncingListId = null;
+}
+
+function flushReorderNow() {
+  clearReorderTimer();
   void sendReorder();
 }
 
-/** 送整份順序;同時間只有一個請求在飛,在飛期間的新變更等它完成後再送最新順序。 */
+function dropPendingReorder(listId: string) {
+  pendingReorderIds.value = pendingReorderIds.value.filter(id => id !== listId);
+}
+
+/**
+ * 送整份順序;同時間只有一個請求在飛。每個請求完成後再取下一個「已到期」(不在 debounce 中)的清單,
+ * 直到佇列清空——每個清單的最新本地順序最終都會 PUT 一次(WR-07)。
+ */
 async function sendReorder() {
   if (reorderInFlight.value) return;
-  const listId = pendingReorderListId.value;
+  const listId = pendingReorderIds.value.find(id => id !== debouncingListId);
   if (!listId) return;
+  dropPendingReorder(listId);
   const list = lists.value?.find(candidate => candidate.id === listId);
-  pendingReorderListId.value = null;
-  if (!list) return;
+  if (!list) {
+    void sendReorder();
+    return;
+  }
 
   reorderInFlight.value = true;
   let failure: unknown = null;
@@ -787,21 +809,16 @@ async function sendReorder() {
   reorderInFlight.value = false;
 
   if (!updated) {
-    // 失敗:丟棄同一清單後續待送的順序,回到伺服器順序(重讀)。
-    if (pendingReorderListId.value === listId) {
-      pendingReorderListId.value = null;
-      if (reorderTimer) {
-        clearTimeout(reorderTimer);
-        reorderTimer = null;
-      }
-    }
+    // 失敗:丟棄同一清單後續待送的順序,回到伺服器順序(重讀);其他清單的待送順序仍照常送出。
+    dropPendingReorder(listId);
+    if (debouncingListId === listId) clearReorderTimer();
     await failOp(failure, true);
-    return;
+  } else {
+    opError.value = null;
+    // 在飛期間同一清單又有新順序 → 回應已過時,不覆蓋本地;最新順序留在佇列等計時器或下一輪送出。
+    if (!pendingReorderIds.value.includes(listId)) replaceList(updated);
   }
-  opError.value = null;
-  // 在飛期間又有新順序 → 回應已過時,不覆蓋本地;等計時器到或立即送最新的。
-  if (pendingReorderListId.value === null) replaceList(updated);
-  else if (!reorderTimer) void sendReorder();
+  void sendReorder();
 }
 
 async function move(index: number, delta: number, direction: 'up' | 'down') {
