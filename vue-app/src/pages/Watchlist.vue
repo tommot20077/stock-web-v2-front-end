@@ -385,25 +385,47 @@ function ensureActive() {
   }
 }
 
+/**
+ * WR-06:過時回應守門。每次 GET 開始與每次本地寫入(操作回應、樂觀重排、建立 / 刪除)都遞增;
+ * GET 回來時序號已不是最新 → 丟棄(它的快照早於較新的本地狀態,套用會讓已移除項目復活、還原排序、吃掉新清單)。
+ */
+let listsSeq = 0;
+/** 最近一次 loadLists 的序號:只有它結束時才收起 loading。 */
+let latestLoadSeq = 0;
+
+/** 本地寫入清單的唯一入口(同時讓在飛中的 GET 失效)。 */
+function setLists(next: WatchlistDto[]) {
+  listsSeq += 1;
+  lists.value = next;
+}
+
 /** 首次載入與重試;已有清單資料時(重讀)不清空畫面、不閃 loading。 */
 async function loadLists() {
+  const seq = ++listsSeq;
+  latestLoadSeq = seq;
   loading.value = true;
   loadError.value = null;
   try {
-    lists.value = await getRuntimeApiClients().watchlist.list();
+    const data = await getRuntimeApiClients().watchlist.list();
+    if (seq !== listsSeq) return;
+    lists.value = data;
     restFetchedAt.value = Date.now();
     ensureActive();
   } catch (error) {
+    if (seq !== listsSeq) return;
     loadError.value = toApiError(error);
   } finally {
-    loading.value = false;
+    if (seq === latestLoadSeq) loading.value = false;
   }
 }
 
 /** 重讀(操作結果不確定 / 清單不存在 / 刪光後);失敗不打擾,保留目前畫面。 */
 async function reloadLists() {
+  const seq = ++listsSeq;
   try {
-    lists.value = await watchlistApi().list();
+    const data = await watchlistApi().list();
+    if (seq !== listsSeq) return;
+    lists.value = data;
     restFetchedAt.value = Date.now();
     ensureActive();
   } catch {
@@ -412,7 +434,7 @@ async function reloadLists() {
 }
 
 function replaceList(updated: WatchlistDto) {
-  lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
+  setLists((lists.value ?? []).map(list => (list.id === updated.id ? updated : list)));
 }
 
 // ── 操作錯誤(§Copywriting 觀察清單表;診斷只露 code / traceId,絕不顯示後端 message)────────
@@ -541,7 +563,7 @@ async function submitCreate() {
     return;
   }
   const newList = created;
-  lists.value = [...(lists.value ?? []).filter(list => list.id !== newList.id), newList];
+  setLists([...(lists.value ?? []).filter(list => list.id !== newList.id), newList]);
   activeListId.value = newList.id;
   opError.value = null;
   closeCreate();
@@ -649,9 +671,10 @@ async function confirmDelete() {
     return;
   }
   opError.value = null;
-  lists.value = (lists.value ?? []).filter(candidate => candidate.id !== list.id);
+  const remaining = (lists.value ?? []).filter(candidate => candidate.id !== list.id);
+  setLists(remaining);
   // 刪光 → 後端在下一次 GET 重建空的「我的自選」(D-17)。
-  if (lists.value.length === 0) await reloadLists();
+  if (remaining.length === 0) await reloadLists();
   activeListId.value = lists.value?.[0]?.id ?? null;
   if (activeListId.value) await focusTab(activeListId.value);
 }
@@ -929,9 +952,11 @@ function hasCcyTag(item: AssetDto): boolean {
 }
 
 // 只 watch 作用中清單的 STOCK / CRYPTO(U-20);resyncSeq / 每 5 分鐘 / 回前景靜默重讀 GET(不閃 loading,失敗保留舊值)。
-// 排序尚未儲存或寫入進行中時略過:重讀回應會用伺服器舊順序蓋掉本地排序。
+// 排序尚未儲存、寫入或項目移除進行中時略過:重讀回應會用伺服器舊快照蓋掉本地狀態(WR-06;
+// 已在飛的 GET 則由 listsSeq 丟棄)。
 useQuoteRefresh(activeRows, quotes, reloadLists, {
-  canRefresh: () => lists.value !== null && !reorderSaving.value && !busy.value,
+  canRefresh: () => lists.value !== null && !reorderSaving.value && !busy.value
+    && Object.keys(removing).length === 0,
 });
 
 onMounted(loadLists);

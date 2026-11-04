@@ -199,25 +199,40 @@ const listsError = ref<ApiClientError | null>(null);
 const pickerOpen = ref(false);
 const pickerAnchor = ref<HTMLElement | null>(null);
 
+/**
+ * WR-06:過時回應守門。每次 GET 開始與每次選擇器寫入回填都遞增;GET 回來時序號已不是最新 → 丟棄
+ * (選擇器要求重讀後又寫入成功時,較舊的 GET 快照不得蓋掉較新的回應 DTO)。
+ */
+let listsSeq = 0;
+/** 最近一次 loadLists 的序號:只有它結束時才收起 listsLoading。 */
+let latestLoadSeq = 0;
+
 async function loadLists() {
+  const seq = ++listsSeq;
+  latestLoadSeq = seq;
   listsLoading.value = true;
   listsError.value = null;
   try {
-    lists.value = await getRuntimeApiClients().watchlist.list();
+    const data = await getRuntimeApiClients().watchlist.list();
+    if (seq !== listsSeq) return;
+    lists.value = data;
   } catch (error) {
+    if (seq !== listsSeq) return;
     listsError.value = error instanceof ApiClientError
       ? error
       : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
   } finally {
-    listsLoading.value = false;
+    if (seq === latestLoadSeq) listsLoading.value = false;
   }
 }
 
 function onListChanged(updated: WatchlistDto) {
+  listsSeq += 1;
   lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
 }
 
 function onListCreated(created: WatchlistDto) {
+  listsSeq += 1;
   lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
 }
 
