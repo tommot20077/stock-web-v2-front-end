@@ -38,8 +38,8 @@
       <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" :theme="tweaks.theme" @order="openTicket" @back="page = 'markets'" />
       <Positions v-else-if="page === 'positions'" :lang="tweaks.lang" @order="openTicket" />
       <Analytics v-else-if="page === 'analytics'" :lang="tweaks.lang" @order="openTicket" @toast="showToast" />
-      <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" @order="openTicket" />
-      <Cash v-else-if="page === 'cash'" :lang="tweaks.lang" />
+      <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" :initial-filter="tradesInitialFilter" @order="openTicket" />
+      <Cash v-else-if="page === 'cash'" :lang="tweaks.lang" @navigate="onCashNavigate" />
       <Alerts v-else-if="page === 'alerts'" :lang="tweaks.lang" />
       <Notifications v-else-if="page === 'notifications'" :lang="tweaks.lang" />
       <Settings v-else-if="page === 'settings'" :lang="tweaks.lang" :theme="tweaks.theme" @set-tweak="onSettingsTweak" @toast="showToast" />
@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useTweaks, type Tweaks } from './useTweaks';
 import { useShortcuts } from './useShortcuts';
 import type { Page } from './types';
@@ -170,6 +170,19 @@ function openChart(preset: { sym: string }) {
   page.value = 'chart';
 }
 function onTicketNav(p: 'positions') { page.value = p; ticketOpen.value = false; }
+
+/**
+ * 04.2-21(U-11):現金頁股利說明的連結 → Trades 並預選「股利」頁籤。
+ * Trades 只在掛載時讀一次 initialFilter;離開 Trades 時清掉,下次經導覽進入不會沿用。
+ */
+const tradesInitialFilter = ref<string | undefined>(undefined);
+function onCashNavigate(p: 'trades', opts: { tradesFilter: 'dividend' }) {
+  tradesInitialFilter.value = opts.tradesFilter;
+  page.value = p;
+}
+watch(page, (next, prev) => {
+  if (prev === 'trades' && next !== 'trades') tradesInitialFilter.value = undefined;
+});
 function onSettingsTweak(payload: SettingsTweakPayload) {
   if (payload.key === 'theme') {
     set('theme', payload.value);

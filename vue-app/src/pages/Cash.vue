@@ -52,6 +52,20 @@
       </div>
     </div>
 
+    <!--
+      04.2-21(D-27):現金股利會計入可用現金,但不混進入出金列表(GET /cash-entries 不變);兩模式皆渲染。
+      連結切到 Trades 並預選「股利」頁籤(U-11:App 以 initialFilter 傳入,只在掛載時套用一次)。
+    -->
+    <div class="dividend-row">
+      <span class="dividend-note" data-testid="cash-page-dividend-note">{{ t(lang, 'cashDividendNote') }}</span>
+      <button
+        type="button"
+        class="dividend-link"
+        data-testid="cash-page-dividend-link"
+        @click="emit('navigate', 'trades', { tradesFilter: 'dividend' })"
+      >{{ t(lang, 'cashDividendLink') }}</button>
+    </div>
+
     <div
       class="card entries-card"
       :class="{ 'block-refreshing': refreshing }"
@@ -228,6 +242,10 @@ import {
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
+const emit = defineEmits<{
+  /** 04.2-21(U-11):股利說明的連結 —— 切到 Trades 並預選「股利」頁籤。 */
+  (e: 'navigate', page: 'trades', opts: { tradesFilter: 'dividend' }): void;
+}>();
 
 // judgment §3:頁面只認 domain service,永不 import mock store;兩模式的列表都經 cash adapter。
 const clients = getRuntimeApiClients();
@@ -483,7 +501,7 @@ async function onDialogClose() {
 /*
  * 重讀規則(U-10),頁碼重置只有 cash 這一個入口(沿用 Trades D-11 的單一入口原則):
  * - cause = 'cash':頁碼歸零並重讀列表;
- * - 頁首餘額列對 cash / trade / baseCurrency 三種 cause 都重讀(交易會動到現金)。
+ * - 頁首餘額列對每一種 cause 都重讀(交易、股利會動到現金;04.2-21:股利只動餘額列,不動入出金列表)。
  * 交易與基準幣變更不影響入出金紀錄(金額是原幣),重讀列表只會無端把使用者踢回第 1 頁。
  */
 watch(portfolioRevision, () => {
@@ -565,6 +583,19 @@ h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .ttl { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
 .ttl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint { font-size: 12px; color: var(--fg-dim); }
+
+/*
+ * 04.2-21(D-27):股利說明列。窄寬時連結換到下一行靠左;說明文字可在行內換行(min-width: 0),
+ * 不用省略號(LEARNINGS 2026-10-23)。
+ */
+.dividend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 16px; }
+.dividend-note { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
+.dividend-link {
+  min-height: 36px; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--fg);
+  text-decoration: underline; text-align: left; cursor: pointer;
+}
+.dividend-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 餘額列:會長的文字項目以 flex-basis: 0 參與換行,金額不使用省略號(LEARNINGS 2026-10-23) */
 .balances { margin-top: 4px; font-size: 13px; }
