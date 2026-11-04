@@ -554,7 +554,15 @@ interface LoadTradesOptions {
  * **防迴圈**:回退後的那次請求以 `allowOverflowFallback: false` 發出,因此自動重試至多一次;
  * 即使伺服端總頁數連續縮水,也只會多打一個請求就停在已載入狀態。
  */
-async function loadTrades(options: LoadTradesOptions = {}): Promise<void> {
+/**
+ * WR-11:過時回應守門。每次載入(篩選、排序、換頁、重讀、重試)遞增;回應 / 錯誤回來時序號已不是最新 → 丟棄,
+ * 例如寫入後「全部」重讀較晚落地,不得蓋掉使用者隨後點的「股利」結果(含 totalPages)。
+ * 溢出回退的那一次沿用呼叫端的序號(它是同一次載入的延續)。
+ */
+let tradesSeq = 0;
+
+async function loadTrades(options: LoadTradesOptions = {}, inheritedSeq?: number): Promise<void> {
+  const seq = inheritedSeq ?? ++tradesSeq;
   // 沒有已載入的舊列就沒有 U-05 要保護的東西 → 退回一般載入路徑。
   const refresh = options.refresh === true && tradesState.value.status === 'loaded';
   const allowOverflowFallback = options.allowOverflowFallback !== false;
@@ -562,11 +570,14 @@ async function loadTrades(options: LoadTradesOptions = {}): Promise<void> {
     tradesRefreshing.value = true;
     tradesRefreshError.value = null;
   } else {
+    // 一般載入取代了可能還在飛的重讀:「更新中…」隨之結束(被丟棄的重讀不會再自己收起它)。
+    tradesRefreshing.value = false;
     tradesState.value = { status: 'loading' };
   }
   const requestedPage = pageNo.value;
   try {
     const result = await api.listActivities({ ...queryParams(), page: requestedPage, size: PAGE_SIZE });
+    if (seq !== tradesSeq) return;
     if (
       allowOverflowFallback
       && result.items.length === 0
@@ -574,15 +585,16 @@ async function loadTrades(options: LoadTradesOptions = {}): Promise<void> {
       && requestedPage >= result.totalPages
     ) {
       pageNo.value = result.totalPages - 1;
-      await loadTrades({ refresh, allowOverflowFallback: false });
+      await loadTrades({ refresh, allowOverflowFallback: false }, seq);
       return;
     }
     tradesState.value = { status: 'loaded', data: result };
   } catch (error) {
+    if (seq !== tradesSeq) return;
     if (refresh) tradesRefreshError.value = describeError(error);
     else tradesState.value = { status: 'error', error: describeError(error) };
   } finally {
-    if (refresh) tradesRefreshing.value = false;
+    if (refresh && seq === tradesSeq) tradesRefreshing.value = false;
   }
 }
 
