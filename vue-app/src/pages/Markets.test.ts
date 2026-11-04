@@ -6,6 +6,8 @@ import { t, tf } from '../i18n';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import {
+  apiFailure,
+  apiSuccess,
   callsTo,
   watchlistDto,
   watchlistFetch,
@@ -181,5 +183,86 @@ describe('Markets ★(mock mode)', () => {
 
     expect(star('TSLA').classList.contains('on')).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('Markets 清單載入狀態(API mode)', () => {
+  it('list() 失敗 → 行內 watchlistLoadFailedInline + 重試;行情表仍渲染;重試成功後錯誤消失', async () => {
+    const fetchImpl = watchlistFetch([watchlistDto('wl-1', '我的自選', ['AAPL'])], {
+      list: call => (call === 0 ? apiFailure('INTERNAL_ERROR', 'trace-markets-load', 503) : apiSuccess([watchlistDto('wl-1', '我的自選', ['AAPL'])])),
+    });
+    await mountApiMarkets(fetchImpl);
+
+    const error = document.body.querySelector('[data-testid="markets-watchlist-error"]');
+    expect(error, 'inline error').not.toBeNull();
+    expect(error!.textContent).toContain(t('zh', 'watchlistLoadFailedInline'));
+    expect(error!.textContent).not.toContain('BackendMessageMustNotReachTheDom');
+    expect(visibleSymbols().length).toBeGreaterThan(0);
+    expect(star('AAPL').classList.contains('on')).toBe(false);
+
+    const retry = document.body.querySelector<HTMLButtonElement>('[data-testid="markets-watchlist-retry"]');
+    expect(retry, 'retry').not.toBeNull();
+    expect(retry!.textContent).toContain(t('zh', 'authRetry'));
+    retry!.click();
+    await flushAsync();
+
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(document.body.querySelector('[data-testid="markets-watchlist-error"]')).toBeNull();
+    expect(star('AAPL').classList.contains('on')).toBe(true);
+  });
+
+  it('list() 失敗時開選擇器 → 選擇器顯示載入失敗,重試會讓頁面重讀', async () => {
+    const fetchImpl = watchlistFetch([watchlistDto('wl-1', '我的自選', [])], {
+      list: call => (call === 0 ? apiFailure('INTERNAL_ERROR', 'trace-markets-load', 503) : apiSuccess([watchlistDto('wl-1', '我的自選', [])])),
+    });
+    await mountApiMarkets(fetchImpl);
+
+    star('AAPL').click();
+    await flushAsync();
+    expect(document.body.querySelector('[data-testid="watchlist-picker-error"]')).not.toBeNull();
+    const retry = document.body.querySelector<HTMLButtonElement>('[data-testid="watchlist-picker-retry"]');
+    expect(retry, 'picker retry').not.toBeNull();
+    retry!.click();
+    await flushAsync();
+
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(pickerCheckbox('wl-1')).toBeTruthy();
+  });
+
+  it('載入中:星號以未收藏外觀可點,選擇器顯示載入中;資料到了換成清單', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchImpl = watchlistFetch([watchlistDto('wl-1', '我的自選', ['AAPL'])], {
+      list: async () => {
+        await gate;
+        return apiSuccess([watchlistDto('wl-1', '我的自選', ['AAPL'])]);
+      },
+    });
+    await mountApiMarkets(fetchImpl);
+
+    expect(star('AAPL').classList.contains('on')).toBe(false);
+    star('AAPL').click();
+    await flushAsync();
+    expect(document.body.querySelector('[data-testid="watchlist-picker-loading"]')).not.toBeNull();
+
+    release();
+    await flushAsync();
+    expect(document.body.querySelector('[data-testid="watchlist-picker-loading"]')).toBeNull();
+    expect(pickerCheckbox('wl-1').checked).toBe(true);
+    expect(star('AAPL').classList.contains('on')).toBe(true);
+  });
+
+  it('勾選遇到 WATCHLIST_NOT_FOUND → 頁面重讀清單', async () => {
+    const fetchImpl = watchlistFetch([watchlistDto('wl-1', '我的自選', [])], {
+      addItem: () => apiFailure('WATCHLIST_NOT_FOUND', 'trace-nf', 404),
+    });
+    await mountApiMarkets(fetchImpl);
+
+    star('AAPL').click();
+    await flushAsync();
+    pickerCheckbox('wl-1').click();
+    await flushAsync();
+
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
   });
 });
