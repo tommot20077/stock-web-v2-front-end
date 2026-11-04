@@ -67,12 +67,19 @@
             @click="$emit('chart', { sym: row.sym })"
           >
             <td style="padding-left:16px">
+              <!-- D-16:星號開觀察清單選擇器;字符是裝飾,語意由 aria-label 承擔 -->
               <button
+                type="button"
                 class="star-btn"
-                :class="{ on: portfolio.isWatched(row.sym) }"
-                :title="portfolio.isWatched(row.sym) ? 'Watched' : 'Add to watchlist'"
-                @click.stop="portfolio.toggleWatch(row.sym)"
-              >★</button>
+                :class="{ on: isWatched(row.sym) }"
+                data-testid="markets-star"
+                :data-symbol="row.sym"
+                :aria-label="tf(lang, isWatched(row.sym) ? 'watchlistStarManage' : 'watchlistStarAdd', { symbol: row.sym })"
+                aria-haspopup="dialog"
+                :aria-expanded="pickerSymbol === row.sym ? 'true' : 'false'"
+                :aria-controls="pickerSymbol === row.sym ? WATCHLIST_PICKER_ID : undefined"
+                @click.stop="togglePicker(row.sym, $event)"
+              ><span aria-hidden="true">★</span></button>
             </td>
             <td style="font-weight:600">{{ row.sym }}</td>
             <td style="color:var(--fg-dim)">{{ row.name }}</td>
@@ -121,22 +128,81 @@
         <Bars :data="bondRows.map(b => ({ label: b.country, v: b.yld }))" />
       </div>
     </div>
+
+    <WatchlistPicker
+      :open="pickerSymbol !== null"
+      :lang="lang"
+      :symbol="pickerSymbol ?? ''"
+      :anchor="pickerAnchor"
+      :lists="lists"
+      :loading="listsLoading"
+      :load-error="listsError"
+      @close="closePicker"
+      @changed="onListChanged"
+      @created="onListCreated"
+      @retry="loadLists"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, FX, BONDS, fmtNum, fmtPct } from '../data';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { ApiClientError } from '../services/apiClient';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import type { WatchlistDto } from '../services/watchlistApi';
 import type { Lang, MarketTab } from '../types';
 import Bars from '../components/Bars.vue';
+import WatchlistPicker, { WATCHLIST_PICKER_ID } from '../components/WatchlistPicker.vue';
 
 const props = defineProps<{ lang: Lang }>();
 defineEmits<{ (e: 'order', preset: { sym: string }): void; (e: 'chart', preset: { sym: string }): void }>();
 
-const portfolio = useMockPortfolioStore();
+// WATCH-03 / judgment §3:觀察清單只經 watchlist service(不 import mock store)。頁級 ref 是星號、
+// ★ 觀察 chip、觀察清單 tab 與選擇器的唯一狀態來源;選擇器寫入後以回應 DTO 回填(不樂觀更新)。
+const lists = ref<WatchlistDto[] | null>(null);
+const listsLoading = ref(false);
+const listsError = ref<ApiClientError | null>(null);
+
+async function loadLists() {
+  listsLoading.value = true;
+  listsError.value = null;
+  try {
+    lists.value = await getRuntimeApiClients().watchlist.list();
+  } catch (error) {
+    listsError.value = error instanceof ApiClientError
+      ? error
+      : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+  } finally {
+    listsLoading.value = false;
+  }
+}
+
+function onListChanged(updated: WatchlistDto) {
+  lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
+}
+
+function onListCreated(created: WatchlistDto) {
+  lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
+}
+
+const pickerSymbol = ref<string | null>(null);
+const pickerAnchor = ref<HTMLElement | null>(null);
+
+function togglePicker(sym: string, event: MouseEvent) {
+  if (pickerSymbol.value === sym) {
+    closePicker();
+    return;
+  }
+  pickerAnchor.value = event.currentTarget as HTMLElement;
+  pickerSymbol.value = sym;
+}
+
+function closePicker() {
+  pickerSymbol.value = null;
+}
 
 const tabs: MarketTab[] = ['stocks','forex','crypto','bonds','watchlist'];
 const tab = ref<MarketTab>('stocks');
@@ -171,11 +237,19 @@ const cryptoRows = computed(() => CRYPTO);
 const fxRows = computed(() => FX);
 const bondRows = computed(() => BONDS);
 const watchableRows = computed(() => [...SYMBOLS, ...CRYPTO, ...FX, ...BONDS]);
-const watchedSymbols = computed(() =>
-  portfolio.watchlists
-    .flatMap(l => l.syms)
-    .filter((sym, idx, all) => all.indexOf(sym) === idx),
-);
+/** 所有清單 symbol 的聯集(RESEARCH Q9.4,與舊 mock isWatched 同義)。 */
+const watchedSymbols = computed(() => {
+  const seen = new Set<string>();
+  for (const list of lists.value ?? []) {
+    for (const item of list.items) seen.add(item.symbol);
+  }
+  return [...seen];
+});
+const watchedSet = computed(() => new Set(watchedSymbols.value));
+function isWatched(sym: string): boolean {
+  return watchedSet.value.has(sym);
+}
+// 聯集中不在 data.ts 的代號在 Markets 不顯示(行情是示範資料;Watchlist 頁才是權威畫面)。
 const watchedRows = computed(() =>
   watchedSymbols.value
     .map(sym => watchableRows.value.find(s => s.sym === sym))
@@ -224,7 +298,7 @@ function tabCount(k: MarketTab): number {
   if (k === 'crypto') return CRYPTO.length;
   if (k === 'forex') return FX.length;
   if (k === 'bonds') return BONDS.length;
-  if (k === 'watchlist') return watchedSymbols.value.length;
+  if (k === 'watchlist') return watchedRows.value.length;
   return SYMBOLS.length;
 }
 
@@ -235,7 +309,7 @@ const displayRows = computed(() => {
   if (!isBonds.value) {
     if (chip.value === 'gainers') rows = rows.filter(r => changeOf(r) >= 0);
     else if (chip.value === 'losers') rows = rows.filter(r => changeOf(r) < 0);
-    else if (chip.value === 'star') rows = rows.filter(r => portfolio.isWatched(r.sym));
+    else if (chip.value === 'star') rows = rows.filter(r => isWatched(r.sym));
   }
 
   // search
@@ -304,6 +378,7 @@ function tick() {
 
 onMounted(() => {
   tickIv = setInterval(tick, 1400);
+  void loadLists();
 });
 onUnmounted(() => {
   if (tickIv) clearInterval(tickIv);
@@ -387,16 +462,24 @@ tbody td { padding: 11px 0; }
 
 .px-cell { transition: background .35s ease-out, color .25s; position: relative; padding-right: 16px !important; border-radius: 4px; }
 .star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px;
+  margin-block: -8px;
   background: transparent;
   border: 0;
   color: var(--fg-mute);
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 8px;
   cursor: pointer;
 }
 .star-btn.on { color: var(--accent); }
 .star-btn:hover { background: var(--surface2); }
+.star-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .quick-order {
   background: var(--surface2); border: 1px solid var(--border); color: var(--fg-mute);
   width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 13px;
