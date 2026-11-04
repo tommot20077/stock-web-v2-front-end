@@ -2284,3 +2284,67 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
     });
   });
 });
+
+// =====================================================================================
+// 04.2-review WR-11:活動列表只套用最新一次請求的回應(較舊的回應 / 錯誤一律丟棄)。
+// =====================================================================================
+
+describe('Trades — 活動列表過時回應守門(04.2-review WR-11)', () => {
+  it('股利寫入觸發「全部」重讀在飛時點「股利」:較舊的「全部」回應後到不得蓋掉股利結果', async () => {
+    const allGate = deferred<Response>();
+    const dividendGate = deferred<Response>();
+    const fetchMock = scriptedFetch((call, url) => {
+      if (call === 0) return success(page({ items: [trade({ id: 't1', symbol: 'AAA' })], totalElements: 1, totalPages: 1 }));
+      return paramsOf(url).get('type') === 'DIVIDEND' ? dividendGate.promise : allGate.promise;
+    });
+    await mountApiTrades(fetchMock);
+
+    bumpPortfolioRevision('dividend');
+    await flushAsync();
+    clickChip('dividend');
+    await flushAsync();
+    expect(urls(fetchMock)).toHaveLength(3);
+
+    dividendGate.resolve(success(page({
+      items: [activity({ id: 'd1', kind: 'CASH_DIVIDEND', symbol: 'DIV', amount: 12 })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await flushAsync();
+    expect(rows()).toHaveLength(1);
+
+    allGate.resolve(success(page({
+      items: [trade({ id: 't1', symbol: 'AAA' }), trade({ id: 't2', symbol: 'BBB' })],
+      totalElements: 45,
+      totalPages: 3,
+    })));
+    await flushAsync();
+
+    expect(rows(), '「股利」頁籤下不得出現較舊的「全部」結果').toHaveLength(1);
+    expect(rows()[0].textContent).toContain('DIV');
+    expect(testid('trades-refreshing')).toBeNull();
+  });
+
+  it('較舊的請求在較新的成功之後失敗:不得把列表換成錯誤狀態', async () => {
+    const firstChipGate = deferred<Response>();
+    const fetchMock = scriptedFetch((call, url) => {
+      if (call === 0) return success(page({ items: [trade({ id: 't1', symbol: 'AAA' })], totalElements: 1, totalPages: 1 }));
+      if (paramsOf(url).get('type') === 'BUY') return firstChipGate.promise;
+      return success(page({ items: [trade({ id: 's1', symbol: 'SEL', type: 'SELL' })], totalElements: 1, totalPages: 1 }));
+    });
+    await mountApiTrades(fetchMock);
+
+    clickChip('buy');
+    await flushAsync();
+    clickChip('sell');
+    await flushAsync();
+    expect(rows()[0].textContent).toContain('SEL');
+
+    firstChipGate.resolve(failure('INTERNAL_ERROR', 'trace-stale'));
+    await flushAsync();
+
+    expect(testid('trades-error'), '較舊請求的錯誤不得顯示').toBeNull();
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('SEL');
+  });
+});
