@@ -26,6 +26,61 @@
 
         <!-- FORM -->
         <div v-if="step === 'form'" class="body">
+          <!--
+            沖銷模式(從 Trades 活動列「沖銷這筆」開啟,D-13):值全取自原列且不可編輯(DB 驗證沖銷值與原列相同),
+            只有備註可改。原列 UUID 絕不入 DOM,只以日期指回(T-04.2-43)。
+          -->
+          <template v-if="reversalOf">
+            <div class="quote-card" data-testid="holding-event-reversal-original">
+              <div class="quote-lab">{{ t(lang, 'cashReversalOriginal') }}</div>
+              <div class="sum-row">
+                <span>{{ t(lang, 'type') }}</span>
+                <b><span class="kind-pill">{{ reversalKindLabel }}</span></b>
+              </div>
+              <div class="sum-row">
+                <span>{{ t(lang, 'symbol') }}</span>
+                <b>{{ reversalOf.symbol ?? '—' }} <span v-if="reversalOf.currency" class="ccy-tag">{{ reversalOf.currency }}</span></b>
+              </div>
+              <template v-if="reversalOf.kind === 'CASH_DIVIDEND'">
+                <div class="sum-row">
+                  <span>{{ t(lang, 'holdingEventPaidAt') }}</span>
+                  <b class="num">{{ formatDateTime(reversalOf.occurredAt) }}</b>
+                </div>
+                <div class="sum-row">
+                  <span>{{ t(lang, 'holdingEventAmount') }}</span>
+                  <b class="num">{{ fmtMoney(reversalOf.amount, reversalOf.currency, minorUnits(reversalOf.currency)) }}</b>
+                </div>
+                <div class="sum-row">
+                  <span class="num">{{ tf(lang, 'tradesTaxLine', { amount: fmtMoney(reversalOf.withholdingTax ?? 0, reversalOf.currency, minorUnits(reversalOf.currency)) }) }}</span>
+                </div>
+              </template>
+              <template v-else>
+                <div class="sum-row">
+                  <span>{{ t(lang, 'holdingEventEffectiveDate') }}</span>
+                  <b class="num">{{ reversalOf.effectiveDate ?? formatDateTime(reversalOf.occurredAt).slice(0, 10) }}</b>
+                </div>
+                <div class="sum-row">
+                  <span>{{ t(lang, 'holdingEventQtyDelta') }}</span>
+                  <b class="num">{{ fmtSignedQuantity(reversalOf.quantity) }}</b>
+                </div>
+                <div v-if="reversalOf.kind === 'SPLIT'" class="sum-row">
+                  <span>{{ t(lang, 'holdingEventRatio') }}</span>
+                  <b class="num">{{ reversalOf.ratioNew ?? '—' }} : {{ reversalOf.ratioOld ?? '—' }}</b>
+                </div>
+              </template>
+              <div v-if="reversalOf.note" class="sum-row">
+                <span>{{ t(lang, 'notes') }}</span>
+                <b class="wrap-any">{{ reversalOf.note }}</b>
+              </div>
+            </div>
+            <!-- 沖銷模式唯一的 Display 級元素:只把後端記錄的值前綴「扣回 / 撤銷」字樣,不做加減 -->
+            <div class="reversal-preview" data-testid="holding-event-reversal-preview">
+              <span class="rp-lab">{{ t(lang, 'cashReversalWillRecord') }}</span>
+              {{ reversalPreviewText }}
+            </div>
+          </template>
+
+          <template v-else>
           <div id="holding-event-symbol-label" class="lab">{{ t(lang, 'symbol') }}</div>
           <!--
             從 Trades 開啟(無 symbol):可搜尋 typeahead(D-28)。行為與七態逐項沿用 OrderTicket.vue:33-146;
@@ -356,10 +411,12 @@
               data-testid="holding-event-field-error-effectiveDate"
             >{{ fieldErrorText('effectiveDate') }}</p>
           </template>
+          </template>
 
           <label class="lab" for="holding-event-note">{{ t(lang, 'notes') }}</label>
           <textarea
             id="holding-event-note"
+            ref="noteInput"
             v-model="note"
             rows="2"
             maxlength="500"
@@ -377,9 +434,12 @@
           >{{ fieldErrorText('note') }}</p>
 
           <!-- 常駐揭露:模式說明 → 只記帳(鐵律 5)→ 寫入後不可改(append-only,錯了只能沖銷) -->
-          <p class="hint note-first">{{ modeNoteText }}</p>
-          <p class="hint">{{ t(lang, 'holdingEventLedgerOnlyNote') }}</p>
-          <p class="hint">{{ t(lang, 'holdingEventIrreversibleNote') }}</p>
+          <p v-if="reversalOf" class="hint note-first">{{ reversalNoteText }}</p>
+          <template v-else>
+            <p class="hint note-first">{{ modeNoteText }}</p>
+            <p class="hint">{{ t(lang, 'holdingEventLedgerOnlyNote') }}</p>
+            <p class="hint">{{ t(lang, 'holdingEventIrreversibleNote') }}</p>
+          </template>
           <p
             v-if="submitting"
             class="submitting-note"
@@ -438,21 +498,25 @@
               <span>{{ t(lang, 'notes') }}</span>
               <b class="entry-id">{{ recorded.dto.note || '—' }}</b>
             </div>
+            <!-- 沖銷紀錄以原紀錄日期指回,不露 reversalOfId 原始值(T-04.2-43) -->
+            <div v-if="reversalOfDate" class="span-2" data-testid="holding-event-result-reversal-of">
+              <span>{{ tf(lang, 'cashReversalOf', { date: reversalOfDate }) }}</span>
+            </div>
           </div>
         </div>
 
         <!-- 送出錯誤:body 與 footer 之間的單一區域;診斷列只露 code 與 traceId,絕不露後端 message -->
         <div
-          v-if="submitError && !hasFieldLevelErrors"
+          v-if="shownError && !hasFieldLevelErrors"
           class="form-error submit-error"
           role="alert"
           data-testid="holding-event-error"
         >
           <div>{{ submitErrorMessage }}</div>
           <div class="details">
-            <span data-testid="holding-event-error-code">{{ submitError.code }}</span>
-            <span v-if="submitError.traceId" data-testid="holding-event-error-trace-id">
-              {{ t(lang, 'authRequestId') }} {{ submitError.traceId }}
+            <span data-testid="holding-event-error-code">{{ shownError.code }}</span>
+            <span v-if="shownError.traceId" data-testid="holding-event-error-trace-id">
+              {{ t(lang, 'authRequestId') }} {{ shownError.traceId }}
             </span>
           </div>
         </div>
@@ -475,7 +539,9 @@
             >{{ submitting ? t(lang, 'recordingTrade') : submitLabel }}</button>
           </template>
           <template v-else>
+            <!-- 沖銷的 result 只有 `完成`:同一原紀錄不可能再沖一次 -->
             <button
+              v-if="!reversalOf"
               type="button"
               class="btn-ghost"
               data-testid="holding-event-record-another"
@@ -514,7 +580,7 @@ const props = withDefaults(defineProps<{
   /** 開啟者已知的持倉;只顯示、不計算(Phase 3 D-04)。 */
   holding?: { totalQuantity: number; currency?: string; name?: string } | null;
   initialMode?: HoldingEventMode;
-  /** 沖銷模式由 04.2-19 實作。 */
+  /** 有值 = 沖銷模式(Trades 活動列「沖銷這筆」);值全取自此列,只有備註可改(D-13)。 */
   reversalOf?: PortfolioActivityDto | null;
 }>(), {
   symbol: null,
@@ -565,6 +631,7 @@ const symInput = ref<HTMLInputElement | null>(null);
 const symBlock = ref<HTMLElement | null>(null);
 const sharesInput = ref<HTMLInputElement | null>(null);
 const ratioNewInput = ref<HTMLInputElement | null>(null);
+const noteInput = ref<HTMLTextAreaElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 
 // =================== Idempotency-Key 的生命週期(D-13 = 04.1 D-11) ===================
@@ -582,6 +649,64 @@ interface SubmitError {
   status: number;
 }
 const submitError = ref<SubmitError | null>(null);
+/**
+ * 沖銷衝突(原紀錄已沖銷 / 不可沖銷 / 找不到)的鎖定狀態。與 `submitError` 分開存放:
+ * `submitError` 會在使用者改欄位時清掉,而鎖定後「送出鈕 disabled 的可見原因」必須持續顯示。
+ */
+const lockedError = ref<SubmitError | null>(null);
+const shownError = computed(() => submitError.value ?? lockedError.value);
+
+// =================== 沖銷模式(D-13) ===================
+const isReversal = computed(() => props.reversalOf !== null);
+
+/** 原列 kind → 對話框模式;買賣列不是本對話框能沖銷的對象(回 null,送出鈕 disabled)。 */
+const reversalMode = computed<HoldingEventMode | null>(() => {
+  switch (props.reversalOf?.kind) {
+    case 'CASH_DIVIDEND': return 'cashDividend';
+    case 'STOCK_DIVIDEND': return 'stockDividend';
+    case 'SPLIT': return 'split';
+    default: return null;
+  }
+});
+
+/** 類型 pill 文字:與 Trades 活動列同一組鍵(拆 / 合看原列 ratioNew > ratioOld)。 */
+const reversalKindLabel = computed(() => {
+  const row = props.reversalOf;
+  if (!row) return '';
+  if (row.kind === 'CASH_DIVIDEND') return t(props.lang, 'activityKindCashDividend');
+  if (row.kind === 'STOCK_DIVIDEND') return t(props.lang, 'activityKindStockDividend');
+  if (row.kind === 'SPLIT') {
+    return t(props.lang, (row.ratioNew ?? 0) > (row.ratioOld ?? 0) ? 'activityKindSplit' : 'activityKindReverseSplit');
+  }
+  return row.kind;
+});
+
+/** 沖銷預覽的唯一前端衍生:把記錄值前綴「扣回 / 撤銷」字樣,不做加減(UI-SPEC §Money)。 */
+function reversalPreviewFor(kind: 'dividend' | 'shareAdjustment', values: {
+  symbol: string | null; currency: string | null; amount: number | null; quantity: number | null;
+}): string {
+  if (kind === 'dividend') {
+    return tf(props.lang, 'holdingEventReversalPreviewDividend', {
+      code: values.currency ?? '—',
+      amount: fmtMoney(values.amount, values.currency, minorUnits(values.currency)),
+    });
+  }
+  return tf(props.lang, 'holdingEventReversalPreviewAdjustment', {
+    symbol: values.symbol ?? '—',
+    qty: fmtSignedQuantity(values.quantity),
+  });
+}
+
+const reversalPreviewText = computed(() => {
+  const row = props.reversalOf;
+  if (!row) return '';
+  return reversalPreviewFor(row.kind === 'CASH_DIVIDEND' ? 'dividend' : 'shareAdjustment', row);
+});
+
+const reversalNoteText = computed(() => t(
+  props.lang,
+  props.reversalOf?.kind === 'CASH_DIVIDEND' ? 'holdingEventReversalNoteDividend' : 'holdingEventReversalNoteAdjustment',
+));
 
 /** 本機日期 `YYYY-MM-DD`;除權日是標的市場的交易日,前端只以本機日期擋「晚於今天」。 */
 function todayLocalDate(): string {
@@ -610,21 +735,30 @@ function resetModeFields() {
 function resetForm() {
   step.value = 'form';
   mode.value = props.initialMode;
-  selectedSymbol.value = props.symbol;
-  selectedCurrency.value = props.holding?.currency ?? null;
+  const original = props.reversalOf;
+  if (original) {
+    // 沖銷:模式、標的、幣別一律取自原列(DB 會擋不一致,UI 讓它不可能送出不一致的組合)。
+    mode.value = reversalMode.value ?? 'cashDividend';
+    selectedSymbol.value = original.symbol;
+    selectedCurrency.value = original.currency;
+  } else {
+    selectedSymbol.value = props.symbol;
+    selectedCurrency.value = props.holding?.currency ?? null;
+  }
   note.value = '';
   resetModeFields();
   resetSymbolSearch();
   recorded.value = null;
   submitError.value = null;
+  lockedError.value = null;
   currentKey.value = null;
   dirtySinceSubmit.value = false;
 }
 
 // =================== 標的 typeahead(D-28;狀態機逐項沿用 OrderTicket.vue) ===================
 
-/** 無 symbol(從 Trades 開啟)= 可搜尋;有 symbol(從持倉開啟)= 鎖定。 */
-const isTypeahead = computed(() => props.symbol === null);
+/** 無 symbol(從 Trades 開啟)= 可搜尋;有 symbol(從持倉開啟)= 鎖定;沖銷模式不渲染標的欄。 */
+const isTypeahead = computed(() => props.symbol === null && !isReversal.value);
 
 /** 診斷只露 code 與 traceId,絕不顯示後端 message。 */
 interface BlockError {
@@ -831,6 +965,10 @@ onBeforeUnmount(() => {
  * 不落在送出鈕以免 Enter 誤送。
  */
 function focusPrimaryField() {
+  if (isReversal.value) {
+    noteInput.value?.focus();
+    return;
+  }
   if (isTypeahead.value) {
     symInput.value?.focus();
     return;
@@ -894,17 +1032,21 @@ const currentQtyText = computed(() => {
   return tf(props.lang, 'holdingEventCurrentQty', { qty: fmtQuantity(quantity) });
 });
 
-const dialogTitle = computed(() => (step.value === 'result' ? resultTitleText.value : t(props.lang, 'holdingEventTitle')));
+const dialogTitle = computed(() => {
+  if (step.value === 'result') return resultTitleText.value;
+  return t(props.lang, isReversal.value ? 'cashDialogTitleReversal' : 'holdingEventTitle');
+});
 
 const SUBMIT_LABEL_KEY: Record<HoldingEventMode, string> = {
   cashDividend: 'holdingEventRecordCashDividend',
   stockDividend: 'holdingEventRecordStockDividend',
   split: 'holdingEventRecordSplit',
 };
-const submitLabel = computed(() => t(props.lang, SUBMIT_LABEL_KEY[mode.value]));
+const submitLabel = computed(() => t(props.lang, isReversal.value ? 'cashRecordReversal' : SUBMIT_LABEL_KEY[mode.value]));
 
 /** result 標題只依後端 DTO 判斷;拆 / 合依回應的 `ratioNew > ratioOld`(D-02)。 */
 const resultTitleText = computed(() => {
+  if (isReversal.value) return t(props.lang, 'cashReversalRecorded');
   const event = recorded.value;
   if (!event || event.kind === 'dividend') return t(props.lang, 'holdingEventCashDividendRecorded');
   if (event.dto.type === 'STOCK_DIVIDEND') return t(props.lang, 'holdingEventStockDividendRecorded');
@@ -932,10 +1074,27 @@ function formatDateTime(iso: string | null | undefined): string {
 const resultSubText = computed(() => {
   const event = recorded.value;
   if (!event) return '';
+  // 沖銷列後端輸出原值(不反號);副標以「扣回 / 撤銷」字樣表達方向,不在前端反號。
+  if (isReversal.value) {
+    return event.kind === 'dividend'
+      ? reversalPreviewFor('dividend', { ...event.dto, quantity: null })
+      : reversalPreviewFor('shareAdjustment', { ...event.dto, amount: null, quantity: event.dto.quantityDelta });
+  }
   if (event.kind === 'dividend') {
     return fmtSignedMoney(event.dto.amount, event.dto.currency, minorUnits(event.dto.currency));
   }
   return `${event.dto.symbol} ${fmtSignedQuantity(event.dto.quantityDelta)}`;
+});
+
+/**
+ * result 的「沖銷 {date} 的紀錄」:以原列日期指回(股利 = 入帳時間的本機日期;股數調整 = 除權日原字串)。
+ * 回應 DTO 不帶原紀錄日期,原列就是開啟者給的那一列。
+ */
+const reversalOfDate = computed(() => {
+  const row = props.reversalOf;
+  if (!row || !recorded.value) return '';
+  if (row.kind === 'CASH_DIVIDEND') return formatDateTime(row.occurredAt).slice(0, 10);
+  return row.effectiveDate ?? formatDateTime(row.occurredAt).slice(0, 10);
 });
 
 // =================== 前端自檢(UI-SPEC §Interaction 1 欄位契約) ===================
@@ -990,13 +1149,20 @@ const effectiveDateValid = computed(() => isEffectiveDateValid());
 
 /** 送出前自檢(送出當下重算時間類規則)。 */
 function isFormValid(): boolean {
+  if (isReversal.value) return canSubmitReversal.value;
   if (!selectedSymbol.value) return false;
   if (mode.value === 'cashDividend') return amountValid.value && taxValid.value && isPaidAtValid();
   if (mode.value === 'stockDividend') return sharesValid.value && isEffectiveDateValid();
   return ratioValid.value && isEffectiveDateValid();
 }
 
+/** 沖銷:值不可編輯,只要原列是可沖銷的事件列且尚未遇到沖銷衝突即可送出。 */
+const canSubmitReversal = computed(() => (
+  lockedError.value === null && reversalMode.value !== null && !!props.reversalOf?.symbol
+));
+
 const canSubmit = computed(() => {
+  if (isReversal.value) return canSubmitReversal.value;
   if (!selectedSymbol.value) return false;
   if (mode.value === 'cashDividend') return amountValid.value && taxValid.value && paidAtValid.value;
   if (mode.value === 'stockDividend') return sharesValid.value && effectiveDateValid.value;
@@ -1045,7 +1211,10 @@ const serverFields = computed(() => Object.keys(submitError.value?.fields ?? {})
  * `fields` 至少有一個 key 對得到本模式的錯誤節點,才算「欄位級」呈現;
  * 一個都對不到(例如 `Idempotency-Key`)時退回底部的一般驗證錯誤 —— 否則按了送出卻什麼都看不到。
  */
-const hasFieldLevelErrors = computed(() => serverFields.value.some(field => MODE_FIELDS[mode.value].includes(field)));
+/** 沖銷畫面上唯一有錯誤節點的欄位是備註;沖銷值不符(fields.amount 等)對不到節點 → 退回底部。 */
+const activeFields = computed(() => (isReversal.value ? ['note'] : MODE_FIELDS[mode.value]));
+
+const hasFieldLevelErrors = computed(() => serverFields.value.some(field => activeFields.value.includes(field)));
 
 function fieldErrorId(field: string): string {
   return `holding-event-${field}-error`;
@@ -1122,6 +1291,8 @@ function ensureIdempotencyKey(): string {
 async function createEvent(symbol: string, idempotencyKey: string): Promise<RecordedEvent> {
   const clients = getRuntimeApiClients();
   const noteValue = note.value ? note.value : null;
+  const original = props.reversalOf;
+  if (original) return createReversal(original, symbol, noteValue, idempotencyKey);
   if (mode.value === 'cashDividend') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
@@ -1145,6 +1316,42 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
     effectiveDate: effectiveDate.value,
     note: noteValue,
     reversalOfId: null,
+  }, idempotencyKey);
+  return { kind: 'shareAdjustment', dto };
+}
+
+/**
+ * 沖銷請求:除備註外的值逐欄取自原列(DB 驗證沖銷值與原列相同,前端不讓使用者改)。
+ * 股利 `paidAt` 送 null(後端帶 now();payload 比對只在有送時比對);拆股 `quantity` 送 null(ΔQ 由後端記錄)。
+ */
+async function createReversal(
+  original: PortfolioActivityDto,
+  symbol: string,
+  noteValue: string | null,
+  idempotencyKey: string,
+): Promise<RecordedEvent> {
+  const clients = getRuntimeApiClients();
+  if (original.kind === 'CASH_DIVIDEND') {
+    const dto = await clients.holdingEvents.createDividend({
+      symbol,
+      amount: original.amount ?? 0,
+      withholdingTax: original.withholdingTax,
+      paidAt: null,
+      note: noteValue,
+      reversalOfId: original.id,
+    }, idempotencyKey);
+    return { kind: 'dividend', dto };
+  }
+  const isStock = original.kind === 'STOCK_DIVIDEND';
+  const dto = await clients.holdingEvents.createShareAdjustment({
+    symbol,
+    type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
+    quantity: isStock ? original.quantity : null,
+    ratioNew: isStock ? null : original.ratioNew,
+    ratioOld: isStock ? null : original.ratioOld,
+    effectiveDate: original.effectiveDate ?? '',
+    note: noteValue,
+    reversalOfId: original.id,
   }, idempotencyKey);
   return { kind: 'shareAdjustment', dto };
 }
@@ -1192,7 +1399,7 @@ async function submitEvent() {
 
 /**
  * 底部錯誤依 `error.code` 分派(不假設錯誤順序);每個 code 對應 UI-SPEC §錯誤狀態的一條文案。
- * 沖銷模式的對應(`TRADE_INSUFFICIENT_HOLDING` → `holdingEventErrReversalNoHolding`、三種沖銷衝突)由 04.2-19 接上。
+ * `TRADE_INSUFFICIENT_HOLDING` 在沖銷模式改用 `REVERSAL_ERROR_COPY` 的版本(見 `submitErrorMessage`)。
  */
 const SUBMIT_ERROR_COPY: Record<string, string> = {
   VALIDATION_FAILED: 'holdingEventErrValidation',
@@ -1207,16 +1414,38 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   AUTH_CSRF_TOKEN_MISSING: 'cashErrCsrf',
   // 前端合成的診斷碼:非 ApiClientError(連線失敗);唯一能保證「再送一次不會重複」的情境。
   NETWORK_ERROR: 'cashErrNetwork',
+  // 沖銷衝突(04.2-04 / 04.2-08 的錯誤碼表):皆「沒有寫入新紀錄」。
+  DIVIDEND_ALREADY_REVERSED: 'cashErrAlreadyReversed',
+  SHARE_ADJUSTMENT_ALREADY_REVERSED: 'cashErrAlreadyReversed',
+  DIVIDEND_NOT_REVERSIBLE: 'cashErrNotReversible',
+  // 股數調整:非該標的最晚一筆未沖銷調整(同日多筆依記錄順序倒著沖),或原列本身是沖銷。
+  SHARE_ADJUSTMENT_NOT_REVERSIBLE: 'holdingEventErrAdjustmentNotReversible',
+  DIVIDEND_NOT_FOUND: 'cashErrOriginalNotFound',
+  SHARE_ADJUSTMENT_NOT_FOUND: 'cashErrOriginalNotFound',
 };
+
+/** 沖銷模式下語意不同的 code(同一個 code、不同文案)。 */
+const REVERSAL_ERROR_COPY: Record<string, string> = {
+  // 沖銷股數調整後持股 ≤ 0(不是「除權日沒有持倉」)。
+  TRADE_INSUFFICIENT_HOLDING: 'holdingEventErrReversalNoHolding',
+};
+
+/** 沖銷衝突:此原紀錄不會再能被沖銷 → 丟棄 key、鎖定送出、通知開啟者重讀列表。 */
+const REVERSAL_CONFLICT_CODES = [
+  'DIVIDEND_ALREADY_REVERSED', 'SHARE_ADJUSTMENT_ALREADY_REVERSED',
+  'DIVIDEND_NOT_REVERSIBLE', 'SHARE_ADJUSTMENT_NOT_REVERSIBLE',
+  'DIVIDEND_NOT_FOUND', 'SHARE_ADJUSTMENT_NOT_FOUND',
+];
 
 /** 換新 key 才能脫困的 code:同一把 key 照文案重送只會再吃一次 409,形成無出路的迴圈。 */
 const KEY_REUSED_CODES = ['DIVIDEND_IDEMPOTENCY_KEY_REUSED', 'SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED'];
 
 /** 其他(含 5xx)= 結果不確定:`holdingEventErrUnknown` 說「可能已經寫入」並指向 Trades 頁籤,不斷言未寫入。 */
 const submitErrorMessage = computed(() => {
-  const error = submitError.value;
+  const error = shownError.value;
   if (!error) return '';
-  const key = SUBMIT_ERROR_COPY[error.code] ?? (error.status === 403 ? 'holdingEventErrForbidden' : 'holdingEventErrUnknown');
+  const key = (isReversal.value ? REVERSAL_ERROR_COPY[error.code] : undefined)
+    ?? SUBMIT_ERROR_COPY[error.code] ?? (error.status === 403 ? 'holdingEventErrForbidden' : 'holdingEventErrUnknown');
   return t(props.lang, key);
 });
 
@@ -1226,6 +1455,8 @@ const submitErrorMessage = computed(() => {
  * **key 的處置:預設一律保留** —— 「這次沒寫入(或結果未知),但意圖沒變」,沿用同一把重送是安全且正確的。
  * 網路失敗、5xx、`VALIDATION_FAILED`、`TRADE_INSUFFICIENT_HOLDING`、CSRF / 403、401 都走這條。
  * **例外是 `*_IDEMPOTENCY_KEY_REUSED`:必須丟棄 key。**
+ * 沖銷模式的三類衝突(`*_ALREADY_REVERSED` / `*_NOT_REVERSIBLE` / `*_NOT_FOUND`)同樣丟棄 key,
+ * 另外鎖住送出(此原紀錄不會再能被沖銷)並 emit `reversalConflict` 讓開啟者重讀活動列表。
  *
  * `fields` 只在 `VALIDATION_FAILED` 時做欄位級呈現:`ASSET_NOT_FOUND` 也帶 `fields.symbol`,
  * 但它的文案(請重新選擇標的)屬於底部區,不是「欄位格式錯」。
@@ -1243,6 +1474,14 @@ function handleSubmitFailure(error: unknown) {
   // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
   // key 保留:登入回來後重送的是同一個意圖。
   if (described.status === 401) return;
+
+  if (isReversal.value && REVERSAL_CONFLICT_CODES.includes(described.code)) {
+    currentKey.value = null;
+    lockedError.value = described;
+    submitError.value = null;
+    emit('reversalConflict', described.code);
+    return;
+  }
 
   submitError.value = described;
   if (KEY_REUSED_CODES.includes(described.code)) currentKey.value = null;
@@ -1383,6 +1622,24 @@ textarea.inp { resize: vertical; }
 .ratio-group { display: flex; align-items: center; gap: 12px; }
 .ratio-group .inp.big { width: 96px; text-align: center; }
 .ratio-sep { font-size: 13px; font-weight: 600; color: var(--fg-dim); }
+
+/* 沖銷原紀錄摘要卡:--surface2 底 + 1px 邊框 + 10px 圓角 + 16px 內距(在對話框內,不是卡片內嵌卡片) */
+.quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); margin-bottom: 4px; }
+.sum-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 400; padding: 4px 0; }
+.sum-row span { color: var(--fg-dim); }
+.sum-row b { font-weight: 600; text-align: right; }
+.sum-row b .ccy-tag { margin-left: 4px; }
+.wrap-any { overflow-wrap: anywhere; }
+/* 類型 pill:中性(損益顏色語意不屬於股利與股數調整) */
+.kind-pill {
+  display: inline-block; padding: 0 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.35;
+  border-radius: 99px; background: var(--surface); color: var(--fg); border: 1px solid var(--border);
+}
+/* 沖銷模式唯一的 Display 級元素;摘要卡下方 16px */
+.reversal-preview { margin-top: 16px; font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; overflow-wrap: anywhere; }
+.rp-lab { font-size: 12px; font-weight: 600; color: var(--fg-dim); margin-right: 8px; }
 
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
