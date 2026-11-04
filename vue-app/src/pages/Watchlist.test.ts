@@ -17,6 +17,7 @@ import {
   type WatchlistFetch,
 } from '../testing/watchlistFetchDouble';
 import type { WatchlistDto } from '../services/watchlistApi';
+import { installFakeQuoteStream, type FakeQuoteStream } from '../testing/fakeQuoteStream';
 
 // Phase 04.2 Plan 23(WATCH-03、D-14 / D-15 / D-17 / D-18 / D-20):Watchlist 頁整頁重建。
 // 清單與報價皆來自 watchlist service;頁面不 import mock store、不再有假 sparkline 與示範資料標示。
@@ -35,10 +36,14 @@ function spies(): Spies {
   return { chart: vi.fn(), navigate: vi.fn() };
 }
 
+/** 每次 API mode 掛載都換上假 QuoteStream(04.2-24):頁面測試不碰 jsdom 的真 WebSocket(P-W7)。 */
+let quotes: FakeQuoteStream;
+
 async function mountApi(fetchImpl: WatchlistFetch, on: Spies = spies()) {
   document.cookie = 'XSRF-TOKEN=csrf-watchlist; path=/';
   vi.stubEnv('VITE_DATA_MODE', 'api');
   resetRuntimeApiClientsForTests();
+  quotes = installFakeQuoteStream();
   vi.stubGlobal('fetch', fetchImpl);
   mountWithPinia(Watchlist, { lang: 'zh', onChart: on.chart, onNavigate: on.navigate });
   await flushAsync();
@@ -920,5 +925,225 @@ describe('Watchlist 頁 — 拖拉(HTML5 DnD)', () => {
 
     expect(row('AAPL').getAttribute('draggable')).toBe('false');
     expect(row('AAPL').querySelector('.grip')).toBeNull();
+  });
+});
+
+// =============== 04.2-24:即時報價疊加(WATCH-04;D-21 / D-23 / D-24;UI-SPEC §8 / §9、U-20、U-26)===============
+
+const AAPL_GET = assetDto('AAPL', {
+  name: 'Apple Inc.', latestPrice: 215.75, change: 2.65, changePercent: 1.24, volumeText: '52.1M', currency: 'USD',
+});
+const BTC = assetDto('BTC', {
+  name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', currency: 'USD',
+  latestPrice: 67000, change: 100, changePercent: 0.15, volumeText: '1.2K',
+});
+const USDTWD_QUOTED = assetDto('USD/TWD', {
+  name: '美元/台幣', assetType: 'FX', market: 'FX', currency: 'TWD', tradeable: false,
+  latestPrice: 32.1, change: 0.05, changePercent: 0.16, volumeText: null,
+});
+
+function liveLists(): WatchlistDto[] {
+  return [
+    { id: 'w1', name: '我的自選', items: [AAPL_GET, BTC, USDTWD] },
+    { id: 'w2', name: '科技', items: [assetDto('MSFT', { latestPrice: 410 })] },
+  ];
+}
+
+function liveStatus(): HTMLElement {
+  return requireTestid('live-quote-status');
+}
+
+function rowLive(symbol: string): HTMLElement | null {
+  return row(symbol).querySelector<HTMLElement>('[data-testid="watchlist-row-live"]');
+}
+
+/** U-26:非 live 狀態下,頁面文字除了「即時報價」本身之外不得出現「即時」,也不得有任何即時圓點。 */
+function expectNoLiveClaims() {
+  const text = (requireTestid('watchlist-page').textContent ?? '').replace(/即時報價/g, '');
+  expect(text).not.toContain('即時');
+  expect(text).not.toContain('●');
+  expect(document.body.querySelector('[data-testid="watchlist-row-live"]')).toBeNull();
+  expect(document.body.querySelector('.live-dot.solid')).toBeNull();
+}
+
+function pendingResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+describe('Watchlist 頁 — 即時報價疊加(04.2-24)', () => {
+  it('只 watch 作用中清單的 STOCK / CRYPTO(FX 不訂閱,U-20);切 tab 先釋放舊集合再 watch 新集合;卸載釋放', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+
+    expect(quotes.watch).toHaveBeenCalledTimes(1);
+    expect(quotes.watch.mock.calls[0][0]).toEqual(['AAPL', 'BTC']);
+
+    await click(tab('w2'));
+    expect(quotes.log).toEqual(['watch:AAPL,BTC', 'release:AAPL,BTC', 'watch:MSFT']);
+    expect(quotes.activeSets()).toEqual([['MSFT']]);
+
+    cleanupMounted();
+    expect(quotes.activeSets()).toEqual([]);
+  });
+
+  it('tracer:status live + AAPL tick 218.4 → 價格 218.40、data-quote-source=ws、● + sr-only「即時」;FX 列無 ●', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+    quotes.setStatus('live');
+    await flushAsync(1);
+
+    // 還沒收到 tick:REST 值,沒有即時標記。
+    expect(row('AAPL').getAttribute('data-quote-source')).toBe('rest');
+    expect(rowLive('AAPL')).toBeNull();
+    expect(liveStatus().getAttribute('data-live-status')).toBe('live');
+
+    quotes.pushTick('AAPL', 218.4);
+    await flushAsync(1);
+
+    const aapl = row('AAPL');
+    expect(aapl.getAttribute('data-quote-source')).toBe('ws');
+    expect(cell(aapl, 'watchlist-row-price').textContent).toContain('218.40');
+    const live = rowLive('AAPL');
+    expect(live, 'watchlist-row-live').not.toBeNull();
+    expect(live!.querySelector('.live-dot')?.getAttribute('aria-hidden')).toBe('true');
+    expect(live!.querySelector('.sr-only')?.textContent).toBe(t('zh', 'liveQuoteRowLive'));
+    // 漲跌依 previousClose(215.75 − 2.65 = 213.10)重算:+5.30 / +2.49%
+    expect(cell(aapl, 'watchlist-row-change').textContent).toBe('+2.49%');
+
+    // FX 永遠沒有 tick:無 ●,data-quote-source 依 GET(這裡 latestPrice null → none)。
+    expect(rowLive('USD/TWD')).toBeNull();
+    expect(row('USD/TWD').getAttribute('data-quote-source')).toBe('none');
+    // 沒有 tick 的 BTC 仍是 rest
+    expect(row('BTC').getAttribute('data-quote-source')).toBe('rest');
+    expect(rowLive('BTC')).toBeNull();
+  });
+
+  it('FX 列有 GET 報價且 stream live:仍為 rest、永不顯示 ●(partial,P-W6)', async () => {
+    await mountApi(watchlistFetch([{ id: 'w1', name: '我的自選', items: [AAPL_GET, USDTWD_QUOTED] }]));
+    quotes.setStatus('live');
+    quotes.pushTick('USD/TWD', 33);
+    await flushAsync(1);
+
+    expect(quotes.watch).toHaveBeenCalledWith(['AAPL']);
+    expect(row('USD/TWD').getAttribute('data-quote-source')).toBe('rest');
+    expect(rowLive('USD/TWD')).toBeNull();
+    expect(cell(row('USD/TWD'), 'watchlist-row-price').textContent).toBe('32.1000');
+  });
+
+  it('degraded → 所有列無 ●、AAPL 停在 218.40、data-quote-source=rest;頁首狀態 degraded(D-23 不假裝即時)', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+    quotes.setStatus('live');
+    quotes.pushTick('AAPL', 218.4);
+    await flushAsync(1);
+    expect(rowLive('AAPL')).not.toBeNull();
+
+    quotes.setStatus('degraded');
+    await flushAsync(1);
+
+    expect(liveStatus().getAttribute('data-live-status')).toBe('degraded');
+    expect(row('AAPL').getAttribute('data-quote-source')).toBe('rest');
+    expect(cell(row('AAPL'), 'watchlist-row-price').textContent).toContain('218.40');
+    expectNoLiveClaims();
+  });
+
+  it('connecting / closed / idle:頁面不出現「即時」標記(U-26);idle 不渲染狀態列', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+    quotes.pushTick('AAPL', 218.4);
+
+    quotes.setStatus('connecting');
+    await flushAsync(1);
+    expect(liveStatus().getAttribute('data-live-status')).toBe('connecting');
+    expectNoLiveClaims();
+
+    quotes.setStatus('closed');
+    await flushAsync(1);
+    expect(liveStatus().getAttribute('data-live-status')).toBe('closed');
+    expectNoLiveClaims();
+
+    quotes.setStatus('idle');
+    await flushAsync(1);
+    expect(testid('live-quote-status')).toBeNull();
+    expectNoLiveClaims();
+  });
+
+  it('replaced → 顯示被取代文案;點「在此分頁重新連線」呼叫 quotes.reconnect() 一次(不自動重連)', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+    quotes.setStatus('replaced');
+    await flushAsync(1);
+
+    expect(liveStatus().textContent).toContain(t('zh', 'liveQuoteReplaced'));
+    expect(quotes.reconnect).not.toHaveBeenCalled();
+    expectNoLiveClaims();
+
+    await click(requireTestid('live-quote-reconnect'));
+    expect(quotes.reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('狀態列位在頁首 h2 之下(取代舊副標)', async () => {
+    await mountApi(watchlistFetch(liveLists()));
+    quotes.setStatus('live');
+    await flushAsync(1);
+
+    const head = requireTestid('watchlist-page').querySelector('.head-main');
+    expect(head?.querySelector('h2')).not.toBeNull();
+    expect(head?.querySelector('[data-testid="live-quote-status"]')).not.toBeNull();
+  });
+
+  it('resyncSeq 遞增 → 靜默重讀 GET(不閃 watchlist-loading),新值取代舊列', async () => {
+    const second = pendingResponse();
+    const fetchImpl = watchlistFetch(liveLists(), {
+      list: call => (call === 0 ? apiSuccess(liveLists()) : second.promise),
+    });
+    await mountApi(fetchImpl);
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(1);
+
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(testid('watchlist-loading')).toBeNull();
+    expect(rowSymbols()).toEqual(['AAPL', 'BTC', 'USD/TWD']);
+
+    const refreshed = liveLists();
+    refreshed[0].items = [{ ...AAPL_GET, latestPrice: 220.5 }, BTC, USDTWD];
+    second.resolve(apiSuccess(refreshed));
+    await flushAsync();
+    expect(cell(row('AAPL'), 'watchlist-row-price').textContent).toBe('220.50');
+  });
+
+  it('每 5 分鐘靜默重讀一次;重讀失敗保留舊值、不顯示錯誤區', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const fetchImpl = watchlistFetch(liveLists(), {
+      list: call => (call === 0 ? apiSuccess(liveLists()) : apiFailure('INTERNAL_ERROR', 'trace-500', 500)),
+    });
+    await mountApi(fetchImpl);
+    await settle();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(1);
+
+    vi.advanceTimersByTime(5 * 60 * 1000 - 1);
+    await settle();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    await settle();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(2);
+    expect(testid('watchlist-loading')).toBeNull();
+    expect(testid('watchlist-error')).toBeNull();
+    expect(testid('watchlist-op-error')).toBeNull();
+    expect(rowSymbols()).toEqual(['AAPL', 'BTC', 'USD/TWD']);
+    expect(cell(row('AAPL'), 'watchlist-row-price').textContent).toBe('215.75');
+  });
+
+  it('排序尚未儲存時不做靜默重讀(避免伺服器舊順序蓋掉本地排序)', async () => {
+    const fetchImpl = watchlistFetch(liveLists());
+    await mountApi(fetchImpl);
+    fakeDebounceTimers();
+    await click(button('watchlist-reorder'));
+    await press(moveButton('BTC', 'up'));
+    expect(rowSymbols()).toEqual(['BTC', 'AAPL', 'USD/TWD']);
+
+    quotes.bumpResync();
+    await settle();
+    expect(callsTo(fetchImpl, 'GET', '/watchlists')).toHaveLength(1);
+    expect(rowSymbols()).toEqual(['BTC', 'AAPL', 'USD/TWD']);
   });
 });
