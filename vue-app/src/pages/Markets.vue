@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <MockDataNotice :lang="lang" />
+    <MockDataNotice :lang="lang" exception="mockDataNoticeExceptWatchlist" />
     <div class="row-between" style="margin-bottom:18px">
       <h2>{{ t(lang, 'markets') }}</h2>
       <div class="search-wrap">

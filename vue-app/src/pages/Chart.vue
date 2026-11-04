@@ -64,7 +64,7 @@ function loadTradingViewScript(): Promise<void> {
 
 <template>
   <div class="page">
-    <MockDataNotice :lang="lang" />
+    <MockDataNotice :lang="lang" exception="mockDataNoticeExceptWatchlist" />
     <!-- Top bar -->
     <div class="topbar">
       <button class="back" @click="$emit('back')">← {{ t(lang, 'markets') }}</button>
@@ -84,7 +84,17 @@ function loadTradingViewScript(): Promise<void> {
         </div>
       </div>
       <div class="top-actions">
-        <button class="btn-ghost" @click="portfolio.toggleWatch(sym)">{{ starred ? '★' : '☆' }} Watch</button>
+        <!-- D-16:開觀察清單選擇器;字符 aria-hidden,語意由可見文字承擔 -->
+        <button
+          type="button"
+          class="btn-watch"
+          :class="{ on: starred }"
+          data-testid="chart-watch"
+          aria-haspopup="dialog"
+          :aria-expanded="pickerOpen ? 'true' : 'false'"
+          :aria-controls="pickerOpen ? WATCHLIST_PICKER_ID : undefined"
+          @click="togglePicker"
+        ><span class="watch-glyph" aria-hidden="true">{{ starred ? '★' : '☆' }}</span>{{ t(lang, starred ? 'chartWatchIn' : 'chartWatchAdd') }}</button>
         <template v-if="canOrder">
           <button class="btn-accent buy" @click="$emit('order', { sym, side: 'BUY' })">{{ t(lang, 'buy') }}</button>
           <button class="btn-accent sell" @click="$emit('order', { sym, side: 'SELL' })">{{ t(lang, 'sell') }}</button>
@@ -148,6 +158,20 @@ function loadTradingViewScript(): Promise<void> {
         <div v-else class="mini-empty">{{ simulationUnavailableText }}</div>
       </div>
     </div>
+
+    <WatchlistPicker
+      :open="pickerOpen"
+      :lang="lang"
+      :symbol="sym"
+      :anchor="pickerAnchor"
+      :lists="lists"
+      :loading="listsLoading"
+      :load-error="listsError"
+      @close="pickerOpen = false"
+      @changed="onListChanged"
+      @created="onListCreated"
+      @retry="loadLists"
+    />
   </div>
 </template>
 
@@ -156,7 +180,10 @@ import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';
 import { t } from '../i18n';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { ApiClientError } from '../services/apiClient';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import type { WatchlistDto } from '../services/watchlistApi';
+import WatchlistPicker, { WATCHLIST_PICKER_ID } from '../components/WatchlistPicker.vue';
 import type { Lang, Theme } from '../types';
 import { resolveTvWidgetTheme } from '../chartTvTheme';
 import type { ChartThemeMode } from '../chartTvTheme';
@@ -164,11 +191,48 @@ import type { ChartThemeMode } from '../chartTvTheme';
 const props = defineProps<{ lang: Lang; sym: string; themeMode: ChartThemeMode; theme: Theme }>();
 defineEmits<{ order: [preset: { sym: string; side?: 'BUY' | 'SELL' }]; back: [] }>();
 
-const portfolio = useMockPortfolioStore();
+// WATCH-03 / judgment §3:觀察清單只經 watchlist service(不 import mock store);頁級 ref 是 Watch 按鈕
+// 與選擇器的唯一狀態來源,選擇器寫入後以回應 DTO 回填(不樂觀更新)。行情與 LIVE pill 仍是示範資料(D-21)。
+const lists = ref<WatchlistDto[] | null>(null);
+const listsLoading = ref(false);
+const listsError = ref<ApiClientError | null>(null);
+const pickerOpen = ref(false);
+const pickerAnchor = ref<HTMLElement | null>(null);
+
+async function loadLists() {
+  listsLoading.value = true;
+  listsError.value = null;
+  try {
+    lists.value = await getRuntimeApiClients().watchlist.list();
+  } catch (error) {
+    listsError.value = error instanceof ApiClientError
+      ? error
+      : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+  } finally {
+    listsLoading.value = false;
+  }
+}
+
+function onListChanged(updated: WatchlistDto) {
+  lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
+}
+
+function onListCreated(created: WatchlistDto) {
+  lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
+}
+
+function togglePicker(event: MouseEvent) {
+  if (pickerOpen.value) {
+    pickerOpen.value = false;
+    return;
+  }
+  pickerAnchor.value = event.currentTarget as HTMLElement;
+  pickerOpen.value = true;
+}
 const allInstruments = computed(() => [...SYMBOLS, ...CRYPTO, ...FX, ...BONDS]);
 const symbol = computed(() => allInstruments.value.find(s => s.sym === props.sym));
 const chartError = ref('');
-const starred = computed(() => portfolio.isWatched(props.sym));
+const starred = computed(() => (lists.value ?? []).some(list => list.items.some(item => item.symbol === props.sym)));
 const canOrder = computed(() => !!symbol.value && symbol.value.cat !== 'bond');
 const orderUnavailableText = computed(() =>
   props.lang === 'zh' ? '債券殖利率不可下單' : 'Bond yield orders unavailable',
@@ -263,7 +327,12 @@ async function mountWidget() {
   }
 }
 
-onMounted(mountWidget);
+onMounted(() => {
+  void loadLists();
+  void mountWidget();
+});
+// 換代號時關閉選擇器(清單資料不變,不必重讀)。
+watch(() => props.sym, () => { pickerOpen.value = false; });
 onBeforeUnmount(() => {
   unmounted = true;
   mountSeq++;
@@ -406,8 +475,15 @@ function signedFmt(n: number | null | undefined, d = 2) {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .top-actions { display: flex; gap: 8px; }
 
-.btn-ghost { background: var(--surface); border: 1px solid var(--border); color: var(--fg); padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; }
-.btn-ghost:hover { background: var(--surface2); }
+.btn-watch {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--fg);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.btn-watch:hover { background: var(--surface2); }
+.btn-watch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn-watch.on .watch-glyph { color: var(--accent); }
 .btn-accent { color: #fff; border: 0; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .btn-accent.buy { background: var(--up); }
 .btn-accent.sell { background: var(--dn); }
