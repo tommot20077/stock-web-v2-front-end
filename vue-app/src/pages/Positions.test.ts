@@ -5,19 +5,21 @@ import Positions from './Positions.vue';
 // 不走 node:fs —— 本專案 tsconfig 未含 @types/node,且本 plan 不得新增套件(沿用 03-03 的手法)。
 import positionsSource from './Positions.vue?raw';
 import { fmtPct } from '../data';
-import { fmtMoneyAmount, fmtSignedMoneyAmount } from '../moneyFormat';
-import { t } from '../i18n';
+import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
+import { t, tf } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   bumpPortfolioRevision,
+  notifyHoldingEventCreated,
   notifyTradeCreated,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import OrderTicket from '../components/OrderTicket.vue';
 import type { AssetDto, HoldingDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import type { DividendDto } from '../services/holdingEventApi';
 import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 04(03-04-PLAN.md)。API mode 的 Positions 一律讀後端欄位(D-04),
@@ -182,11 +184,14 @@ function failure(code: string, traceId: string, status = 503): Response {
 
 type Handler = () => Response | Promise<Response>;
 
-function routedFetch(handlers: { summary: Handler; holdings: Handler }) {
+function routedFetch(handlers: { summary: Handler; holdings: Handler; dividends?: Handler; shareAdjustments?: Handler }) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/portfolio/holdings')) return handlers.holdings();
     if (url.includes('/portfolio/summary')) return handlers.summary();
+    // 04.2-21:Positions 自己掛載的 HoldingEventDialog 只會打這兩個寫入端點;沒路由就丟錯,讓偷打別的 API 立刻可見。
+    if (url.includes('/portfolio/dividends') && handlers.dividends) return handlers.dividends();
+    if (url.includes('/portfolio/share-adjustments') && handlers.shareAdjustments) return handlers.shareAdjustments();
     throw new Error(`unexpected fetch: ${url}`);
   });
 }
@@ -1128,26 +1133,31 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
     expect(rowSymbols()).toEqual(['LOW', 'HIG', 'NUL']); // 升冪,null 仍在最後
   });
 
-  it('mock mode:表頭不含今日損益,表頭與每列 td 數量維持 8', async () => {
+  /*
+   * DP-10(04.2-21 改寫):兩個 tbody 在權重欄之後新增「動作」欄(D-11),欄數各加 1。
+   * 舊:mock 8 欄 / API 9 欄(權重為最後一欄)。新:mock 9 欄 / API 10 欄,權重仍在今日損益之後,動作欄在最右。
+   */
+  it('mock mode:表頭不含今日損益,表頭與每列 td 數量為 9(權重之後是動作欄,04.2-21)', async () => {
     mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
     await flushAsync();
 
     const heads = [...document.body.querySelectorAll('thead th')];
-    expect(heads).toHaveLength(8);
+    expect(heads).toHaveLength(9);
     expect(heads.map(th => th.textContent)).not.toContain(t('en', 'todayPnl'));
     expect(dayPnlCells()).toHaveLength(0);
-    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(8);
+    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(9);
   });
 
-  it('API mode:表頭 9 欄、每列 td 9 個,今日損益在 P&L 與權重之間', async () => {
+  it('API mode:表頭 10 欄、每列 td 10 個,今日損益在 P&L 與權重之間,動作欄在最右(04.2-21)', async () => {
     await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
 
     const heads = [...document.body.querySelectorAll('thead th')].map(th => th.textContent?.trim() ?? '');
-    expect(heads).toHaveLength(9);
+    expect(heads).toHaveLength(10);
     expect(heads[6]).toMatch(/^P&L/);
     expect(heads[7]).toMatch(new RegExp(`^${t('en', 'todayPnl').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     expect(heads[8]).toMatch(new RegExp(`^${t('en', 'weight')}`));
-    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(9);
+    expect(heads[9]).toBe(t('en', 'positionsActionsHeader'));
+    for (const row of rows()) expect(row.querySelectorAll('td')).toHaveLength(10);
   });
 });
 
@@ -1359,5 +1369,291 @@ describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
     expect(positionsSource).toMatch(/\.sectors\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*1fr\)/);
     expect(positionsSource).toMatch(/@media \(max-width: 899px\)[\s\S]*?\.sectors\s*\{[^}]*repeat\(2,\s*1fr\)/);
     expect(positionsSource).toMatch(/@media \(max-width: 559px\)[\s\S]*?\.sectors\s*\{[^}]*grid-template-columns:\s*1fr/);
+  });
+});
+
+// =====================================================================================
+// 04.2-21 Task 1(tracer):Positions 列動作「股利與股數調整」(D-11)→ 寫入後依 cause 重讀 →
+// 總損益卡的股利收入附加列(DIV-02)。UI-SPEC §Interaction 2 / §Interaction 4 / §11。
+// =====================================================================================
+
+const RECORDED_DIVIDEND: DividendDto = {
+  id: 'dividend-positions-1',
+  symbol: 'ZZA',
+  currency: 'TWD',
+  amount: 3840,
+  withholdingTax: 960,
+  paidAt: '2026-11-04T09:30:00+08:00',
+  createdAt: '2026-11-04T09:30:05+08:00',
+  note: null,
+  reversalOfId: null,
+  reversed: false,
+};
+
+function holdingEventButtons(): HTMLButtonElement[] {
+  return [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="positions-holding-event"]')];
+}
+
+async function clickAndFlush(el: HTMLElement) {
+  click(el);
+  await flushAsync();
+}
+
+async function typeInto(id: string, value: string) {
+  const input = requireTestid(id) as HTMLInputElement;
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await nextTick();
+}
+
+/** API mode 掛載並回傳 order 事件的 spy(列點擊開 OrderTicket 的那條路)。 */
+async function mountApiWithOrderSpy(fetchMock: ReturnType<typeof routedFetch>) {
+  // CSRF cookie 預先備好,對話框的 POST 不需要 bootstrap 往返(HoldingEventDialog.test.ts 的同一手法)。
+  document.cookie = 'XSRF-TOKEN=csrf-positions; path=/';
+  vi.stubEnv('VITE_DATA_MODE', 'api');
+  resetRuntimeApiClientsForTests();
+  vi.stubGlobal('fetch', fetchMock);
+  const onOrder = vi.fn();
+  mountWithPinia(Positions, { lang: 'en', onOrder });
+  await flushAsync();
+  return onOrder;
+}
+
+describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-11)', () => {
+  it('populated(API):動作欄表頭只有 sr-only 的「動作」,每列一顆帶代號 aria-label 的 btn-ghost-sm', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'ZZA', marketValueInBase: 3 }), holding({ symbol: 'YYB', marketValueInBase: 1 })],
+      summaryWith({ totalMarketValue: 4, holdingCount: 2 }),
+    );
+
+    const lastTh = [...document.body.querySelectorAll<HTMLElement>('thead th')].pop()!;
+    const sr = lastTh.querySelector('.sr-only');
+    expect(sr, '動作欄表頭的 .sr-only').toBeTruthy();
+    expect(sr!.textContent?.trim()).toBe(t('en', 'positionsActionsHeader'));
+    // 可見表頭留空:th 內沒有 sr-only 以外的文字
+    expect([...lastTh.childNodes].filter(n => n !== sr).map(n => n.textContent ?? '').join('').trim()).toBe('');
+
+    const buttons = holdingEventButtons();
+    expect(buttons).toHaveLength(2);
+    for (const [i, row] of rows().entries()) {
+      const btn = row.querySelector<HTMLButtonElement>('[data-testid="positions-holding-event"]');
+      expect(btn, `row ${i} 的動作鈕`).toBeTruthy();
+      // 動作鈕在該列最後一格
+      expect(row.querySelector('td:last-child')!.contains(btn)).toBe(true);
+      expect(btn!.classList.contains('btn-ghost-sm')).toBe(true);
+      expect(btn!.getAttribute('type')).toBe('button');
+      expect(btn!.textContent?.trim()).toBe(t('en', 'holdingEventRowAction'));
+    }
+    expect(buttons.map(b => b.getAttribute('aria-label'))).toEqual(
+      rowSymbols().map(symbol => tf('en', 'holdingEventRowActionAria', { symbol })),
+    );
+  });
+
+  it('populated(API):點動作鈕開啟標的鎖定、預設現金股利的對話框,且不觸發列的下單(@click.stop)', async () => {
+    const onOrder = await mountApiWithOrderSpy(routedFetch({
+      summary: () => success(summaryWith({ totalMarketValue: 999, holdingCount: 1 })),
+      holdings: () => success([TRUTH_HOLDING]),
+    }));
+    expect(testid('holding-event-dialog')).toBeNull();
+
+    await clickAndFlush(holdingEventButtons()[0]);
+
+    expect(onOrder).not.toHaveBeenCalled();
+    requireTestid('holding-event-dialog');
+    const locked = requireTestid('holding-event-symbol-locked');
+    expect(locked.textContent).toContain('ZZA');
+    expect(locked.textContent).toContain('TWD');
+    expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+    expect(requireTestid('holding-event-amount-ccy').textContent?.trim()).toBe('TWD');
+
+    // 列本身的點擊照舊開 OrderTicket
+    click(rows()[0].querySelector('td')!);
+    expect(onOrder).toHaveBeenCalledWith({ sym: 'ZZA' });
+  });
+
+  it('populated(mock):mock tbody 每列也有動作鈕,點擊開啟預填該列標的的對話框且不下單', async () => {
+    const onOrder = vi.fn();
+    mountWithPinia(Positions, { lang: 'en', onOrder });
+    await flushAsync();
+
+    const buttons = holdingEventButtons();
+    expect(buttons.length).toBe(rows().length);
+    expect(buttons.length).toBeGreaterThan(0);
+    const firstSymbol = rowSymbols()[0];
+    expect(buttons[0].getAttribute('aria-label')).toBe(tf('en', 'holdingEventRowActionAria', { symbol: firstSymbol }));
+
+    await clickAndFlush(buttons[0]);
+
+    expect(onOrder).not.toHaveBeenCalled();
+    expect(requireTestid('holding-event-symbol-locked').textContent).toContain(firstSymbol);
+    expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('動作鈕樣式:12px / 600、min-height 36px、padding 8px 12px;動作格靠右、不換行、右內距 16px', () => {
+    expect(positionsSource).toMatch(/\.btn-ghost-sm\s*\{[^}]*min-height:\s*36px/);
+    expect(positionsSource).toMatch(/\.btn-ghost-sm\s*\{[^}]*padding:\s*8px 12px/);
+    expect(positionsSource).toMatch(/\.btn-ghost-sm\s*\{[^}]*font-size:\s*12px/);
+    expect(positionsSource).toMatch(/\.btn-ghost-sm\s*\{[^}]*font-weight:\s*600/);
+    expect(positionsSource).toMatch(/\.col-actions\s*\{[^}]*padding-right:\s*16px/);
+    expect(positionsSource).toMatch(/\.col-actions\s*\{[^}]*text-align:\s*right/);
+    expect(positionsSource).toMatch(/\.col-actions\s*\{[^}]*white-space:\s*nowrap/);
+    expect(positionsSource).toContain('@click.stop');
+  });
+});
+
+describe('Positions — 股利 / 股數調整寫入後依 cause 重讀(04.2-21 Task 1 / UI-SPEC §11)', () => {
+  it('tracer:從一列記現金股利 → 只重讀 summary(holdings 不重讀)→ 總損益卡出現含預扣稅的股利收入', async () => {
+    let dividendRecorded = false;
+    const fetchMock = routedFetch({
+      summary: () => success(dividendRecorded
+        ? summaryWith({ totalPnl: 5000, dividendIncome: 3840, dividendTaxWithheld: 960 })
+        : summaryWith({ totalPnl: 1160 })),
+      holdings: () => success([TRUTH_HOLDING]),
+      dividends: () => {
+        dividendRecorded = true;
+        return success(RECORDED_DIVIDEND);
+      },
+    });
+    await mountApiWithOrderSpy(fetchMock);
+    expect(testid('positions-stat-dividend-income')).toBeNull();
+
+    await clickAndFlush(holdingEventButtons()[0]);
+    await typeInto('holding-event-amount', '3840');
+    await typeInto('holding-event-tax', '960');
+    await clickAndFlush(requireTestid('holding-event-submit'));
+    await flushAsync();
+
+    expect(callsMatching(fetchMock, '/portfolio/dividends')).toHaveLength(1);
+    requireTestid('holding-event-result');
+    // RESEARCH Q7:股利不改持倉估值 → 只重讀 summary
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+    expect(callsMatching(fetchMock, '/portfolio/holdings')).toHaveLength(1);
+
+    const note = requireTestid('positions-stat-dividend-income');
+    expect(note.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(3840, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+    // 附加列在「總損益」卡內
+    const card = note.closest('[data-testid="positions-stat"]')!;
+    expect(card.querySelector('.stat-l')!.textContent).toBe(t('en', 'totalPnlLabel'));
+    expect(note.classList.contains('stat-note')).toBe(true);
+  });
+
+  it("cause 'shareAdjustment':holdings 與 summary 都重讀", async () => {
+    const fetchMock = await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+
+    notifyHoldingEventCreated({ id: 'adj-1' }, 'shareAdjustment');
+    await flushAsync();
+
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+    expect(callsMatching(fetchMock, '/portfolio/holdings')).toHaveLength(2);
+  });
+
+  it("cause 'dividend':只重讀 summary,holdings 請求次數不變", async () => {
+    const fetchMock = await mountApiWith([TRUTH_HOLDING], TRUTH_SUMMARY);
+
+    notifyHoldingEventCreated({ id: 'div-1' }, 'dividend');
+    await flushAsync();
+
+    expect(callsMatching(fetchMock, '/portfolio/summary')).toHaveLength(2);
+    expect(callsMatching(fetchMock, '/portfolio/holdings')).toHaveLength(1);
+  });
+
+  it('error(T-04.2-46):股利寫入後 summary 重讀失敗 → portfolioStaleAfterCashEntry,不得出現「交易已記錄」', async () => {
+    let failRefetch = false;
+    const fetchMock = routedFetch({
+      summary: () => (failRefetch ? failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-div-stale') : success(TRUTH_SUMMARY)),
+      holdings: () => success([TRUTH_HOLDING]),
+    });
+    await mountApiPositions(fetchMock);
+
+    failRefetch = true;
+    notifyHoldingEventCreated({ id: 'div-1' }, 'dividend');
+    await flushAsync();
+
+    const stale = requireTestid('positions-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+    expect(document.body.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+
+  it('error(T-04.2-46):股數調整後 holdings 重讀失敗 → portfolioStaleAfterCashEntry,不得出現「交易已記錄」', async () => {
+    let failRefetch = false;
+    const fetchMock = routedFetch({
+      summary: () => success(TRUTH_SUMMARY),
+      holdings: () => (failRefetch ? failure('PORTFOLIO_HOLDINGS_UNAVAILABLE', 'trace-adj-stale') : success([TRUTH_HOLDING])),
+    });
+    await mountApiPositions(fetchMock);
+
+    failRefetch = true;
+    notifyHoldingEventCreated({ id: 'adj-1' }, 'shareAdjustment');
+    await flushAsync();
+
+    const stale = requireTestid('positions-refresh-error');
+    expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+    expect(document.body.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+
+  it("cause 'trade' 的重讀失敗仍是 portfolioStaleAfterTrade(既有行為不變)", async () => {
+    let failRefetch = false;
+    const fetchMock = routedFetch({
+      summary: () => (failRefetch ? failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-trade-stale') : success(TRUTH_SUMMARY)),
+      holdings: () => success([TRUTH_HOLDING]),
+    });
+    await mountApiPositions(fetchMock);
+
+    failRefetch = true;
+    bumpPortfolioRevision('trade');
+    await flushAsync();
+
+    expect(requireTestid('positions-refresh-error').textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+  });
+});
+
+describe('Positions — 總損益卡股利收入附加列(04.2-21 Task 1 / DIV-02)', () => {
+  function totalPnlCard(): HTMLElement {
+    const card = allTestids('positions-stat').find(el => el.querySelector('.stat-l')?.textContent === t('en', 'totalPnlLabel'));
+    expect(card, '總損益卡').toBeTruthy();
+    return card!;
+  }
+
+  it('populated:有預扣稅 → dividendIncomeLineWithTax({amount} 帶號、{tax} 不帶號)', async () => {
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' }));
+
+    const note = requireTestid('positions-stat-dividend-income');
+    expect(totalPnlCard().contains(note)).toBe(true);
+    expect(note.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(3840, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+  });
+
+  it('populated:預扣稅 0 → dividendIncomeLine', async () => {
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'TWD' }));
+
+    expect(requireTestid('positions-stat-dividend-income').textContent?.trim())
+      .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'TWD', 0) }));
+  });
+
+  it('empty:股利收入與預扣稅皆 0 → 不渲染', async () => {
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 0, dividendTaxWithheld: 0 }));
+
+    expect(allTestids('positions-stat')).toHaveLength(6);
+    expect(testid('positions-stat-dividend-income')).toBeNull();
+  });
+
+  it('mock mode:不渲染(mock KPI 是寫死值,不隨 mock 記錄變動)', async () => {
+    mountWithPinia(Positions, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+
+    expect(allTestids('positions-stat')).toHaveLength(6);
+    expect(testid('positions-stat-dividend-income')).toBeNull();
+  });
+
+  it('樣式:.stat-note 12px / 400、--fg-dim、margin-top 4px', () => {
+    expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*font-size:\s*12px/);
+    expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*font-weight:\s*400/);
+    expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*color:\s*var\(--fg-dim\)/);
+    expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*margin-top:\s*4px/);
   });
 });
