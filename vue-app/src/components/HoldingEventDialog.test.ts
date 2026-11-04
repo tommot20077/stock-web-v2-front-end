@@ -4,7 +4,7 @@ import HoldingEventDialog from './HoldingEventDialog.vue';
 // 原始碼字面(Vite `?raw`):鎖住行為測試抓不到的「這段程式碼不存在」(沿用 CashEntryDialog.test.ts 的手法)。
 import holdingEventDialogSource from './HoldingEventDialog.vue?raw';
 import { t, tf } from '../i18n';
-import { fmtMoney } from '../moneyFormat';
+import { fmtMoney, fmtQuantity, fmtSignedQuantity } from '../moneyFormat';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
@@ -17,7 +17,7 @@ import {
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
-import type { DividendDto } from '../services/holdingEventApi';
+import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -323,5 +323,270 @@ describe('HoldingEventDialog tracer — 從持倉記一筆現金股利(D-02 / D-
     expect(irreversible).toBeGreaterThan(ledger);
     // U-01:沒有 review 步驟,也沒有 step dots。
     expect(holdingEventDialogSource).not.toMatch(/step === 'review'/);
+  });
+});
+
+// 以下 Task 2:配股與拆股 / 合股模式(D-05 / D-08)。
+
+/** 後端回傳的 `ShareAdjustmentDto`;`quantityDelta` 由後端算,前端只顯示(Phase 3 D-04)。 */
+function adjustmentDto(overrides: Partial<ShareAdjustmentDto> = {}): ShareAdjustmentDto {
+  return {
+    id: 'adjustment-backend-1',
+    symbol: 'AAPL',
+    currency: 'USD',
+    type: 'STOCK_DIVIDEND',
+    quantityDelta: 50,
+    ratioNew: null,
+    ratioOld: null,
+    effectiveDate: '2026-11-03',
+    createdAt: '2026-11-04T09:30:05+08:00',
+    note: null,
+    reversalOfId: null,
+    reversed: false,
+    ...overrides,
+  };
+}
+
+function adjustmentFetch(dto: ShareAdjustmentDto) {
+  return holdingEventFetch({ adjustments: () => okResponse(dto) });
+}
+
+function adjustmentCalls(fetchImpl: FetchDouble) {
+  return callsTo(fetchImpl, '/portfolio/share-adjustments');
+}
+
+/** 本機日期 `YYYY-MM-DD`(與元件的 `max` 同一個來源:本機時區)。 */
+function localDate(offsetDays = 0): string {
+  return toLocalInputValue(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000)).slice(0, 10);
+}
+
+const HOLDING_1000 = { totalQuantity: 1000, currency: 'USD', name: 'Apple Inc.' };
+
+describe('HoldingEventDialog — 模式切換', () => {
+  it('rendersThreeModeButtonsInAPressedGroup', async () => {
+    await mountDialog();
+
+    const cash = requireTestid('holding-event-mode-cash-dividend');
+    const stock = requireTestid('holding-event-mode-stock-dividend');
+    const split = requireTestid('holding-event-mode-split');
+    const group = cash.parentElement!;
+    expect(group.getAttribute('role')).toBe('group');
+    expect(group.getAttribute('aria-labelledby')).toBeTruthy();
+    expect(stock.parentElement).toBe(group);
+    expect(split.parentElement).toBe(group);
+    expect([cash, stock, split].map(b => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false']);
+
+    await click(stock);
+    expect([cash, stock, split].map(b => b.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'false']);
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'holdingEventRecordStockDividend'));
+    await click(split);
+    expect(submitButton().textContent?.trim()).toBe(t('zh', 'holdingEventRecordSplit'));
+  });
+
+  it('switchingModeKeepsSymbolAndNoteButClearsOtherFieldsAndErrors', async () => {
+    await mountDialog();
+    await typeInto('holding-event-amount', '0');
+    await typeInto('holding-event-note', 'keep-me');
+    expect(fieldError('amount')).toBe(t('zh', 'holdingEventErrAmount'));
+
+    await click(requireTestid('holding-event-mode-stock-dividend'));
+    expect(testid('holding-event-amount')).toBeNull();
+    expect((requireTestid('holding-event-shares') as HTMLInputElement).value).toBe('');
+    expect((requireTestid('holding-event-note') as HTMLTextAreaElement).value).toBe('keep-me');
+    expect(requireTestid('holding-event-symbol-locked').textContent).toContain('AAPL');
+
+    await click(requireTestid('holding-event-mode-cash-dividend'));
+    expect((requireTestid('holding-event-amount') as HTMLInputElement).value, '切回後金額已清空').toBe('');
+    expect(fieldError('amount'), '切回後欄位錯誤已清空').toBeUndefined();
+  });
+});
+
+describe('HoldingEventDialog — 配股(D-05)', () => {
+  it('recordsStockDividendWithSharesAndExDate', async () => {
+    const dto = adjustmentDto({ quantityDelta: 50, note: 'from-backend' });
+    const { fetchImpl, onRecorded } = await mountDialog({
+      fetchImpl: adjustmentFetch(dto),
+      props: { holding: HOLDING_1000, initialMode: 'stockDividend' },
+    });
+
+    expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    const shares = requireTestid('holding-event-shares') as HTMLInputElement;
+    expect(document.activeElement, '配股開啟焦點在實領股數').toBe(shares);
+    expect(shares.classList.contains('big')).toBe(true);
+    expect(requireTestid('holding-event-current-qty').textContent?.trim())
+      .toBe(tf('zh', 'holdingEventCurrentQty', { qty: fmtQuantity(1000) }));
+    expect(bodyText()).toContain(t('zh', 'holdingEventNoteStock'));
+
+    await typeInto('holding-event-shares', '50');
+    // 前端不重算:不得出現記錄後持股(1,050)預覽。
+    expect(bodyText()).not.toContain('1,050');
+    expect(bodyText()).not.toContain('1050');
+    await submit();
+
+    const calls = adjustmentCalls(fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(bodiesOf(calls)[0]).toEqual({
+      symbol: 'AAPL',
+      type: 'STOCK_DIVIDEND',
+      quantity: 50,
+      ratioNew: null,
+      ratioOld: null,
+      effectiveDate: localDate(),
+      note: null,
+      reversalOfId: null,
+    });
+    expect(dividendCalls(fetchImpl)).toHaveLength(0);
+
+    requireTestid('holding-event-result');
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'holdingEventStockDividendRecorded'));
+    expect(requireTestid('holding-event-result-qty-delta').textContent?.trim()).toBe(fmtSignedQuantity(50));
+    expect(requireTestid('holding-event-result-entry-id').textContent?.trim()).toBe(dto.id);
+    expect(bodyText()).toContain(dto.effectiveDate);
+    expect(bodyText()).toContain('from-backend');
+
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('shareAdjustment');
+    expect(lastCreatedHoldingEventId.value).toBe(dto.id);
+    expect(lastCreatedCashEntryId.value).toBeNull();
+    expect(lastCreatedTradeId.value).toBeNull();
+    expect(onRecorded).toHaveBeenCalledWith(dto);
+  });
+
+  it('invalidSharesShowFieldError', async () => {
+    await mountDialog({ props: { initialMode: 'stockDividend' } });
+
+    expect(submitButton().disabled, '空股數').toBe(true);
+    expect(bodyText()).toContain(t('zh', 'holdingEventSharesHint'));
+    for (const bad of ['0', '1000000001', '0.123456789', 'x']) {
+      await typeInto('holding-event-shares', bad);
+      expect(submitButton().disabled, `股數 ${bad}`).toBe(true);
+      expect(fieldError('quantity'), `股數 ${bad}`).toBe(t('zh', 'holdingEventErrShares'));
+    }
+    await typeInto('holding-event-shares', '1000000000');
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('exDateIsADateInputCappedAtTodayAndSentVerbatim', async () => {
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: adjustmentFetch(adjustmentDto()),
+      props: { initialMode: 'stockDividend' },
+    });
+    await typeInto('holding-event-shares', '5');
+
+    const date = requireTestid('holding-event-effective-date') as HTMLInputElement;
+    expect(date.type).toBe('date');
+    expect(date.max).toBe(localDate());
+    expect(date.value, '預設今天').toBe(localDate());
+    expect(bodyText()).toContain(t('zh', 'holdingEventEffectiveDateHint'));
+
+    await setValue(date, localDate(1));
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('effectiveDate')).toBe(t('zh', 'holdingEventErrEffectiveDate'));
+
+    await setValue(date, '2026-10-30');
+    expect(fieldError('effectiveDate')).toBeUndefined();
+    await submit();
+    expect(bodiesOf(adjustmentCalls(fetchImpl))[0].effectiveDate, '原字串送出、不轉時區').toBe('2026-10-30');
+  });
+});
+
+describe('HoldingEventDialog — 拆股 / 合股(D-08)', () => {
+  it('ratioInputsHaveNumericModeAndAccessibleNames', async () => {
+    await mountDialog({ props: { holding: HOLDING_1000, initialMode: 'split' } });
+
+    const ratioNew = requireTestid('holding-event-ratio-new') as HTMLInputElement;
+    const ratioOld = requireTestid('holding-event-ratio-old') as HTMLInputElement;
+    expect(document.activeElement, '拆股開啟焦點在新股數').toBe(ratioNew);
+    expect(ratioNew.getAttribute('inputmode')).toBe('numeric');
+    expect(ratioOld.getAttribute('inputmode')).toBe('numeric');
+    expect(ratioNew.getAttribute('aria-label')).toBe(t('zh', 'holdingEventRatioNew'));
+    expect(ratioOld.getAttribute('aria-label')).toBe(t('zh', 'holdingEventRatioOld'));
+    const group = ratioNew.closest('[role="group"]');
+    expect(group?.getAttribute('aria-labelledby')).toBeTruthy();
+    expect(group?.contains(ratioOld)).toBe(true);
+    expect(requireTestid('holding-event-current-qty').textContent?.trim())
+      .toBe(tf('zh', 'holdingEventCurrentQty', { qty: fmtQuantity(1000) }));
+    expect(bodyText()).toContain(t('zh', 'holdingEventNoteSplit'));
+    expect(bodyText()).toContain(t('zh', 'holdingEventRatioHint'));
+  });
+
+  it('readsRatioBackAsSplitOrReverseSplit', async () => {
+    await mountDialog({ props: { holding: HOLDING_1000, initialMode: 'split' } });
+
+    expect(testid('holding-event-ratio-read')).toBeNull();
+    await typeInto('holding-event-ratio-new', '4');
+    await typeInto('holding-event-ratio-old', '1');
+    expect(requireTestid('holding-event-ratio-read').textContent?.trim())
+      .toBe(tf('zh', 'holdingEventRatioReadSplit', { old: 1, new: 4 }));
+    // 前端不重算:不得出現換算後持股(4,000)預覽。
+    expect(bodyText()).not.toContain('4,000');
+    expect(bodyText()).not.toContain('4000');
+
+    await typeInto('holding-event-ratio-new', '1');
+    await typeInto('holding-event-ratio-old', '10');
+    expect(requireTestid('holding-event-ratio-read').textContent?.trim())
+      .toBe(tf('zh', 'holdingEventRatioReadReverse', { old: 10, new: 1 }));
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('invalidRatiosShowFieldErrorAndDisableSubmit', async () => {
+    await mountDialog({ props: { initialMode: 'split' } });
+
+    expect(submitButton().disabled, '空比例').toBe(true);
+    for (const [n, o] of [['3', '3'], ['0', '1'], ['1001', '1'], ['1.5', '1'], ['2', '-1']]) {
+      await typeInto('holding-event-ratio-new', n);
+      await typeInto('holding-event-ratio-old', o);
+      expect(submitButton().disabled, `${n} : ${o}`).toBe(true);
+      expect(fieldError('ratio'), `${n} : ${o}`).toBe(t('zh', 'holdingEventErrRatio'));
+      expect(testid('holding-event-ratio-read'), `${n} : ${o} 不讀出`).toBeNull();
+    }
+    await typeInto('holding-event-ratio-new', '1000');
+    await typeInto('holding-event-ratio-old', '1');
+    expect(fieldError('ratio')).toBeUndefined();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('recordsSplitAndTitlesResultFromBackendRatio', async () => {
+    // 回應刻意與輸入不同(輸入 4 : 1,後端回 1 : 10):result 只能依後端值判斷拆 / 合(D-02)。
+    const dto = adjustmentDto({ type: 'SPLIT', quantityDelta: -900, ratioNew: 1, ratioOld: 10 });
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: adjustmentFetch(dto),
+      props: { initialMode: 'split' },
+    });
+    await typeInto('holding-event-ratio-new', '4');
+    await typeInto('holding-event-ratio-old', '1');
+    await submit();
+
+    expect(bodiesOf(adjustmentCalls(fetchImpl))[0]).toEqual({
+      symbol: 'AAPL',
+      type: 'SPLIT',
+      quantity: null,
+      ratioNew: 4,
+      ratioOld: 1,
+      effectiveDate: localDate(),
+      note: null,
+      reversalOfId: null,
+    });
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'holdingEventReverseSplitRecorded'));
+    expect(requireTestid('holding-event-result-qty-delta').textContent?.trim()).toBe(fmtSignedQuantity(-900));
+    expect(bodyText()).toContain('1 : 10');
+    expect(portfolioRevisionCause.value).toBe('shareAdjustment');
+  });
+
+  it('titlesForwardSplitFromBackendRatio', async () => {
+    const dto = adjustmentDto({ type: 'SPLIT', quantityDelta: 30, ratioNew: 4, ratioOld: 1 });
+    await mountDialog({ fetchImpl: adjustmentFetch(dto), props: { initialMode: 'split' } });
+    await typeInto('holding-event-ratio-new', '4');
+    await typeInto('holding-event-ratio-old', '1');
+    await submit();
+
+    expect(document.body.querySelector('.result-ttl')?.textContent?.trim()).toBe(t('zh', 'holdingEventSplitRecorded'));
+    expect(bodyText()).toContain('4 : 1');
+  });
+
+  it('footerStacksBelow400pxAndRatioGroupUsesTheSpecGap', () => {
+    expect(holdingEventDialogSource).toMatch(/@media \(max-width: 399px\)\s*\{[^@]*\.ft\s*\{[^}]*flex-direction:\s*column-reverse/);
+    expect(holdingEventDialogSource).toMatch(/\.ratio-group\s*\{[^}]*gap:\s*12px/);
+    expect(holdingEventDialogSource).toMatch(/\.ratio-group \.inp\.big\s*\{[^}]*width:\s*96px/);
   });
 });
