@@ -89,7 +89,7 @@
     <div v-else-if="!live && summaryRefreshError" class="refresh-strip" style="grid-column: span 12">
       <!-- role="status" 而非 alert:交易已經成功,這不是需要打斷使用者的錯誤(U-06) -->
       <div class="refresh-stale" role="status" data-testid="positions-refresh-error">
-        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div>{{ staleText(summaryRefreshCause) }}</div>
         <div class="details">
           <span data-testid="positions-refresh-error-code">{{ summaryRefreshError.code }}</span>
           <span v-if="summaryRefreshError.traceId" data-testid="positions-refresh-trace-id">
@@ -143,6 +143,8 @@
         <div class="stat-l">{{ s.l }}</div>
         <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
         <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
+        <!-- 04.2-21(DIV-02):總損益卡的股利收入附加列;API mode 且股利收入或預扣稅不為 0 才渲染 -->
+        <div v-if="s.note" class="stat-note" data-testid="positions-stat-dividend-income">{{ s.note }}</div>
       </div>
     </template>
 
@@ -245,7 +247,7 @@
         role="status"
         data-testid="positions-refresh-error"
       >
-        <div>{{ t(lang, 'portfolioStaleAfterTrade') }}</div>
+        <div>{{ staleText(holdingsRefreshCause) }}</div>
         <div class="details">
           <span data-testid="positions-refresh-error-code">{{ holdingsRefreshError.code }}</span>
           <span v-if="holdingsRefreshError.traceId" data-testid="positions-refresh-trace-id">
@@ -298,6 +300,8 @@
             <!-- 04.1-16:今日損益(原幣,PORT-11)。mock 沒有此資料 → 只在 API mode 出現,mock 欄數不變 -->
             <th v-if="!live" @click="sort('dayPnl')" :class="{ s: sortKey === 'dayPnl' }" style="text-align:right">{{ t(lang, 'todayPnl') }}<SortArrow :k="'dayPnl'" :sk="sortKey" :sd="sortDir" /></th>
             <th @click="sort('weight')" :class="{ s: sortKey === 'weight' }" style="text-align:right;padding-right:16px">{{ t(lang, 'weight') }}<SortArrow :k="'weight'" :sk="sortKey" :sd="sortDir" /></th>
+            <!-- 04.2-21(D-11):動作欄可見表頭留空,只給輔助科技讀「動作」 -->
+            <th class="col-actions"><span class="sr-only">{{ t(lang, 'positionsActionsHeader') }}</span></th>
           </tr>
         </thead>
         <!-- mock 路徑:計算邏輯與 Phase 3 之前逐字相同(含時光機 scrub 效果與 lastFill 高亮) -->
@@ -337,6 +341,15 @@
                 <div class="bar"><div class="bar-fill" :style="{ width: effWeight(p) + '%' }" /></div>
                 <span style="font-size:11px;color:var(--fg-dim);min-width:36px;text-align:right">{{ effWeight(p).toFixed(1) }}%</span>
               </div>
+            </td>
+            <td class="col-actions">
+              <button
+                type="button"
+                class="btn-ghost-sm"
+                data-testid="positions-holding-event"
+                :aria-label="tf(lang, 'holdingEventRowActionAria', { symbol: p.sym })"
+                @click.stop="openHoldingEvent(p.sym, mockHoldingOf(p))"
+              >{{ t(lang, 'holdingEventRowAction') }}</button>
             </td>
           </tr>
         </tbody>
@@ -403,10 +416,32 @@
                 <span data-testid="positions-weight" style="font-size:12px;color:var(--fg-dim);min-width:36px;text-align:right">{{ holdingWeightLabel(h) }}</span>
               </div>
             </td>
+            <td class="col-actions">
+              <button
+                type="button"
+                class="btn-ghost-sm"
+                data-testid="positions-holding-event"
+                :aria-label="tf(lang, 'holdingEventRowActionAria', { symbol: h.symbol })"
+                @click.stop="openHoldingEvent(h.symbol, apiHoldingOf(h))"
+              >{{ t(lang, 'holdingEventRowAction') }}</button>
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <!--
+      04.2-21(D-11):本頁自己的「股利與股數調整」對話框實例(標的鎖定、預設現金股利)。
+      寫入成功後對話框發 notifyHoldingEventCreated,下方 watch(portfolioRevision) 依 cause 重讀;焦點回落由對話框還給開啟它的列動作鈕。
+    -->
+    <HoldingEventDialog
+      :open="holdingEventOpen"
+      :lang="lang"
+      :symbol="holdingEventTarget?.symbol ?? null"
+      :holding="holdingEventTarget?.holding ?? null"
+      initial-mode="cashDividend"
+      @close="holdingEventOpen = false"
+    />
   </div>
 </template>
 
@@ -419,7 +454,14 @@ import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
 import type { HoldingDto, PortfolioSummaryDto } from '../services/apiTypes';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { apiLastFill, clearLastFill, portfolioRevision } from '../services/portfolioRevision';
+import {
+  apiLastFill,
+  clearLastFill,
+  portfolioRevision,
+  portfolioRevisionCause,
+  type PortfolioRevisionCause,
+} from '../services/portfolioRevision';
+import HoldingEventDialog from '../components/HoldingEventDialog.vue';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
@@ -511,6 +553,24 @@ const summaryRefreshing = ref(false);
 const summaryRefreshError = ref<BlockError | null>(null);
 const holdingsRefreshing = ref(false);
 const holdingsRefreshError = ref<BlockError | null>(null);
+/**
+ * 各區塊最近一次重讀的觸發來源(U-09):stale 文案依它選,而不是依「現在」的 cause ——
+ * 股利只重讀 summary,holdings 上一次交易留下的 stale 提示不得因此改口成「紀錄已寫入」。
+ */
+const summaryRefreshCause = ref<PortfolioRevisionCause | null>(null);
+const holdingsRefreshCause = ref<PortfolioRevisionCause | null>(null);
+
+/**
+ * U-09 / T-04.2-46:重讀失敗的 stale 文案依觸發來源選擇,非交易的寫入不得顯示「交易已記錄」。
+ * 入出金、股利、股數調整共用「紀錄已寫入」;cause 未知時退回交易文案(與 Overview 相同)。
+ */
+function staleText(cause: PortfolioRevisionCause | null): string {
+  if (cause === 'cash' || cause === 'dividend' || cause === 'shareAdjustment') {
+    return t(props.lang, 'portfolioStaleAfterCashEntry');
+  }
+  if (cause === 'baseCurrency') return t(props.lang, 'portfolioStaleAfterBaseCurrency');
+  return t(props.lang, 'portfolioStaleAfterTrade');
+}
 
 async function refreshSummary() {
   // 還沒有可保留的舊值(首次載入中,或首次就失敗)→ 沒有 U-05 要保護的東西,退回一般載入。
@@ -552,9 +612,40 @@ async function refreshHoldings() {
 watch(portfolioRevision, () => {
   // mock mode 完全走 live 委派(Pinia reactivity),不打任何網路 —— 與 onMounted 同一條規則。
   if (live) return;
+  const cause = portfolioRevisionCause.value;
+  summaryRefreshCause.value = cause;
   void refreshSummary();
+  // UI-SPEC §11 / RESEARCH Q7:現金股利不改持倉估值 → 只重讀 summary;其餘來源(含股數調整)兩者都重讀。
+  if (cause === 'dividend') return;
+  holdingsRefreshCause.value = cause;
   void refreshHoldings();
 });
+
+// =============== 04.2-21(D-11):列動作「股利與股數調整」 ===============
+type HoldingEventHolding = { totalQuantity: number; currency?: string; name?: string };
+
+/**
+ * mock 宇宙(data.ts)是美股報價,mock 持倉幣別一律 USD(與 portfolioApi / holdingEventApi 的 `MOCK_CURRENCY` 同義);
+ * mock 表格本身也以 `$` 呈現,所以對話框顯示 USD 與頁面一致。
+ */
+const MOCK_POSITION_CURRENCY = 'USD';
+
+const holdingEventOpen = ref(false);
+const holdingEventTarget = ref<{ symbol: string; holding: HoldingEventHolding } | null>(null);
+
+/** 對話框只顯示、不計算持倉(Phase 3 D-04);幣別缺值不猜測(對話框以 — 代替)。 */
+function apiHoldingOf(h: HoldingDto): HoldingEventHolding {
+  return { totalQuantity: h.totalQuantity, currency: h.currency ?? undefined, name: h.assetName };
+}
+
+function mockHoldingOf(p: Position): HoldingEventHolding {
+  return { totalQuantity: p.qty, currency: MOCK_POSITION_CURRENCY, name: p.name };
+}
+
+function openHoldingEvent(symbol: string, holding: HoldingEventHolding) {
+  holdingEventTarget.value = { symbol, holding };
+  holdingEventOpen.value = true;
+}
 
 /** D-03:priceTime 為 ISO-8601 或 null(mock 端恆為 null),格式化為本地日期時間短格式。 */
 function fmtDateTime(iso: string | null): string {
@@ -648,7 +739,7 @@ const series = computed(() => {
 });
 
 /** 彙總卡的共同形狀。ccy 為空字串 = 不渲染代碼 span(mock 與比率卡)。 */
-interface StatCard { l: string; v: string; ccy: string; up: boolean | null; delta: string }
+interface StatCard { l: string; v: string; ccy: string; up: boolean | null; delta: string; note?: string }
 
 const mockStats = computed<StatCard[]>(() => {
   const cfg = rangeCfg[range.value];
@@ -717,10 +808,23 @@ const apiStats = computed<StatCard[]>(() => {
     { l: t(props.lang, 'unrealized'), ...signed(s.unrealizedPnl), up: s.unrealizedPnl >= 0, delta: '' },
     { l: t(props.lang, 'roi'), v: fmtPct(s.roi * 100), ccy: '', up: s.roi >= 0, delta: '' },
     { l: t(props.lang, 'realizedPnl'), ...signed(s.realizedPnl), up: s.realizedPnl >= 0, delta: '' },
-    { l: t(props.lang, 'totalPnlLabel'), ...signed(s.totalPnl), up: s.totalPnl >= 0, delta: '' },
+    { l: t(props.lang, 'totalPnlLabel'), ...signed(s.totalPnl), up: s.totalPnl >= 0, delta: '', note: dividendIncomeNote(s) },
     { l: t(props.lang, 'costBasis'), ...money(s.totalCostBasis), up: null, delta: '' },
   ];
 });
+
+/**
+ * DIV-02 / UI-SPEC §Interaction 4:總損益卡的股利收入附加列(基準幣,後端值,前端不重算)。
+ * 股利收入與預扣稅皆 0 → 空字串(不渲染,U-10);有預扣稅 → 另列。mock 不走這裡(mock KPI 寫死)。
+ */
+function dividendIncomeNote(s: PortfolioSummaryDto): string {
+  if (s.dividendIncome === 0 && s.dividendTaxWithheld === 0) return '';
+  const amount = fmtSignedMoney(s.dividendIncome, s.baseCurrency, 0);
+  if (s.dividendTaxWithheld > 0) {
+    return tf(props.lang, 'dividendIncomeLineWithTax', { amount, tax: fmtMoney(s.dividendTaxWithheld, s.baseCurrency, 0) });
+  }
+  return tf(props.lang, 'dividendIncomeLine', { amount });
+}
 
 const statCards = computed(() => (live ? mockStats.value : apiStats.value));
 
@@ -999,6 +1103,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .stat-v { font-size: 20px; font-weight: 600; margin-top: 6px; letter-spacing: -0.2px; }
 .stat-ccy { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 .stat-d { font-size: 11px; margin-top: 2px; color: var(--fg-mute); }
+/* 04.2-21(DIV-02):總損益卡的股利收入附加列 */
+.stat-note { margin-top: 4px; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
 /* 六張統計卡:span 2 在窄螢幕放不下 9 位數金額 + 幣別代碼,會把 main 撐出水平捲動(04.1-19 L5 抓到) */
 @media (max-width: 1279px) { .stat { grid-column: span 4; } }
 @media (max-width: 639px) { .stat { grid-column: span 12; } }
@@ -1053,6 +1159,15 @@ thead th + th, tbody td + td { padding-left: 12px; }
 .day-up { color: var(--up); }
 .day-dn { color: var(--dn); }
 .day-na { color: var(--fg-dim); }
+/* 04.2-21(D-11):動作欄在最右;動作鈕中性(不是 accent),12px / 600、36px 觸控目標 */
+.col-actions { padding-right: 16px; text-align: right; white-space: nowrap; }
+.btn-ghost-sm {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-ghost-sm:hover { background: var(--surface2); }
+.btn-ghost-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bar { width: 60px; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
 .bar-fill { height: 100%; background: var(--accent); transition: width .3s; }
 

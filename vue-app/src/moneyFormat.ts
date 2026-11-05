@@ -71,3 +71,30 @@ export function fmtWeightPct(weight: number | null | undefined): string {
   if (!isFiniteNumber(weight)) return MISSING;
   return `${fmtNum(weight * 100, 1)}%`;
 }
+
+/*
+ * 股數格式(Phase 04.2 UI-SPEC §Money):股數最多 8 位小數(後端 NUMERIC(_, 8)),顯示時去尾零、千分位。
+ * 固定 en-US 分組,與金額欄的千分位一致;負號沿用 fmtSignedMoney 的 ASCII `-`。
+ */
+const QTY_FORMAT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 8 });
+
+/** 格式化絕對值;以捨入後字串判斷是否為零,避免 1e-9 顯示成 `+0` 或 `-0`。 */
+function quantityParts(n: number): { body: string; isZero: boolean } {
+  const body = QTY_FORMAT.format(Math.abs(n));
+  return { body, isZero: Number(body.replace(/,/g, '')) === 0 };
+}
+
+/** 帶號股數:> 0 前綴 `+`、< 0 前綴 `-`、= 0 無號;null / 非有限值 → `—`。 */
+export function fmtSignedQuantity(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return MISSING;
+  const { body, isZero } = quantityParts(n);
+  if (isZero) return body;
+  return n > 0 ? `+${body}` : `-${body}`;
+}
+
+/** 不帶號股數(負數仍保留 `-`);null / 非有限值 → `—`。 */
+export function fmtQuantity(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return MISSING;
+  const { body, isZero } = quantityParts(n);
+  return n < 0 && !isZero ? `-${body}` : body;
+}

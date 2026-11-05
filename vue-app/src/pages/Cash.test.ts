@@ -11,6 +11,7 @@ import {
   bumpPortfolioRevision,
   lastCreatedCashEntryId,
   notifyCashEntryCreated,
+  notifyHoldingEventCreated,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import type { PaginatedResponse } from '../services/apiTypes';
@@ -129,6 +130,8 @@ function summaryDto(over: Record<string, unknown> = {}) {
     cashBalances: [{ currency: 'TWD', amount: 880000 }],
     allocation: [],
     sectorAllocation: [],
+    dividendIncome: 0,
+    dividendTaxWithheld: 0,
     ...over,
   };
 }
@@ -897,5 +900,80 @@ describe('Cash page — styling contract (source)', () => {
     expect(cashSource).toMatch(/:focus-visible\s*\{\s*outline:\s*2px solid var\(--accent\)/);
     expect(cashSource).toMatch(/prefers-reduced-motion:\s*reduce/);
     expect(cashSource).toMatch(/\.fresh[^}]*animation:\s*none|animation:\s*none/);
+  });
+});
+
+// =====================================================================================
+// 04.2-21 Task 3:現金頁股利說明與連結(D-27 / U-11、UI-SPEC §Interaction 5)。
+// =====================================================================================
+
+describe('Cash page — 股利說明與連結(04.2-21 / D-27)', () => {
+  function expectNoteBetweenHeadAndEntries() {
+    const note = requireTestid('cash-page-dividend-note');
+    const link = requireTestid('cash-page-dividend-link');
+    const head = document.body.querySelector('.page-head')!;
+    const entries = requireTestid('cash-entries');
+    // 頁首 → 說明列 → 入出金紀錄卡
+    expect(head.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(entries) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(head.contains(note)).toBe(false);
+    expect(entries.contains(note)).toBe(false);
+    expect(note.parentElement).toBe(link.parentElement);
+    return { note, link };
+  }
+
+  it('populated(API):頁首與入出金紀錄卡之間顯示 cashDividendNote + cashDividendLink(<button type="button">)', async () => {
+    await mountApiCash();
+
+    const { note, link } = expectNoteBetweenHeadAndEntries();
+    expect(note.textContent?.trim()).toBe(t('zh', 'cashDividendNote'));
+    expect(link.tagName).toBe('BUTTON');
+    expect(link.getAttribute('type')).toBe('button');
+    expect(link.textContent?.trim()).toBe(t('zh', 'cashDividendLink'));
+  });
+
+  it('populated(mock):說明列與連結同樣渲染(連結在 mock 也可用)', async () => {
+    await mountMockCash();
+
+    const { note, link } = expectNoteBetweenHeadAndEntries();
+    expect(note.textContent?.trim()).toBe(t('zh', 'cashDividendNote'));
+    expect(link.textContent?.trim()).toBe(t('zh', 'cashDividendLink'));
+  });
+
+  it("點連結 emit navigate('trades', { tradesFilter: 'dividend' })(U-11)", async () => {
+    const onNavigate = vi.fn();
+    await mountMockCash({ onNavigate });
+
+    await click(requireTestid('cash-page-dividend-link'));
+
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate).toHaveBeenCalledWith('trades', { tradesFilter: 'dividend' });
+  });
+
+  it("cause 'dividend':頁首餘額列重讀 summary,入出金列表不重讀;GET /cash-entries 不帶股利參數、列表不含股利列", async () => {
+    const fetchImpl = await mountApiCash();
+    const entryGets = entryUrls(fetchImpl).length;
+    const summaryGets = summaryUrls(fetchImpl).length;
+
+    notifyHoldingEventCreated({ id: 'div-1' }, 'dividend');
+    await flushAsync();
+
+    expect(summaryUrls(fetchImpl)).toHaveLength(summaryGets + 1);
+    expect(entryUrls(fetchImpl)).toHaveLength(entryGets);
+    for (const url of entryUrls(fetchImpl)) expect(url).not.toMatch(/dividend|type=/i);
+    expect(rows().every(row => !/股利/.test(row.textContent ?? ''))).toBe(true);
+  });
+
+  it('樣式:說明 12 / 400 --fg-dim;連結 12 / 600、底線、min-height 36px;列 flex-wrap、gap 4px 8px、margin-bottom 16px', () => {
+    expect(cashSource).toMatch(/\.dividend-row\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(cashSource).toMatch(/\.dividend-row\s*\{[^}]*gap:\s*4px 8px/);
+    expect(cashSource).toMatch(/\.dividend-row\s*\{[^}]*margin-bottom:\s*16px/);
+    expect(cashSource).toMatch(/\.dividend-note\s*\{[^}]*font-size:\s*12px/);
+    expect(cashSource).toMatch(/\.dividend-note\s*\{[^}]*font-weight:\s*400/);
+    expect(cashSource).toMatch(/\.dividend-note\s*\{[^}]*color:\s*var\(--fg-dim\)/);
+    expect(cashSource).toMatch(/\.dividend-link\s*\{[^}]*font-size:\s*12px/);
+    expect(cashSource).toMatch(/\.dividend-link\s*\{[^}]*font-weight:\s*600/);
+    expect(cashSource).toMatch(/\.dividend-link\s*\{[^}]*text-decoration:\s*underline/);
+    expect(cashSource).toMatch(/\.dividend-link\s*\{[^}]*min-height:\s*36px/);
   });
 });

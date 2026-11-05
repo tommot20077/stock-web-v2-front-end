@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   fmtMoney,
   fmtMoneyAmount,
+  fmtQuantity,
   fmtRatioPct,
   fmtSignedMoney,
   fmtSignedMoneyAmount,
+  fmtSignedQuantity,
   fmtWeightPct,
   minorUnits,
 } from './moneyFormat';
@@ -103,6 +105,60 @@ describe('moneyFormat', () => {
     it('null → —', () => {
       expect(fmtWeightPct(null)).toBe('—');
       expect(fmtWeightPct(undefined)).toBe('—');
+    });
+  });
+
+  // Phase 04.2 UI-SPEC §Money:股數變動帶號、千分位、最多 8 位小數去尾零;null → —。
+  describe('fmtSignedQuantity', () => {
+    it('> 0 前綴 +,千分位,整數不補小數', () => {
+      expect(fmtSignedQuantity(300)).toBe('+300');
+      expect(fmtSignedQuantity(1050)).toBe('+1,050');
+    });
+
+    it('< 0 的負號與 fmtSignedMoney 相同字元', () => {
+      const minus = fmtSignedMoney(-1, '', 0).charAt(0);
+      expect(fmtSignedQuantity(-94.5)).toBe(`${minus}94.5`);
+      expect(fmtSignedQuantity(-1234.5)).toBe(`${minus}1,234.5`);
+    });
+
+    it('最多 8 位小數並去尾零', () => {
+      expect(fmtSignedQuantity(0.33333333)).toBe('+0.33333333');
+      expect(fmtSignedQuantity(12.5)).toBe('+12.5');
+      expect(fmtSignedQuantity(Number('12.50000000'))).toBe('+12.5');
+      expect(fmtSignedQuantity(1.123456789)).toBe('+1.12345679');
+    });
+
+    it('= 0 無號(含捨入後為零)', () => {
+      expect(fmtSignedQuantity(0)).toBe('0');
+      expect(fmtSignedQuantity(0.000000001)).toBe('0');
+      expect(fmtSignedQuantity(-0.000000001)).toBe('0');
+    });
+
+    it('null / undefined / 非有限值 → —', () => {
+      expect(fmtSignedQuantity(null)).toBe('—');
+      expect(fmtSignedQuantity(undefined)).toBe('—');
+      expect(fmtSignedQuantity(NaN)).toBe('—');
+      expect(fmtSignedQuantity(Infinity)).toBe('—');
+    });
+  });
+
+  describe('fmtQuantity', () => {
+    it('同規則但不帶號', () => {
+      expect(fmtQuantity(1050)).toBe('1,050');
+      expect(fmtQuantity(33.33333333)).toBe('33.33333333');
+      expect(fmtQuantity(12.5)).toBe('12.5');
+      expect(fmtQuantity(0)).toBe('0');
+    });
+
+    it('負數保留負號(與 fmtSignedMoney 同字元)', () => {
+      const minus = fmtSignedMoney(-1, '', 0).charAt(0);
+      expect(fmtQuantity(-3.25)).toBe(`${minus}3.25`);
+    });
+
+    it('null / undefined / 非有限值 → —', () => {
+      expect(fmtQuantity(null)).toBe('—');
+      expect(fmtQuantity(undefined)).toBe('—');
+      expect(fmtQuantity(NaN)).toBe('—');
     });
   });
 

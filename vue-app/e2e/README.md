@@ -60,7 +60,7 @@ npx playwright test e2e/tests/auth.spec.ts             # 單檔全跑(不分 tag
 
 - `e2e/artifacts/backend.log` — 後端 stdout(畫面上的 `traceId` 可對到這裡)
 - `e2e/artifacts/playwright-report/` — HTML report(`npx playwright show-report e2e/artifacts/playwright-report`)
-- `e2e/artifacts/test-results/` — trace/screenshot(`npx playwright show-trace <trace.zip>`)
+- `e2e/artifacts/test-results/` — 失敗案例的 trace / screenshot / video(`video.webm`);通過的測試不保留(`npx playwright show-trace <trace.zip>`)
 
 ## 穩定性原則
 

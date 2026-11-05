@@ -19,6 +19,9 @@ import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
 import type { Trade } from '../types';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
+import { assetDto } from '../testing/watchlistFetchDouble';
+import { installFakeQuoteStream, type FakeQuoteStream } from '../testing/fakeQuoteStream';
+import type { WatchlistDto } from '../services/watchlistApi';
 
 // Phase 3 Plan 03(03-03-PLAN.md)+ Phase 04.1 Plan 18。API mode 的 Overview 只能顯示後端真的有的資料:
 // 四張 KPI(04.1:總資產 / 今日損益 / 可用現金 / 總報酬率,數值刻意不同於 mock 值以證明來源)、
@@ -46,6 +49,9 @@ const SUMMARY: PortfolioSummaryDto = {
   cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
   allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
   sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
+  // Phase 04.2 欄位(04.2-16 只補型別)
+  dividendIncome: 0,
+  dividendTaxWithheld: 0,
 };
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。
@@ -88,12 +94,28 @@ function tradePage(items: TradeDto[]): Response {
 
 type Handler = () => Response | Promise<Response>;
 
-function routedFetch(handlers: { summary: Handler; trades: Handler; patch?: (body: unknown) => Response | Promise<Response> }) {
+/** 04.2-24:API mode 的觀察清單卡讀 GET /watchlists;未覆寫時回一個兩檔的預設清單。 */
+const DEFAULT_WATCHLISTS: WatchlistDto[] = [
+  { id: 'wl-default', name: 'My list', items: [assetDto('ZWA', { latestPrice: 12.5 }), assetDto('ZWB', { latestPrice: 34.5 })] },
+];
+
+function routedFetch(handlers: {
+  summary: Handler;
+  trades: Handler;
+  patch?: (body: unknown) => Response | Promise<Response>;
+  watchlists?: (call: number) => Response | Promise<Response>;
+}) {
+  let watchlistGets = 0;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/me/preferences') && String(init?.method ?? 'GET').toUpperCase() === 'PATCH') {
       if (!handlers.patch) throw new Error('unexpected PATCH /me/preferences');
       return handlers.patch(JSON.parse(String(init?.body)));
+    }
+    if (url.endsWith('/watchlists') && String(init?.method ?? 'GET').toUpperCase() === 'GET') {
+      const call = watchlistGets;
+      watchlistGets += 1;
+      return handlers.watchlists ? handlers.watchlists(call) : success(DEFAULT_WATCHLISTS);
     }
     if (url.includes('/portfolio/summary')) return handlers.summary();
     if (url.includes('/trades')) return handlers.trades();
@@ -113,6 +135,9 @@ function patchCalls(fetchMock: ReturnType<typeof routedFetch>) {
   return fetchMock.mock.calls.filter(call => String(call[1]?.method ?? 'GET').toUpperCase() === 'PATCH');
 }
 
+/** 04.2-24:每次 API mode 掛載都換上假 QuoteStream,頁面測試不碰 jsdom 的真 WebSocket(P-W7)。 */
+let quotes: FakeQuoteStream;
+
 async function mountApiOverview(
   fetchMock: ReturnType<typeof routedFetch>,
   props: Record<string, unknown> = {},
@@ -120,6 +145,7 @@ async function mountApiOverview(
   vi.stubEnv('VITE_DATA_MODE', 'api');
   // Pitfall 7:client 以 mode 為 key 快取,切模式前先清,避免跨測試汙染。
   resetRuntimeApiClientsForTests();
+  quotes = installFakeQuoteStream();
   vi.stubGlobal('fetch', fetchMock);
   mountWithPinia(Overview, { lang: 'en', ...props });
   await flushAsync();
@@ -1486,5 +1512,302 @@ describe('Overview — 格線重排(U-27)', () => {
     expect(at1099).toMatch(/@media \(max-width: 1099px\)\s*\{[^}]*\.kpi-card\s*\{\s*grid-column:\s*span 6/);
     expect(at1099).toMatch(/\.stack-narrow\s*\{\s*grid-column:\s*span 12/);
     expect(overviewSource).toMatch(/@media \(max-width: 639px\)\s*\{[^}]*\.kpi-card\s*\{\s*grid-column:\s*span 12/);
+  });
+});
+
+// =====================================================================================
+// 04.2-24(D-26;UI-SPEC §10、U-20 / U-21):Overview 觀察清單卡接後端 + 即時價;新聞卡標示示範資料。
+// =====================================================================================
+
+const WL_ITEMS = [
+  assetDto('AAPL', { name: 'Apple Inc.', latestPrice: 215.75, change: 2.65, changePercent: 1.24 }),
+  assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', latestPrice: 67000, change: 100, changePercent: 0.15 }),
+  assetDto('USD/TWD', { name: 'USD/TWD', assetType: 'FX', market: 'FX', currency: 'TWD', latestPrice: 32.1, change: 0.05, changePercent: 0.16 }),
+  assetDto('MSFT', { latestPrice: 410 }),
+  assetDto('NVDA', { latestPrice: 120 }),
+  assetDto('TSLA', { latestPrice: 250, change: -5, changePercent: -1.96 }),
+  assetDto('GOOG', { latestPrice: 170 }),
+  assetDto('AMZN', { latestPrice: 185 }),
+];
+
+function wlLists(items = WL_ITEMS): WatchlistDto[] {
+  return [
+    { id: 'wl-1', name: 'Long term', items },
+    { id: 'wl-2', name: 'Second', items: [assetDto('ZZZ')] },
+  ];
+}
+
+function wlFetch(watchlists: (call: number) => Response | Promise<Response>) {
+  return routedFetch({ summary: () => success(SUMMARY), trades: () => tradePage(API_TRADES), watchlists });
+}
+
+function wlCard(): HTMLElement {
+  return requireTestid('overview-watchlist');
+}
+
+function wlRows(): HTMLElement[] {
+  return allTestids('overview-watchlist-row');
+}
+
+function wlRow(symbol: string): HTMLElement {
+  const el = wlRows().find(candidate => candidate.getAttribute('data-symbol') === symbol);
+  expect(el, `overview-watchlist-row ${symbol}`).toBeTruthy();
+  return el!;
+}
+
+function pendingResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+describe('Overview — 觀察清單卡(D-26,API mode)', () => {
+  it('第一個清單的前 6 檔:清單名稱、列順序、無 sparkline;超過 6 檔顯示「2 more →」並導到觀察清單頁', async () => {
+    const navigate = vi.fn();
+    await mountApiOverview(wlFetch(() => success(wlLists())), { onNavigate: navigate });
+
+    const card = wlCard();
+    expect(card.querySelector('[data-testid="overview-watchlist-name"]')?.textContent?.trim()).toBe('Long term');
+    expect(card.querySelector('[data-testid="overview-watchlist-name"]')?.getAttribute('title')).toBe('Long term');
+    expect(wlRows().map(el => el.getAttribute('data-symbol'))).toEqual(['AAPL', 'BTC', 'USD/TWD', 'MSFT', 'NVDA', 'TSLA']);
+    // API 列不畫假走勢(genSeries 無資料來源,U-21)
+    expect(card.querySelector('svg')).toBeNull();
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent).toContain('215.75');
+    expect(wlRow('AAPL').querySelector('.wl-name')?.textContent?.trim()).toBe('Apple Inc.');
+    expect(wlRow('TSLA').querySelector('.wl-chg')?.textContent?.trim()).toBe('-1.96%');
+    expect(wlRow('USD/TWD').querySelector('.wl-price')?.textContent?.trim()).toBe('32.1000');
+
+    const more = requireTestid('overview-watchlist-more');
+    expect(more.textContent?.trim()).toBe(tf('en', 'overviewWatchlistMore', { n: 2 }));
+    click(more);
+    await flushAsync(1);
+    expect(navigate).toHaveBeenLastCalledWith('watchlist');
+
+    const go = requireTestid('overview-watchlist-go');
+    expect(go.getAttribute('aria-label')).toBe(t('en', 'overviewWatchlistGo'));
+    click(go);
+    await flushAsync(1);
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenLastCalledWith('watchlist');
+  });
+
+  it('剛好 6 檔以內:不渲染「還有 n 檔」', async () => {
+    await mountApiOverview(wlFetch(() => success(wlLists(WL_ITEMS.slice(0, 3)))));
+    expect(wlRows()).toHaveLength(3);
+    expect(testid('overview-watchlist-more')).toBeNull();
+  });
+
+  it('只 watch 前 6 檔中的 STOCK / CRYPTO(U-20);tick → 該列 data-quote-source=ws + ●,FX 列永不顯示 ●', async () => {
+    await mountApiOverview(wlFetch(() => success(wlLists())));
+
+    expect(quotes.watch).toHaveBeenCalledTimes(1);
+    expect(quotes.watch).toHaveBeenCalledWith(['AAPL', 'BTC', 'MSFT', 'NVDA', 'TSLA']);
+
+    quotes.setStatus('live');
+    quotes.pushTick('AAPL', 218.4);
+    quotes.pushTick('USD/TWD', 33);
+    await flushAsync(1);
+
+    expect(wlCard().querySelector('[data-testid="live-quote-status"]')?.getAttribute('data-live-status')).toBe('live');
+    expect(wlRow('AAPL').getAttribute('data-quote-source')).toBe('ws');
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent).toContain('218.40');
+    const live = wlRow('AAPL').querySelector('[data-testid="overview-watchlist-row-live"]');
+    expect(live, 'overview-watchlist-row-live').not.toBeNull();
+    expect(live!.querySelector('.live-dot')?.getAttribute('aria-hidden')).toBe('true');
+    expect(live!.querySelector('.sr-only')?.textContent).toBe(t('en', 'liveQuoteRowLive'));
+
+    expect(wlRow('USD/TWD').getAttribute('data-quote-source')).toBe('rest');
+    expect(wlRow('USD/TWD').querySelector('[data-testid="overview-watchlist-row-live"]')).toBeNull();
+    expect(wlRow('BTC').getAttribute('data-quote-source')).toBe('rest');
+
+    // degraded:列值停在最後一筆 tick,不再標示即時(D-23)
+    quotes.setStatus('degraded');
+    await flushAsync(1);
+    expect(wlRow('AAPL').getAttribute('data-quote-source')).toBe('rest');
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent).toContain('218.40');
+    expect(wlCard().querySelector('[data-testid="overview-watchlist-row-live"]')).toBeNull();
+    expect(wlCard().querySelector('.live-dot.solid')).toBeNull();
+  });
+
+  it('replaced:卡片內狀態列提供「在此分頁重新連線」→ quotes.reconnect() 一次', async () => {
+    await mountApiOverview(wlFetch(() => success(wlLists())));
+    quotes.setStatus('replaced');
+    await flushAsync(1);
+
+    const reconnect = wlCard().querySelector<HTMLElement>('[data-testid="live-quote-reconnect"]');
+    expect(reconnect, 'live-quote-reconnect').not.toBeNull();
+    click(reconnect!);
+    await flushAsync(1);
+    expect(quotes.reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('loading:「Loading…」文字 + 3 條骨架,不渲染列', async () => {
+    await mountApiOverview(wlFetch(() => new Promise<Response>(() => {})));
+
+    const loading = requireTestid('overview-watchlist-loading');
+    expect(loading.textContent).toContain(t('en', 'loading'));
+    expect(loading.querySelectorAll('.skeleton-row')).toHaveLength(3);
+    expect(wlRows()).toHaveLength(0);
+    expect(quotes.watch).not.toHaveBeenCalled();
+  });
+
+  it('error:loadFailed + 診斷列(code / traceId)+ 重試;重試成功後渲染列', async () => {
+    const fetchMock = wlFetch(call => (call === 0 ? failure('INTERNAL_ERROR', 'trace-wl-500', 500) : success(wlLists())));
+    await mountApiOverview(fetchMock);
+
+    const error = requireTestid('overview-watchlist-error');
+    expect(error.textContent).toContain(t('en', 'loadFailed'));
+    expect(error.textContent).not.toContain('backend said no');
+    expect(requireTestid('overview-watchlist-error-code').textContent?.trim()).toBe('INTERNAL_ERROR');
+    expect(requireTestid('overview-watchlist-trace-id').textContent).toContain('trace-wl-500');
+
+    click(requireTestid('overview-watchlist-retry'));
+    await flushAsync();
+    expect(testid('overview-watchlist-error')).toBeNull();
+    expect(wlRows()).toHaveLength(6);
+    expect(callsMatching(fetchMock, '/watchlists')).toHaveLength(2);
+  });
+
+  it('empty:第一個清單沒有標的 → overviewWatchlistEmpty({name})+「Go to Markets」emit navigate("markets")', async () => {
+    const navigate = vi.fn();
+    await mountApiOverview(wlFetch(() => success(wlLists([]))), { onNavigate: navigate });
+
+    const empty = requireTestid('overview-watchlist-empty');
+    expect(empty.textContent).toContain(tf('en', 'overviewWatchlistEmpty', { name: 'Long term' }));
+    const go = empty.querySelector<HTMLElement>('button');
+    expect(go?.textContent?.trim()).toBe(t('en', 'watchlistGoMarkets'));
+    click(go!);
+    await flushAsync(1);
+    expect(navigate).toHaveBeenCalledWith('markets');
+    expect(quotes.watch).not.toHaveBeenCalled();
+  });
+
+  it('resyncSeq 遞增 → 靜默重讀 GET /watchlists(不閃 loading),新值取代舊列', async () => {
+    const second = pendingResponse();
+    const fetchMock = wlFetch(call => (call === 0 ? success(wlLists()) : second.promise));
+    await mountApiOverview(fetchMock);
+
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsMatching(fetchMock, '/watchlists')).toHaveLength(2);
+    expect(testid('overview-watchlist-loading')).toBeNull();
+    expect(wlRows()).toHaveLength(6);
+
+    const refreshed = wlLists();
+    refreshed[0].items = [{ ...WL_ITEMS[0], latestPrice: 220.5 }, ...WL_ITEMS.slice(1)];
+    second.resolve(success(refreshed));
+    await flushAsync();
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent?.trim()).toBe('220.50');
+  });
+
+  it('靜默重讀失敗:保留舊列,不顯示錯誤區', async () => {
+    const fetchMock = wlFetch(call => (call === 0 ? success(wlLists()) : failure('INTERNAL_ERROR', 'trace-wl-500', 500)));
+    await mountApiOverview(fetchMock);
+
+    quotes.bumpResync();
+    await flushAsync();
+    expect(callsMatching(fetchMock, '/watchlists')).toHaveLength(2);
+    expect(testid('overview-watchlist-error')).toBeNull();
+    expect(wlRows()).toHaveLength(6);
+  });
+
+  it('新聞卡(overview-news):API mode 標題下方渲染示範資料標示', async () => {
+    await mountApiOverview(wlFetch(() => success(wlLists())));
+    const news = requireTestid('overview-news');
+    expect(news.querySelector('[data-testid="mock-data-notice"]')).not.toBeNull();
+    expect(news.querySelectorAll('.news-row').length).toBeGreaterThan(0);
+  });
+});
+
+describe('Overview — mock mode 的觀察清單卡與新聞卡(維持原樣)', () => {
+  it('沿用 data.ts 的 star 列與 sparkline,不讀 watchlist service;新聞卡不顯示示範資料標示', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+
+    expect(testid('overview-watchlist-row')).toBeNull();
+    expect(testid('overview-watchlist-loading')).toBeNull();
+    const rows = [...document.body.querySelectorAll<HTMLElement>('.wl-row')];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].querySelector('svg')).not.toBeNull();
+    expect(testid('live-quote-status')).toBeNull();
+    expect(requireTestid('overview-news').querySelector('[data-testid="mock-data-notice"]')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================================
+// 04.2-24(DIV-02;D-01;UI-SPEC §4、U-10):KPI #4「總報酬率」的股利收入附加列。
+// 數值刻意不同於 mock(3840 / 960),證明資料來自後端(04.1 慣例)。
+// =====================================================================================
+
+describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
+  async function mountDividend(overrides: Partial<PortfolioSummaryDto>, lang: 'en' | 'zh' = 'en') {
+    await mountApiOverview(routedFetch({
+      summary: () => success(summaryWith(overrides)),
+      trades: () => tradePage(API_TRADES),
+    }), { lang });
+  }
+
+  function roiCard(): HTMLElement {
+    const cards = allTestids('overview-kpi');
+    expect(cards).toHaveLength(4);
+    return cards[3];
+  }
+
+  it('dividendIncome 3840 + 預扣稅 960 → dividendIncomeLineWithTax,位在總報酬率卡、總損益副標之後', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' });
+
+    const line = requireTestid('overview-kpi-dividend-income');
+    expect(line.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(3840, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+    const card = roiCard();
+    expect(card.contains(line)).toBe(true);
+    expect(line.classList.contains('kpi-hint')).toBe(true);
+    // 副標(總損益 …)在前,股利列在後
+    const subtitle = card.querySelector('.kpi-s');
+    expect(subtitle?.textContent).toContain(t('en', 'totalPnlLabel'));
+    expect(subtitle!.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('預扣稅 0 → dividendIncomeLine(不列稅)', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'USD' });
+    expect(requireTestid('overview-kpi-dividend-income').textContent?.trim())
+      .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'USD', 0) }));
+  });
+
+  it('股利收入 0 但有預扣稅 → 仍渲染(只有兩者皆 0 才不渲染)', async () => {
+    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 960 });
+    expect(requireTestid('overview-kpi-dividend-income').textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
+      amount: fmtSignedMoney(0, 'TWD', 0),
+      tax: fmtMoney(960, 'TWD', 0),
+    }));
+  });
+
+  it('兩者皆 0 → 不渲染', async () => {
+    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 0 });
+    expect(allTestids('overview-kpi')).toHaveLength(4);
+    expect(testid('overview-kpi-dividend-income')).toBeNull();
+  });
+
+  it('今日損益說明 = dayPnlNote(不含匯差與股利);總報酬率顯示後端 roi、不重算不加註', async () => {
+    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, roi: 0.1567 }, 'zh');
+    const note = requireTestid('overview-kpi-day-pnl-note');
+    expect(note.textContent?.trim()).toBe(t('zh', 'dayPnlNote'));
+    expect(note.textContent).toContain('不含匯差與股利');
+    expect(roiCard().querySelector('.kpi-v .num')?.textContent?.trim()).toBe(fmtRatioPct(0.1567));
+    expect(roiCard().querySelectorAll('.kpi-hint')).toHaveLength(1);
+  });
+});
+
+describe('Overview — mock mode 不渲染股利收入附加列', () => {
+  it('mock KPI 卡沒有 overview-kpi-dividend-income', async () => {
+    mountWithPinia(Overview, { lang: 'en' });
+    await flushAsync();
+    expect(allTestids('overview-kpi')).toHaveLength(4);
+    expect(testid('overview-kpi-dividend-income')).toBeNull();
   });
 });

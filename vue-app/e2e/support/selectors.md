@@ -24,6 +24,12 @@
 | `cash-` | 入出金對話框(`CashEntryDialog`) | `cash-dialog`, `cash-submit` |
 | `positions-` | Positions 頁 | `positions-table`, `positions-day-pnl` |
 | `trades-` | Trades 頁 | `trades-table`, `trades-ccy-tag` |
+| `holding-event-` | 股利與股數調整對話框(`HoldingEventDialog`,Phase 04.2) | `holding-event-dialog`, `holding-event-submit` |
+| `watchlist-picker-` | 加入觀察清單選擇器(`WatchlistPicker`;比 `watchlist-` 長,優先比對) | `watchlist-picker-option`, `watchlist-picker-new-submit` |
+| `watchlist-` | Watchlist 頁(tabs、工具列、表格、狀態;選擇器本體為 `watchlist-picker`) | `watchlist-page`, `watchlist-row` |
+| `markets-` | Markets 頁(★ 星號、觀察清單載入錯誤) | `markets-star`, `markets-watchlist-retry` |
+| `chart-` | Chart 頁(觀察清單 Watch 按鈕) | `chart-watch` |
+| `live-quote-` | 即時報價狀態(`LiveQuoteStatus`) | `live-quote-status`, `live-quote-reconnect` |
 
 ## 既有 testid(導入 E2E 前已存在)
 

@@ -4,16 +4,18 @@ import Trades from './Trades.vue';
 // 原始碼字面(Vite ?raw):斷言 Trades 沒有 import mock store(PORT-04 / judgment §3)。
 // 沿用 03-03 / 03-04 的手法 —— 本專案 tsconfig 未含 @types/node,不得用 node:fs。
 import tradesSource from './Trades.vue?raw';
-import { t } from '../i18n';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { t, tf } from '../i18n';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   bumpPortfolioRevision,
+  notifyHoldingEventCreated,
   notifyTradeCreated,
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
+import { resetMockHoldingEventsForTests, type DividendDto } from '../services/holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { PaginatedResponse, TradeDto } from '../services/apiTypes';
+import type { PaginatedResponse, PortfolioActivityDto, PortfolioActivityKind, TradeDto } from '../services/apiTypes';
 import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 05(03-05-PLAN.md)。API mode 的 Trades 一律把篩選/排序/分頁轉成
@@ -23,7 +25,18 @@ import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testU
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-function trade(over: Partial<TradeDto> & { id: string }): TradeDto {
+/**
+ * 04.2-20 反轉(DP-10 / U-09):CSV 表頭由 `date,type,symbol,currency,qty,price,total,fee,note`
+ * 擴充為含 tax / ratio / reversal_of / reversed 的 13 欄,兩模式共用。
+ */
+const CSV_HEADER_42 = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed';
+
+/**
+ * 04.2-20(PORT-13):Trades 改讀 `GET /portfolio/activities`,列的形狀是 `PortfolioActivityDto`。
+ * 既有案例以 TradeDto 的欄位描述一筆交易;這裡機械式轉成 BUY / SELL 活動列(occurredAt = executedAt、
+ * amount = quantity × price,與契約〈各 kind 欄位適用表〉一致),呼叫端與斷言本體因此不用改。
+ */
+function tradeDto(over: Partial<TradeDto> & { id: string }): TradeDto {
   return {
     symbol: 'AAA',
     type: 'BUY',
@@ -38,7 +51,49 @@ function trade(over: Partial<TradeDto> & { id: string }): TradeDto {
   };
 }
 
-function page(over: Partial<PaginatedResponse<TradeDto>> = {}): PaginatedResponse<TradeDto> {
+function trade(over: Partial<TradeDto> & { id: string }): PortfolioActivityDto {
+  const tr = tradeDto(over);
+  return activity({
+    id: tr.id,
+    kind: tr.type,
+    symbol: tr.symbol,
+    currency: tr.currency,
+    occurredAt: tr.executedAt,
+    createdAt: tr.createdAt,
+    quantity: tr.quantity,
+    price: tr.price,
+    fee: tr.fee,
+    amount: tr.quantity * tr.price,
+    note: tr.note,
+  });
+}
+
+/** 任意 kind 的活動列;不適用的欄位預設 null(契約:不適用恆為 null)。 */
+function activity(over: Partial<PortfolioActivityDto> & { id: string; kind: PortfolioActivityKind }): PortfolioActivityDto {
+  return {
+    symbol: 'AAA',
+    currency: 'TWD',
+    occurredAt: '2026-05-16T09:30:00Z',
+    effectiveDate: null,
+    createdAt: '2026-05-16T09:30:00Z',
+    quantity: null,
+    price: null,
+    fee: null,
+    amount: null,
+    withholdingTax: null,
+    ratioNew: null,
+    ratioOld: null,
+    note: null,
+    reversalOfId: null,
+    reversalOfOccurredAt: null,
+    reversalOfEffectiveDate: null,
+    reversed: false,
+    reversible: false,
+    ...over,
+  };
+}
+
+function page(over: Partial<PaginatedResponse<PortfolioActivityDto>> = {}): PaginatedResponse<PortfolioActivityDto> {
   const items = over.items ?? [];
   return {
     items,
@@ -77,30 +132,38 @@ function scriptedFetch(handler: (call: number, url: string) => Response | Promis
   let call = 0;
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (!url.includes('/trades')) throw new Error(`unexpected fetch: ${url}`);
+    if (!url.includes('/portfolio/activities')) throw new Error(`unexpected fetch: ${url}`);
     const index = call;
     call += 1;
     return handler(index, url);
   });
 }
 
+/** 活動列表的 `type` 篩選對應的 kind(契約:DIVIDEND → CASH_DIVIDEND;SHARE_ADJUSTMENT → STOCK_DIVIDEND + SPLIT)。 */
+const KINDS_BY_TYPE: Record<string, PortfolioActivityKind[]> = {
+  BUY: ['BUY'],
+  SELL: ['SELL'],
+  DIVIDEND: ['CASH_DIVIDEND'],
+  SHARE_ADJUSTMENT: ['STOCK_DIVIDEND', 'SPLIT'],
+};
+
 /**
- * 會真的套用 query 參數的 trades 假後端(篩選 → 排序 → 切片),語意與 03-01-SUMMARY 契約一致:
- * type 篩選、[dateFrom, dateTo) 半開區間、白名單三鍵排序、total = quantity × price(不含 fee)。
+ * 會真的套用 query 參數的活動列表假後端(篩選 → 排序 → 切片),語意與 03-01-SUMMARY / 活動列表契約一致:
+ * type 篩選、[dateFrom, dateTo) 半開區間(作用於 occurredAt)、白名單排序、total = amount(交易 = quantity × price,不含 fee)。
  * 前端若漏送任何參數,回傳內容會立刻與斷言不符 —— 這是 CSV「保留篩選」的實質證據。
  */
-function fakeBackendFetch(all: TradeDto[]): TradesFetch {
+function fakeBackendFetch(all: PortfolioActivityDto[]): TradesFetch {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (!url.includes('/trades')) throw new Error(`unexpected fetch: ${url}`);
+    if (!url.includes('/portfolio/activities')) throw new Error(`unexpected fetch: ${url}`);
     const p = new URLSearchParams(url.slice(url.indexOf('?') + 1));
 
     let items = all.filter(tr => {
       const type = p.get('type');
-      if (type && tr.type !== type) return false;
+      if (type && !KINDS_BY_TYPE[type]?.includes(tr.kind)) return false;
       const from = p.get('dateFrom');
       const to = p.get('dateTo');
-      const at = Date.parse(tr.executedAt);
+      const at = Date.parse(tr.occurredAt);
       if (from && at < Date.parse(from)) return false;
       if (to && at >= Date.parse(to)) return false;
       return true;
@@ -108,9 +171,9 @@ function fakeBackendFetch(all: TradeDto[]): TradesFetch {
 
     const sort = p.get('sort') ?? 'executedAt';
     const factor = p.get('direction') === 'asc' ? 1 : -1;
-    const key = (tr: TradeDto) => (sort === 'quantity'
-      ? tr.quantity
-      : sort === 'total' ? tr.quantity * tr.price : Date.parse(tr.executedAt));
+    const key = (tr: PortfolioActivityDto) => (sort === 'quantity'
+      ? tr.quantity ?? 0
+      : sort === 'total' ? tr.amount ?? 0 : Date.parse(tr.occurredAt));
     items = [...items].sort((a, b) => (key(a) - key(b)) * factor);
 
     const pageNo = Number(p.get('page') ?? 0);
@@ -140,7 +203,7 @@ function urls(fetchMock: TradesFetch): string[] {
 
 function lastUrl(fetchMock: TradesFetch): string {
   const all = urls(fetchMock);
-  expect(all.length, 'at least one /trades request').toBeGreaterThan(0);
+  expect(all.length, 'at least one /portfolio/activities request').toBeGreaterThan(0);
   return all[all.length - 1];
 }
 
@@ -178,10 +241,16 @@ function click(el: HTMLElement) {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
 
-function clickChip(label: string) {
-  const chip = allTestids('trades-chip').find(el => el.textContent?.trim() === label);
-  expect(chip, `chip "${label}"`).toBeTruthy();
-  click(chip!);
+/** 頁籤 testid 的 id 段(UI-SPEC §Test-Visible Contract):shareAdjustment → share-adjustment,年度 chip 一律 year。 */
+type ChipTestId = 'all' | 'buy' | 'sell' | 'dividend' | 'share-adjustment' | 'year';
+
+/** 04.2-20:頁籤改以 `trades-chip-{id}` 定位(標籤經 i18n,文字不再是穩定的定位依據)。 */
+function chip(id: ChipTestId): HTMLElement {
+  return requireTestid(`trades-chip-${id}`);
+}
+
+function clickChip(id: ChipTestId) {
+  click(chip(id));
 }
 
 function headerCell(text: string): HTMLElement {
@@ -306,30 +375,103 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     expect(tradesSource).toContain(':key="tr.id"');
   });
 
-  it('API mode 的 chips 恰為 All / Buy / Sell / 當年度四個,不渲染 Dividend(D-02)', async () => {
+  // 04.2-20 反轉(DP-10):原「API mode 的 chips 恰為 All / Buy / Sell / 當年度四個,不渲染 Dividend(D-02)」。
+  // 活動列表(PORT-13)讓 API mode 也回得出股利與股數調整,D-02 的前提不再成立;頁籤改為 6 顆、標籤經 i18n。
+  it('Test C:API mode 頁籤為 全部 / 買入 / 賣出 / 股利 / 股數調整 / 當年度 六顆,各有 trades-chip-{id}(D-12 / PORT-13)', async () => {
     const fetchMock = scriptedFetch(() => success(page()));
     await mountApiTrades(fetchMock);
 
-    expect(chipLabels()).toEqual(['All', 'Buy', 'Sell', String(CURRENT_YEAR)]);
-    expect(document.body.textContent).not.toContain('Dividend');
+    expect(chipLabels()).toEqual([
+      t('en', 'tradesChipAll'),
+      t('en', 'tradesChipBuy'),
+      t('en', 'tradesChipSell'),
+      t('en', 'tradesChipDividend'),
+      t('en', 'tradesChipShareAdjustment'),
+      String(CURRENT_YEAR),
+    ]);
+    const ids: ChipTestId[] = ['all', 'buy', 'sell', 'dividend', 'share-adjustment', 'year'];
+    for (const id of ids) {
+      expect(allTestids(`trades-chip-${id}`), `trades-chip-${id}`).toHaveLength(1);
+    }
+    expect(chip('year').textContent?.trim(), 'API 年度 chip 為當年度').toBe(String(CURRENT_YEAR));
+    expect(chip('dividend').textContent?.trim()).toBe(t('en', 'tradesChipDividend'));
+    expect(chip('share-adjustment').textContent?.trim()).toBe(t('en', 'tradesChipShareAdjustment'));
+  });
+
+  it('Test A(tracer):點「股利」頁籤 → type=DIVIDEND、page=0 → 股利列渲染(D-12 / PORT-13)', async () => {
+    let dividendView = false;
+    const fetchMock = scriptedFetch((_call, url) => {
+      if (paramsOf(url).get('type') === 'DIVIDEND') dividendView = true;
+      return success(page({
+        items: dividendView
+          ? [activity({
+            id: 'div-1',
+            kind: 'CASH_DIVIDEND',
+            symbol: 'AAPL',
+            currency: 'USD',
+            amount: 120,
+            withholdingTax: 30,
+            occurredAt: '2026-10-30T01:15:00Z',
+          })]
+          : [trade({ id: 'x' })],
+        totalElements: 1,
+        totalPages: 1,
+      }));
+    });
+    await mountApiTrades(fetchMock);
+
+    clickChip('dividend');
+    await flushAsync();
+
+    const p = paramsOf(lastUrl(fetchMock));
+    expect(lastUrl(fetchMock)).toContain('/portfolio/activities');
+    expect(p.get('type')).toBe('DIVIDEND');
+    expect(p.get('page')).toBe('0');
+
+    const row = document.body.querySelector<HTMLElement>('[data-testid="trades-row"][data-kind="CASH_DIVIDEND"]');
+    expect(row, 'trades-row[data-kind="CASH_DIVIDEND"]').toBeTruthy();
+    expect(row!.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim())
+      .toBe(t('en', 'activityKindCashDividend'));
+    const cells = row!.querySelectorAll('td');
+    expect(cells[5].textContent).toContain('120.00');
+    expect(row!.querySelector('[data-testid="trades-tax-line"]'), 'trades-tax-line').toBeTruthy();
+  });
+
+  it('Test B:「股數調整」頁籤送 type=SHARE_ADJUSTMENT;「全部」頁籤不送 type(後端篩選,D-12)', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: [trade({ id: 'x' })], totalElements: 1, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+
+    clickChip('share-adjustment');
+    await flushAsync();
+    let p = paramsOf(lastUrl(fetchMock));
+    expect(p.get('type')).toBe('SHARE_ADJUSTMENT');
+    expect(p.get('page')).toBe('0');
+
+    clickChip('all');
+    await flushAsync();
+    expect(lastUrl(fetchMock)).not.toContain('type=');
+    p = paramsOf(lastUrl(fetchMock));
+    expect(p.get('dateFrom')).toBeNull();
+    // 只打一個分頁端點(T-04.2-45):前端不合併 /trades 與其他列表
+    for (const url of urls(fetchMock)) expect(url).toContain('/portfolio/activities');
   });
 
   it('點 Buy / Sell chip 轉成 type 參數並重置頁碼(D-05 / D-15)', async () => {
     const fetchMock = scriptedFetch(() => success(page({ items: [trade({ id: 'x' })], totalElements: 1, totalPages: 1 })));
     await mountApiTrades(fetchMock);
 
-    clickChip('Buy');
+    clickChip('buy');
     await flushAsync();
     let p = paramsOf(lastUrl(fetchMock));
     expect(p.get('type')).toBe('BUY');
     expect(p.get('page')).toBe('0');
 
-    clickChip('Sell');
+    clickChip('sell');
     await flushAsync();
     p = paramsOf(lastUrl(fetchMock));
     expect(p.get('type')).toBe('SELL');
 
-    clickChip('All');
+    clickChip('all');
     await flushAsync();
     p = paramsOf(lastUrl(fetchMock));
     expect(p.get('type')).toBeNull();
@@ -340,7 +482,7 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     const fetchMock = scriptedFetch(() => success(page()));
     await mountApiTrades(fetchMock);
 
-    clickChip(String(CURRENT_YEAR));
+    clickChip('year');
     await flushAsync();
 
     const p = paramsOf(lastUrl(fetchMock));
@@ -370,9 +512,16 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
       const fetchMock = scriptedFetch(() => success(page()));
       await mountApiTrades(fetchMock);
 
-      expect(chipLabels()).toEqual(['All', 'Buy', 'Sell', '2029']);
+      expect(chipLabels()).toEqual([
+        t('en', 'tradesChipAll'),
+        t('en', 'tradesChipBuy'),
+        t('en', 'tradesChipSell'),
+        t('en', 'tradesChipDividend'),
+        t('en', 'tradesChipShareAdjustment'),
+        '2029',
+      ]);
 
-      clickChip('2029');
+      clickChip('year');
       await flushAsync();
       const p = paramsOf(lastUrl(fetchMock));
       expect(p.get('dateFrom')!.startsWith('2029-01-01T00:00:00')).toBe(true);
@@ -472,7 +621,7 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
     await flushAsync();
     expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('2');
 
-    clickChip('Sell');
+    clickChip('sell');
     await flushAsync();
     const p = paramsOf(lastUrl(fetchMock));
     expect(p.get('page')).toBe('0');
@@ -599,7 +748,7 @@ describe('Trades — API mode 四態(D-11 / D-12、PORT-05)', () => {
 });
 
 describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
-  function buyTrades(count: number): TradeDto[] {
+  function buyTrades(count: number): PortfolioActivityDto[] {
     return Array.from({ length: count }, (_, i) => trade({
       id: `buy-${i}`,
       symbol: `B${i}`,
@@ -612,7 +761,7 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     }));
   }
 
-  function sellTrades(count: number): TradeDto[] {
+  function sellTrades(count: number): PortfolioActivityDto[] {
     return Array.from({ length: count }, (_, i) => trade({
       id: `sell-${i}`,
       symbol: `S${i}`,
@@ -632,7 +781,7 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     const fetchMock = fakeBackendFetch([...buyTrades(250), ...sellTrades(40)]);
     await mountApiTrades(fetchMock);
 
-    clickChip('Buy');
+    clickChip('buy');
     await flushAsync();
     click(headerCell(t('en', 'total')));
     await flushAsync();
@@ -658,12 +807,12 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
     const lines = csv.split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[0]).toBe(CSV_HEADER_42);
     expect(lines).toHaveLength(251);
     expect(csv).not.toContain('SELL');
     expect(csv).not.toContain('sell 0');
     // 匯出=當前條件的完整資料集,不只當前頁(第 100+ 筆也在)
-    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,buy 100');
+    expect(csv).toContain('2026-05-17,BUY,B100,TWD,101,10,1010,1,,,buy 100,,');
     expect(dl.downloads[0]).toBe(`trades-buy-${new Date().toISOString().slice(0, 10)}.csv`);
   });
 
@@ -722,7 +871,7 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,"a,b ""quoted""\nnext"');
+    expect(csv).toContain('2026-02-03,BUY,ESC,TWD,2,5,10,0,,,"a,b ""quoted""\nnext",,');
   });
 
   it('csvHasCurrencyColumn:API 匯出第 4 欄為 trade.currency,缺值為空字串,數值欄維持原始數字(T-04.1-45)', async () => {
@@ -740,10 +889,10 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     await flushAsync(40);
 
     const lines = (await dl.blobs[0].text()).split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
-    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,n1');
+    expect(lines[0]).toBe(CSV_HEADER_42);
+    expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,,,n1,,');
     expect(lines[2].split(',')[3], 'currency 缺值 → 空字串,不猜測').toBe('');
-    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,');
+    expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,,,,,');
   });
 
   it('currencyNoteShownInApiMode:API mode 表格上方有 tradesCurrencyNote', async () => {
@@ -792,9 +941,23 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     expect(first[6].textContent?.trim()).toBe('$1');
   });
 
-  it('chips 恰為 All / Buy / Sell / Dividend / 2026 五個(mock 保留寫死年份)', async () => {
+  // 04.2-20 反轉(DP-10):原「chips 恰為 All / Buy / Sell / Dividend / 2026 五個(mock 保留寫死年份)」。
+  // UI-SPEC §Interaction 0:mock 同樣 6 顆(新增股數調整),標籤經 i18n;寫死的 2026 保留。
+  it('mock 頁籤為 全部 / 買入 / 賣出 / 股利 / 股數調整 / 2026 六顆,各有 trades-chip-{id}(mock 保留寫死年份)', async () => {
     await mountMock();
-    expect(chipLabels()).toEqual(['All', 'Buy', 'Sell', 'Dividend', '2026']);
+    expect(chipLabels()).toEqual([
+      t('en', 'tradesChipAll'),
+      t('en', 'tradesChipBuy'),
+      t('en', 'tradesChipSell'),
+      t('en', 'tradesChipDividend'),
+      t('en', 'tradesChipShareAdjustment'),
+      '2026',
+    ]);
+    const ids: ChipTestId[] = ['all', 'buy', 'sell', 'dividend', 'share-adjustment', 'year'];
+    for (const id of ids) {
+      expect(allTestids(`trades-chip-${id}`), `trades-chip-${id}`).toHaveLength(1);
+    }
+    expect(chip('year').textContent?.trim()).toBe('2026');
   });
 
   it('點 chip 走 client-side 篩選,不打任何網路請求', async () => {
@@ -807,21 +970,43 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     await nextTick();
     expect(rows()).toHaveLength(3);
 
-    clickChip('Sell');
+    clickChip('sell');
     await nextTick();
     expect(rows()).toHaveLength(1);
     expect(document.body.textContent).toContain('BBB');
     expect(document.body.textContent).not.toContain('AAA');
 
-    clickChip('Dividend');
+    clickChip('dividend');
     await nextTick();
     expect(document.body.textContent).toContain('CCC');
 
-    clickChip('2026');
+    clickChip('year');
     await nextTick();
     expect(rows()).toHaveLength(2);
     expect(document.body.textContent).not.toContain('2025-12-31');
 
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('mock「股數調整」頁籤走 client-side 篩選:mock 交易沒有股數調整 → 0 列,不打任何網路請求', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    await mountMock();
+
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = customTrades();
+    await nextTick();
+    expect(rows()).toHaveLength(3);
+
+    clickChip('share-adjustment');
+    await nextTick();
+    expect(rows()).toHaveLength(0);
+    expect(chip('share-adjustment').classList.contains('active')).toBe(true);
+
+    clickChip('dividend');
+    await nextTick();
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('CCC');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -858,7 +1043,7 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     expect(rows().filter(row => row.classList.contains('fresh'))).toHaveLength(1);
   });
 
-  it('CSV 匯出沿用現行行為:當前篩選來源、既有欄序與檔名', async () => {
+  it('CSV 匯出:當前篩選來源、13 欄表頭(04.2-20 擴充)、mock DIV 列 type 為 CASH_DIVIDEND、檔名沿用', async () => {
     const dl = captureDownloads();
     restorers.push(dl.restore);
 
@@ -867,7 +1052,7 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     portfolio.trades = customTrades();
     await nextTick();
 
-    clickChip('2026');
+    clickChip('year');
     await nextTick();
     click(requireTestid('trades-export'));
     // 匯出是多個循序請求,需要足夠的 microtask 輪次讓整個迴圈跑完
@@ -875,9 +1060,9 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
 
     expect(dl.blobs).toHaveLength(1);
     const csv = await dl.blobs[0].text();
-    expect(csv).toContain('date,type,symbol,currency,qty,price,total,fee,note');
-    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,first');
-    expect(csv).toContain('2026-01-15,DIV,CCC,,4,0.5,2,0,cash');
+    expect(csv).toContain(CSV_HEADER_42);
+    expect(csv).toContain('2026-05-16,BUY,AAA,,2,10,20,1,,,first,,');
+    expect(csv).toContain('2026-01-15,CASH_DIVIDEND,CCC,,4,0.5,2,0,,,cash,,');
     expect(csv).not.toContain('2025-12-31');
     expect(dl.downloads[0]).toBe(`trades-2026-${new Date().toISOString().slice(0, 10)}.csv`);
   });
@@ -895,7 +1080,7 @@ describe('Trades — mock mode 回歸鎖定(行為與 Phase 3 之前逐項一致
     await flushAsync();
 
     const lines = (await dl.blobs[0].text()).split('\n');
-    expect(lines[0]).toBe('date,type,symbol,currency,qty,price,total,fee,note');
+    expect(lines[0]).toBe(CSV_HEADER_42);
     expect(lines).toHaveLength(4);
     for (const line of lines.slice(1)) {
       expect(line.split(',')[3], `mock 列第 4 欄應為空字串:${line}`).toBe('');
@@ -963,7 +1148,7 @@ describe('Trades — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () 
     let gate: ReturnType<typeof deferred<Response>> | null = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (!url.includes('/trades')) throw new Error(`unexpected fetch: ${url}`);
+      if (!url.includes('/portfolio/activities')) throw new Error(`unexpected fetch: ${url}`);
       if (gate) return gate.promise;
       return success(page({ items: [trade({ id: 'old', symbol: 'OLD' })], totalElements: 1, totalPages: 1 }));
     });
@@ -1057,7 +1242,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     });
     await mountApiTrades(fetchMock);
 
-    clickChip('Sell');
+    clickChip('sell');
     await flushAsync();
     click(headerCell(t('en', 'qty')));
     await flushAsync();
@@ -1095,7 +1280,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await mountApiTrades(fetchMock);
 
     refetched = true;
-    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'NEWSYM' }));
+    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'NEWSYM' }));
     await flushAsync();
 
     expect(rows()).toHaveLength(2);
@@ -1111,7 +1296,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await mountApiTrades(fetchMock);
 
     // D-03 允許補登,新交易不保證在第 0 頁,甚至可能不符當前篩選。
-    notifyTradeCreated(trade({ id: 'not-in-view', symbol: 'ZZZ' }));
+    notifyTradeCreated(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' }));
     await flushAsync();
 
     const note = requireTestid('trades-not-in-current-view');
@@ -1140,11 +1325,11 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     })));
     await mountApiTrades(fetchMock);
 
-    notifyTradeCreated(trade({ id: 'not-in-view', symbol: 'ZZZ' }));
+    notifyTradeCreated(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' }));
     await flushAsync();
     expect(testid('trades-not-in-current-view')).not.toBeNull();
 
-    clickChip('Sell');
+    clickChip('sell');
     await flushAsync();
 
     expect(testid('trades-not-in-current-view')).toBeNull();
@@ -1163,7 +1348,7 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
     await mountApiTrades(fetchMock);
     expect(freshRow()).toHaveLength(0);
 
-    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
     await flushAsync();
 
     expect(rows()[0].classList.contains('fresh')).toBe(true);
@@ -1191,7 +1376,7 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
     ];
     await nextTick();
 
-    notifyTradeCreated(trade({ id: 'api-only', symbol: 'AAA' }));
+    notifyTradeCreated(tradeDto({ id: 'api-only', symbol: 'AAA' }));
     await nextTick();
 
     expect(freshRow()).toHaveLength(0);
@@ -1227,7 +1412,7 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 21:變更排序後「新」標記與 apiLastFill 一併清除,不得把另一筆舊交易標成新', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
@@ -1243,7 +1428,7 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 22:換頁同樣清除「新」標記', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
@@ -1257,12 +1442,909 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 23:頁面 unmount 時清除「新」標記(壽命由 unmount 界定,不用 setTimeout)', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(trade({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
     unmountAll();
 
     expect(apiLastFill.value, 'App.vue 的 v-if 切頁會卸載本頁,標記不得活過這一刻').toBeNull();
+  });
+});
+
+describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-SPEC §Interaction 3)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  /** 本機 `YYYY-MM-DD`(與畫面同一個時區基準;測試不寫死時區)。 */
+  function localDate(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+  function localDateTime(iso: string): string {
+    const d = new Date(iso);
+    return `${localDate(iso)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  const UUIDS = {
+    cash: '11111111-aaaa-4bbb-8ccc-000000000001',
+    cashOrig: '11111111-aaaa-4bbb-8ccc-000000000002',
+    stock: '22222222-aaaa-4bbb-8ccc-000000000001',
+    split: '33333333-aaaa-4bbb-8ccc-000000000001',
+    reverse: '44444444-aaaa-4bbb-8ccc-000000000001',
+    adjRev: '55555555-aaaa-4bbb-8ccc-000000000001',
+    adjOrig: '55555555-aaaa-4bbb-8ccc-000000000002',
+    buy: '66666666-aaaa-4bbb-8ccc-000000000001',
+  };
+
+  function mixedItems(): PortfolioActivityDto[] {
+    return [
+      trade({ id: UUIDS.buy, symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, executedAt: '2026-10-31T09:30:00Z' }),
+      activity({
+        id: UUIDS.cash,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120,
+        withholdingTax: 30,
+        occurredAt: '2026-10-30T01:15:00Z',
+        reversed: true,
+      }),
+      activity({
+        id: UUIDS.cashOrig,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'MSFT',
+        currency: 'USD',
+        amount: 50,
+        withholdingTax: 0,
+        occurredAt: '2026-10-29T03:00:00Z',
+        reversalOfId: UUIDS.cash,
+        reversalOfOccurredAt: '2026-10-30T01:15:00Z',
+      }),
+      activity({
+        id: UUIDS.stock,
+        kind: 'STOCK_DIVIDEND',
+        symbol: '2330',
+        currency: 'TWD',
+        quantity: 50,
+        effectiveDate: '2026-08-15',
+        occurredAt: '2026-08-14T16:00:00Z',
+      }),
+      activity({
+        id: UUIDS.split,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+      }),
+      activity({
+        id: UUIDS.reverse,
+        kind: 'SPLIT',
+        symbol: 'GE',
+        currency: 'USD',
+        quantity: -50,
+        ratioNew: 1,
+        ratioOld: 2,
+        effectiveDate: '2026-06-01',
+        occurredAt: '2026-05-31T16:00:00Z',
+        reversed: true,
+      }),
+      activity({
+        id: UUIDS.adjRev,
+        kind: 'SPLIT',
+        symbol: 'GE',
+        currency: 'USD',
+        quantity: -50,
+        ratioNew: 1,
+        ratioOld: 2,
+        effectiveDate: '2026-06-01',
+        occurredAt: '2026-05-31T16:00:00Z',
+        reversalOfId: UUIDS.reverse,
+        reversalOfEffectiveDate: '2026-06-01',
+      }),
+    ];
+  }
+
+  async function mountMixed() {
+    const fetchMock = scriptedFetch(() => success(page({ items: mixedItems(), totalElements: 7, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+    expect(rows()).toHaveLength(7);
+  }
+
+  function rowById(index: number): HTMLElement {
+    return rows()[index];
+  }
+
+  function cellsOf(row: HTMLElement): HTMLTableCellElement[] {
+    return [...row.querySelectorAll<HTMLTableCellElement>('td')];
+  }
+
+  function expectDash(cell: HTMLTableCellElement, label: string) {
+    expect(cell.textContent?.trim(), `${label} 不適用 → —`).toBe('—');
+    const dash = cell.querySelector('[aria-hidden="true"]');
+    expect(dash, `${label} 的 — 為 aria-hidden`).toBeTruthy();
+    expect(dash!.classList.contains('na')).toBe(true);
+  }
+
+  it('表頭新增最後一欄「狀態」(cashColStatus),API 與 mock 同欄序', async () => {
+    await mountMixed();
+    const ths = [...document.body.querySelectorAll<HTMLElement>('thead th')];
+    expect(ths).toHaveLength(9);
+    expect(ths[8].textContent?.trim()).toBe(t('en', 'cashColStatus'));
+    for (const row of rows()) expect(cellsOf(row)).toHaveLength(9);
+  });
+
+  it('BUY / SELL 列沿用既有欄位與 pill 原字串,類型格改用 .kind-pill(12 / 600)', async () => {
+    await mountMixed();
+    const buy = rowById(0);
+    expect(buy.dataset.kind).toBe('BUY');
+    const pill = buy.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.textContent?.trim()).toBe('BUY');
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('buy')).toBe(true);
+    const cells = cellsOf(buy);
+    expect(cells[0].textContent?.trim()).toBe('2026-10-31');
+    expect(cells[3].textContent?.trim()).toBe('3');
+    expect(cells[5].textContent?.trim()).toBe('300');
+    expect(cells[8].textContent?.trim(), '交易列狀態欄為空').toBe('');
+  });
+
+  it('CASH_DIVIDEND:本機 YYYY-MM-DD HH:mm、.kind-pill.div、數量 / 價格 / 手續費為 —、總額 + 預扣稅行', async () => {
+    await mountMixed();
+    const row = rowById(1);
+    expect(row.dataset.kind).toBe('CASH_DIVIDEND');
+    const cells = cellsOf(row);
+    expect(cells[0].textContent?.trim()).toBe(localDateTime('2026-10-30T01:15:00Z'));
+    const pill = row.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('div')).toBe(true);
+    expect(pill.textContent?.trim()).toBe(t('en', 'activityKindCashDividend'));
+    expectDash(cells[3], 'qty');
+    expectDash(cells[4], 'price');
+    expectDash(cells[6], 'fee');
+    expect(row.querySelector('[data-testid="trades-tax-line"]')?.textContent?.trim())
+      .toBe(t('en', 'tradesTaxLine').replace('{amount}', '30.00'));
+    // withholdingTax = 0 → 不渲染預扣稅行
+    expect(rowById(2).querySelector('[data-testid="trades-tax-line"]')).toBeNull();
+  });
+
+  it('STOCK_DIVIDEND:日期為 effectiveDate 原字串、數量帶號、價格 / 總額 / 手續費為 —、中性 pill', async () => {
+    await mountMixed();
+    const row = rowById(3);
+    expect(row.dataset.kind).toBe('STOCK_DIVIDEND');
+    const cells = cellsOf(row);
+    expect(cells[0].textContent?.trim()).toBe('2026-08-15');
+    const pill = row.querySelector<HTMLElement>('[data-testid="trades-kind-pill"]')!;
+    expect(pill.textContent?.trim()).toBe(t('en', 'activityKindStockDividend'));
+    expect(pill.classList.contains('kind-pill')).toBe(true);
+    expect(pill.classList.contains('div')).toBe(false);
+    expect(cells[3].textContent?.trim()).toBe('+50');
+    expectDash(cells[4], 'price');
+    expectDash(cells[5], 'total');
+    expectDash(cells[6], 'fee');
+  });
+
+  it('SPLIT:ratioNew > ratioOld 為「拆股」、反之「合股」;數量帶號 + 比例行 new : old', async () => {
+    await mountMixed();
+    const split = rowById(4);
+    expect(split.dataset.kind).toBe('SPLIT');
+    expect(split.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim()).toBe(t('en', 'activityKindSplit'));
+    const qty = cellsOf(split)[3];
+    expect(qty.querySelector('[data-testid="trades-ratio-line"]')?.textContent?.trim()).toBe('4 : 1');
+    // 股數本體與第二行比例行是相鄰元素(比例行為區塊),只斷言本體文字
+    expect(qty.firstElementChild?.textContent?.trim()).toBe('+300');
+    expectDash(cellsOf(split)[5], 'total');
+
+    const reverse = rowById(5);
+    expect(reverse.querySelector('[data-testid="trades-kind-pill"]')?.textContent?.trim())
+      .toBe(t('en', 'activityKindReverseSplit'));
+    expect(cellsOf(reverse)[3].querySelector('[data-testid="trades-ratio-line"]')?.textContent?.trim()).toBe('1 : 2');
+    expect(cellsOf(reverse)[3].textContent).toContain('-50');
+  });
+
+  it('沖銷列:pill 下方「沖銷 {date} 的紀錄」以原紀錄日期指回(股利用 reversalOfOccurredAt 本機日期、調整用 reversalOfEffectiveDate)', async () => {
+    await mountMixed();
+    const cashReversal = rowById(2).querySelector('[data-testid="trades-reversal-of"]');
+    expect(cashReversal?.textContent?.trim())
+      .toBe(t('en', 'cashReversalOf').replace('{date}', localDate('2026-10-30T01:15:00Z')));
+    // 指回行在類型格內(pill 下方)
+    expect(cellsOf(rowById(2))[1].contains(cashReversal)).toBe(true);
+
+    const adjReversal = rowById(6).querySelector('[data-testid="trades-reversal-of"]');
+    expect(adjReversal?.textContent?.trim()).toBe(t('en', 'cashReversalOf').replace('{date}', '2026-06-01'));
+
+    // 非沖銷列不渲染指回行
+    for (const index of [0, 1, 3, 4, 5]) {
+      expect(rowById(index).querySelector('[data-testid="trades-reversal-of"]'), `row ${index}`).toBeNull();
+    }
+  });
+
+  it('被沖銷列:金額 / 股數加刪除線 + 狀態欄「已沖銷」pill;未被沖銷列無此標記', async () => {
+    await mountMixed();
+    const cash = rowById(1);
+    const amount = cellsOf(cash)[5].querySelector<HTMLElement>('.is-reversed');
+    expect(amount, '股利金額刪除線').toBeTruthy();
+    expect(amount!.textContent).toContain('120.00');
+    expect(cellsOf(cash)[8].querySelector('[data-testid="trades-reversed-pill"]')?.textContent?.trim())
+      .toBe(t('en', 'cashReversed'));
+
+    const reverse = rowById(5);
+    const qty = cellsOf(reverse)[3].querySelector<HTMLElement>('.is-reversed');
+    expect(qty, '股數刪除線').toBeTruthy();
+    expect(qty!.textContent).toContain('-50');
+    expect(reverse.querySelector('[data-testid="trades-reversed-pill"]')).toBeTruthy();
+
+    for (const index of [0, 2, 3, 4, 6]) {
+      const row = rowById(index);
+      expect(row.querySelector('[data-testid="trades-reversed-pill"]'), `row ${index}`).toBeNull();
+      expect(row.querySelector('.is-reversed'), `row ${index}`).toBeNull();
+    }
+  });
+
+  it('DOM 不含任何列的 id / reversalOfId uuid(T-04.2-44)', async () => {
+    await mountMixed();
+    const html = document.body.innerHTML;
+    for (const uuid of Object.values(UUIDS)) expect(html, uuid).not.toContain(uuid);
+  });
+
+  it('.kind-pill 樣式為 12px / 600(UI-SPEC §Typography 遷移規則第 9 列);mock tbody 的 .pill 不動', () => {
+    const block = sourceBlock('.kind-pill {', '}');
+    expect(block).toContain('font-size: 12px');
+    expect(block).toContain('font-weight: 600');
+    expect(block).toContain('white-space: nowrap');
+    expect(tradesSource).toContain(":class=\"['pill', tr.type.toLowerCase()]\"");
+  });
+
+  it('mock 模式:靜態 DIV 示範列以 CASH_DIVIDEND 呈現(data-kind)、無沖銷相關標記;表格同樣有狀態欄', async () => {
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+    await flushAsync();
+    const portfolio = useMockPortfolioStore();
+    portfolio.trades = [
+      { d: '2026-05-16', type: 'BUY', sym: 'AAA', qty: 2, px: 10, fee: 1, note: 'first' },
+      { d: '2026-01-15', type: 'DIV', sym: 'CCC', qty: 4, px: 0.5, fee: 0, note: 'cash' },
+    ];
+    await nextTick();
+
+    const ths = [...document.body.querySelectorAll<HTMLElement>('thead th')];
+    expect(ths[ths.length - 1].textContent?.trim()).toBe(t('en', 'cashColStatus'));
+    expect(rows()[0].dataset.kind).toBe('BUY');
+    expect(rows()[1].dataset.kind).toBe('CASH_DIVIDEND');
+    for (const row of rows()) expect(cellsOf(row)).toHaveLength(9);
+    expect(testid('trades-reversal-of')).toBeNull();
+    expect(testid('trades-reversed-pill')).toBeNull();
+    expect(document.body.querySelector('.is-reversed')).toBeNull();
+  });
+});
+
+describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  function localDate(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  const ORIG = 'aaaaaaaa-1111-4222-8333-000000000001';
+  const REV = 'aaaaaaaa-1111-4222-8333-000000000002';
+  const SPLIT_ID = 'bbbbbbbb-1111-4222-8333-000000000001';
+  const STOCK_ID = 'cccccccc-1111-4222-8333-000000000001';
+  const ADJ_REV = 'dddddddd-1111-4222-8333-000000000001';
+
+  function exportItems(): PortfolioActivityDto[] {
+    return [
+      activity({
+        id: ORIG,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120.5,
+        withholdingTax: 30,
+        occurredAt: '2026-10-30T01:15:00Z',
+        note: 'Q3',
+        reversed: true,
+      }),
+      activity({
+        id: REV,
+        kind: 'CASH_DIVIDEND',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120.5,
+        withholdingTax: 30,
+        occurredAt: '2026-10-31T02:00:00Z',
+        reversalOfId: ORIG,
+        reversalOfOccurredAt: '2026-10-30T01:15:00Z',
+      }),
+      activity({
+        id: SPLIT_ID,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+      }),
+      activity({
+        id: STOCK_ID,
+        kind: 'STOCK_DIVIDEND',
+        symbol: '2330',
+        currency: 'TWD',
+        quantity: 12.5,
+        effectiveDate: '2026-08-15',
+        occurredAt: '2026-08-14T16:00:00Z',
+      }),
+      activity({
+        id: ADJ_REV,
+        kind: 'SPLIT',
+        symbol: 'TSLA',
+        currency: 'USD',
+        quantity: 300,
+        ratioNew: 4,
+        ratioOld: 1,
+        effectiveDate: '2026-07-01',
+        occurredAt: '2026-06-30T16:00:00Z',
+        reversalOfId: SPLIT_ID,
+        reversalOfEffectiveDate: '2026-07-01',
+      }),
+    ];
+  }
+
+  async function exportWith(fetchMock: TradesFetch) {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+    await mountApiTrades(fetchMock);
+    return dl;
+  }
+
+  it('股利列 type=CASH_DIVIDEND、total = amount、tax 有值;被沖銷列 reversed=true;沖銷列 reversal_of 為原紀錄日期', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[0]).toBe(CSV_HEADER_42);
+    expect(lines).toHaveLength(6);
+    expect(lines[1]).toBe(`${localDate('2026-10-30T01:15:00Z')},CASH_DIVIDEND,AAPL,USD,,,120.5,,30,,Q3,,true`);
+    expect(lines[2]).toBe(`${localDate('2026-10-31T02:00:00Z')},CASH_DIVIDEND,AAPL,USD,,,120.5,,30,,,${localDate('2026-10-30T01:15:00Z')},`);
+  });
+
+  it('拆股列 qty = 帶號 delta 原始數字、ratio = 4:1;配股列 qty 原始數字;股數調整沖銷列 reversal_of = 原 effectiveDate', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines[3]).toBe('2026-07-01,SPLIT,TSLA,USD,300,,,,,4:1,,,');
+    expect(lines[4]).toBe('2026-08-15,STOCK_DIVIDEND,2330,TWD,12.5,,,,,,,,');
+    expect(lines[5]).toBe('2026-07-01,SPLIT,TSLA,USD,300,,,,,4:1,,2026-07-01,');
+  });
+
+  it('CSV 內容不含任何 uuid(T-04.2-44)', async () => {
+    const fetchMock = scriptedFetch(() => success(page({ items: exportItems(), totalElements: 5, totalPages: 1 })));
+    const dl = await exportWith(fetchMock);
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const csv = await dl.blobs[0].text();
+    for (const uuid of [ORIG, REV, SPLIT_ID, STOCK_ID, ADJ_REV]) expect(csv).not.toContain(uuid);
+  });
+
+  it('匯出與畫面同源:股數調整頁籤逐頁走 /portfolio/activities?type=SHARE_ADJUSTMENT,檔名 trades-shareadjustment-{date}.csv', async () => {
+    const fetchMock = fakeBackendFetch(exportItems());
+    const dl = await exportWith(fetchMock);
+
+    clickChip('share-adjustment');
+    await flushAsync();
+    const before = urls(fetchMock).length;
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const exportUrls = urls(fetchMock).slice(before);
+    expect(exportUrls.length).toBeGreaterThan(0);
+    for (const url of exportUrls) {
+      expect(url).toContain('/portfolio/activities');
+      expect(paramsOf(url).get('type')).toBe('SHARE_ADJUSTMENT');
+      expect(paramsOf(url).get('size')).toBe('100');
+    }
+    const lines = (await dl.blobs[0].text()).split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines.slice(1).every(line => /,(SPLIT|STOCK_DIVIDEND),/.test(line))).toBe(true);
+    expect(dl.downloads[0]).toBe(`trades-shareadjustment-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+});
+
+// =====================================================================================
+// 04.2-21 Task 2:Trades 寫入入口(D-28 / D-13 / D-12、UI-SPEC §Interaction 3)。
+// 頁首「+ 記錄股利 / + 記錄股數調整」、空狀態動作、活動列「沖銷這筆」、寫入後重讀、fresh 與不在本頁、initialFilter。
+// =====================================================================================
+
+describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
+  afterEach(() => {
+    resetMockHoldingEventsForTests();
+  });
+
+  type Responder = (url: string) => Response | Promise<Response>;
+
+  /** 活動列表 + 對話框的兩個寫入端點;其餘一律丟錯,讓頁面偷打別的 API 立刻可見。 */
+  function eventsFetch(options: { activities: Responder; dividends?: Responder; adjustments?: Responder }): TradesFetch {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/portfolio/activities')) return options.activities(url);
+      if (url.includes('/portfolio/dividends') && options.dividends) return options.dividends(url);
+      if (url.includes('/portfolio/share-adjustments') && options.adjustments) return options.adjustments(url);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+  }
+
+  function activityUrls(fetchMock: TradesFetch): string[] {
+    return urls(fetchMock).filter(url => url.includes('/portfolio/activities'));
+  }
+
+  async function mountApi(fetchMock: TradesFetch, extraProps: Record<string, unknown> = {}) {
+    // CSRF cookie 預先備好,對話框的 POST 不需要 bootstrap 往返(HoldingEventDialog.test.ts 的同一手法)。
+    document.cookie = 'XSRF-TOKEN=csrf-trades; path=/';
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    resetRuntimeApiClientsForTests();
+    vi.stubGlobal('fetch', fetchMock);
+    mountWithPinia(Trades, { lang: 'en', onOrder: () => {}, ...extraProps });
+    await flushAsync();
+  }
+
+  async function clickAndFlush(el: HTMLElement) {
+    click(el);
+    await flushAsync();
+  }
+
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  function localDateTime(iso: string): string {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  const DIV_ID = 'aaaaaaaa-1111-4bbb-8ccc-000000000001';
+  const DIV_ROW = activity({
+    id: DIV_ID,
+    kind: 'CASH_DIVIDEND',
+    symbol: 'AAPL',
+    currency: 'USD',
+    amount: 120,
+    withholdingTax: 30,
+    occurredAt: '2026-10-30T01:15:00Z',
+    reversible: true,
+  });
+
+  describe('頁首動作(D-28)', () => {
+    it('「股利」頁籤頁首渲染 .btn-ghost「+ 記錄股利」,位於匯出與新增交易之間;其他頁籤不渲染', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      expect(testid('trades-record-dividend')).toBeNull();
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+
+      clickChip('dividend');
+      await flushAsync();
+      const btn = requireTestid('trades-record-dividend');
+      expect(btn.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordDividend')}`);
+      expect(btn.classList.contains('btn-ghost')).toBe(true);
+      expect(btn.classList.contains('btn-accent')).toBe(false);
+      const order = [...btn.parentElement!.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
+      expect(order).toEqual(['trades-export', 'trades-record-dividend', 'trades-add-trade']);
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+
+      clickChip('buy');
+      await flushAsync();
+      expect(testid('trades-record-dividend')).toBeNull();
+      expect(testid('trades-record-share-adjustment')).toBeNull();
+    });
+
+    it('「+ 記錄股利」開啟可搜尋標的的對話框(無 symbol、預設現金股利),無持倉也能記(D-03)', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }), { initialFilter: 'dividend' });
+
+      await clickAndFlush(requireTestid('trades-record-dividend'));
+
+      requireTestid('holding-event-dialog');
+      expect(requireTestid('holding-event-symbol-input').getAttribute('role')).toBe('combobox');
+      expect(testid('holding-event-symbol-locked')).toBeNull();
+      expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('「股數調整」頁籤頁首「+ 記錄股數調整」開啟預設配股的對話框', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      const btn = requireTestid('trades-record-share-adjustment');
+      expect(btn.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordShareAdjustment')}`);
+      expect(btn.classList.contains('btn-ghost')).toBe(true);
+      expect(testid('trades-record-dividend')).toBeNull();
+
+      await clickAndFlush(btn);
+      requireTestid('holding-event-symbol-input');
+      expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+  });
+
+  describe('空狀態(UI Consideration:empty / Trades 股利頁籤、股數調整頁籤)', () => {
+    it('「股利」頁籤 0 列:尚無股利紀錄 + body + 「+ 記錄股利」(btn-ghost-sm),點擊開對話框', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }), { initialFilter: 'dividend' });
+
+      const empty = requireTestid('trades-dividend-empty');
+      expect(empty.textContent).toContain(t('en', 'tradesDividendEmpty'));
+      expect(empty.textContent).toContain(t('en', 'tradesDividendEmptyBody'));
+      expect(testid('trades-empty')).toBeNull();
+      const action = requireTestid('trades-empty-record-dividend');
+      expect(empty.contains(action)).toBe(true);
+      expect(action.classList.contains('btn-ghost-sm')).toBe(true);
+      expect(action.textContent?.trim()).toBe(`+ ${t('en', 'tradesRecordDividend')}`);
+
+      await clickAndFlush(action);
+      expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+      requireTestid('holding-event-symbol-input');
+    });
+
+    it('「股數調整」頁籤 0 列:尚無股數調整紀錄 + 指向持倉頁的 body + 「+ 記錄股數調整」', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      const empty = requireTestid('trades-share-adjustment-empty');
+      expect(empty.textContent).toContain(t('en', 'tradesShareAdjustmentEmpty'));
+      expect(empty.textContent).toContain(t('en', 'tradesShareAdjustmentEmptyBody'));
+      const action = requireTestid('trades-empty-record-share-adjustment');
+      expect(action.classList.contains('btn-ghost-sm')).toBe(true);
+      expect(testid('trades-dividend-empty')).toBeNull();
+
+      await clickAndFlush(action);
+      expect(requireTestid('holding-event-mode-stock-dividend').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('其他頁籤 0 列沿用 noTrades', async () => {
+      await mountApi(eventsFetch({ activities: () => success(page()) }));
+      clickChip('buy');
+      await flushAsync();
+
+      expect(requireTestid('trades-empty').textContent).toContain(t('en', 'noTrades'));
+      expect(testid('trades-dividend-empty')).toBeNull();
+      expect(testid('trades-share-adjustment-empty')).toBeNull();
+    });
+
+    it('mock mode:「股數調整」頁籤(mock 交易沒有股數調整)顯示同一個空狀態與動作', async () => {
+      mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+      await flushAsync();
+      clickChip('share-adjustment');
+      await flushAsync();
+
+      requireTestid('trades-share-adjustment-empty');
+      requireTestid('trades-empty-record-share-adjustment');
+      expect(rows()).toHaveLength(0);
+    });
+  });
+
+  describe('「沖銷這筆」(D-13)', () => {
+    function reversibilityItems(): PortfolioActivityDto[] {
+      return [
+        DIV_ROW,
+        activity({ id: 'div-not-reversible', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversible: false }),
+        activity({ id: 'div-reversed', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversed: true, reversible: true }),
+        activity({ id: 'div-reversal', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversalOfId: 'x', reversible: true }),
+        activity({ id: 'split-ok', kind: 'SPLIT', symbol: 'TSLA', quantity: 300, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-07-01', reversible: true }),
+        activity({ id: 'stock-ok', kind: 'STOCK_DIVIDEND', symbol: '2330', quantity: 50, effectiveDate: '2026-08-15', reversible: true }),
+        trade({ id: 'buy-row', symbol: 'NVDA' }),
+      ];
+    }
+
+    it('只在 reversible 且未沖銷、非沖銷列的事件列出現(BUY / SELL 永不出現),aria-label 帶日期 / 代號 / 類型', async () => {
+      const items = reversibilityItems();
+      // BUY 列即使後端誤給 reversible = true 也不得出現
+      items[6] = { ...items[6], reversible: true };
+      await mountApi(eventsFetch({ activities: () => success(page({ items })) }));
+
+      const withButton = rows().filter(row => row.querySelector('[data-testid="trades-reverse"]'));
+      expect(withButton.map(row => row.getAttribute('data-kind'))).toEqual(['CASH_DIVIDEND', 'SPLIT', 'STOCK_DIVIDEND']);
+      for (const row of withButton) {
+        const btn = row.querySelector<HTMLElement>('[data-testid="trades-reverse"]')!;
+        expect(row.querySelector('td.col-status')!.contains(btn)).toBe(true);
+        expect(btn.classList.contains('btn-ghost-sm')).toBe(true);
+        expect(btn.textContent?.trim()).toBe(t('en', 'cashReverseThis'));
+      }
+      expect(withButton[0].querySelector('[data-testid="trades-reverse"]')!.getAttribute('aria-label')).toBe(
+        tf('en', 'tradesReverseAria', { date: localDateTime(DIV_ROW.occurredAt), symbol: 'AAPL', type: t('en', 'activityKindCashDividend') }),
+      );
+      expect(withButton[1].querySelector('[data-testid="trades-reverse"]')!.getAttribute('aria-label')).toBe(
+        tf('en', 'tradesReverseAria', { date: '2026-07-01', symbol: 'TSLA', type: t('en', 'activityKindSplit') }),
+      );
+    });
+
+    it('點「沖銷這筆」開啟沖銷模式;衝突(409 DIVIDEND_ALREADY_REVERSED)→ 重讀列表', async () => {
+      const fetchMock = eventsFetch({
+        activities: () => success(page({ items: [DIV_ROW] })),
+        dividends: () => failure('DIVIDEND_ALREADY_REVERSED', 'trace-conflict', 409),
+      });
+      await mountApi(fetchMock);
+      expect(activityUrls(fetchMock)).toHaveLength(1);
+
+      await clickAndFlush(requireTestid('trades-reverse'));
+      requireTestid('holding-event-reversal-original');
+
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      expect(urls(fetchMock).filter(url => url.includes('/portfolio/dividends'))).toHaveLength(1);
+      expect(activityUrls(fetchMock)).toHaveLength(2);
+    });
+
+    it('沖銷成功:列表重讀後按鈕消失,關閉對話框時焦點移到表格卡(tabindex=-1)', async () => {
+      let reversedNow = false;
+      const reversalDto: DividendDto = {
+        id: 'bbbbbbbb-2222-4bbb-8ccc-000000000001',
+        symbol: 'AAPL',
+        currency: 'USD',
+        amount: 120,
+        withholdingTax: 30,
+        paidAt: '2026-11-04T09:30:00+08:00',
+        createdAt: '2026-11-04T09:30:05+08:00',
+        note: null,
+        reversalOfId: DIV_ID,
+        reversed: false,
+      };
+      const fetchMock = eventsFetch({
+        activities: () => success(page({
+          items: reversedNow
+            ? [
+              activity({ ...DIV_ROW, id: reversalDto.id, reversalOfId: DIV_ID, reversalOfOccurredAt: DIV_ROW.occurredAt, reversible: false }),
+              { ...DIV_ROW, reversed: true, reversible: false },
+            ]
+            : [DIV_ROW],
+        })),
+        dividends: () => {
+          reversedNow = true;
+          return success(reversalDto);
+        },
+      });
+      await mountApi(fetchMock);
+
+      await clickAndFlush(requireTestid('trades-reverse'));
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      requireTestid('holding-event-result');
+      expect(activityUrls(fetchMock)).toHaveLength(2);
+      expect(testid('trades-reverse')).toBeNull();
+
+      await clickAndFlush(requireTestid('holding-event-done'));
+      await flushAsync();
+
+      const card = requireTestid('trades-table');
+      expect(card.getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(card);
+    });
+
+    it('mock mode:靜態 DIV 示範列沒有「沖銷這筆」;本 session mock 記錄的股利列有,且不與它寫入的 DIV 交易列重複', async () => {
+      mountWithPinia(Trades, { lang: 'en', onOrder: () => {} });
+      await flushAsync();
+      const store = useMockPortfolioStore();
+      store.trades = [{ d: '2026-01-15', type: 'DIV', sym: 'CCC', qty: 4, px: 0.5, fee: 0, note: 'static' }];
+      await flushAsync();
+      expect(rows()).toHaveLength(1);
+      expect(testid('trades-reverse')).toBeNull();
+
+      const dto = await getRuntimeApiClients().holdingEvents.createDividend({ symbol: 'AAPL', amount: 50 }, 'mock-key-1');
+      notifyHoldingEventCreated(dto, 'dividend');
+      await flushAsync();
+
+      // 事件列一列 + 靜態示範列一列;事件寫進 mock 交易的 DIV 列不得再出現一次
+      expect(rows()).toHaveLength(2);
+      const reverse = allTestids('trades-reverse');
+      expect(reverse).toHaveLength(1);
+      const eventRow = reverse[0].closest('[data-testid="trades-row"]')!;
+      expect(eventRow.getAttribute('data-kind')).toBe('CASH_DIVIDEND');
+      expect(eventRow.textContent).toContain('AAPL');
+      expect(eventRow.classList.contains('fresh')).toBe(true);
+
+      await clickAndFlush(reverse[0]);
+      requireTestid('holding-event-reversal-original');
+      await clickAndFlush(requireTestid('holding-event-submit'));
+      await flushAsync();
+
+      // mock 沖銷有可見效果:原列已沖銷、按鈕消失,沖銷列出現
+      expect(testid('trades-reverse')).toBeNull();
+      requireTestid('trades-reversed-pill');
+      requireTestid('trades-reversal-of');
+    });
+  });
+
+  describe('寫入後重讀、新紀錄標記與不在本頁(D-12)', () => {
+    function manyItems(): PortfolioActivityDto[] {
+      return Array.from({ length: 25 }, (_, i) => activity({
+        id: `evt-${i}`,
+        kind: 'CASH_DIVIDEND',
+        symbol: `S${i}`,
+        amount: 1,
+        occurredAt: new Date(Date.UTC(2026, 9, 30 - i)).toISOString(),
+      }));
+    }
+
+    it("cause 'dividend' / 'shareAdjustment':列表重讀且頁碼歸 0", async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+      click(requireTestid('trades-next'));
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('1');
+
+      notifyHoldingEventCreated({ id: 'evt-0' }, 'dividend');
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('page')).toBe('0');
+      const afterDividend = urls(fetchMock).length;
+
+      notifyHoldingEventCreated({ id: 'evt-1' }, 'shareAdjustment');
+      await flushAsync();
+      expect(urls(fetchMock)).toHaveLength(afterDividend + 1);
+    });
+
+    it("cause 'cash' / 'baseCurrency' 不影響活動列表,不重讀(UI-SPEC §11)", async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      bumpPortfolioRevision('cash');
+      bumpPortfolioRevision('baseCurrency');
+      await flushAsync();
+
+      expect(urls(fetchMock)).toHaveLength(1);
+    });
+
+    it('新紀錄在本頁:該列 fresh + 「新」,判定只比 id', async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      notifyHoldingEventCreated({ id: 'evt-3' }, 'dividend');
+      await flushAsync();
+
+      const fresh = rows().filter(row => row.classList.contains('fresh'));
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0].textContent).toContain('S3');
+      expect(fresh[0].querySelector('[data-testid="trades-fresh-badge"]')!.textContent?.trim()).toBe(t('en', 'freshBadge'));
+      expect(testid('trades-not-in-current-view')).toBeNull();
+    });
+
+    it('partial:新紀錄不在本頁 → tradesActivityNotInView(非錯誤色的說明列)', async () => {
+      const fetchMock = fakeBackendFetch(manyItems());
+      await mountApiTrades(fetchMock);
+
+      notifyHoldingEventCreated({ id: 'evt-24' }, 'dividend');
+      await flushAsync();
+
+      const hint = requireTestid('trades-not-in-current-view');
+      expect(hint.textContent?.trim()).toBe(t('en', 'tradesActivityNotInView'));
+      expect(hint.classList.contains('view-hint')).toBe(true);
+      expect(rows().some(row => row.classList.contains('fresh'))).toBe(false);
+
+      // 使用者改了檢視 → 提示結束
+      clickChip('all');
+      await flushAsync();
+      expect(testid('trades-not-in-current-view')).toBeNull();
+    });
+
+    it('error(T-04.2-46):事件寫入後重讀失敗 → portfolioStaleAfterCashEntry,不得顯示「交易已記錄」', async () => {
+      let fail = false;
+      const fetchMock = scriptedFetch(() => (fail
+        ? failure('PORTFOLIO_ACTIVITIES_UNAVAILABLE', 'trace-stale')
+        : success(page({ items: [DIV_ROW] }))));
+      await mountApiTrades(fetchMock);
+
+      fail = true;
+      notifyHoldingEventCreated({ id: 'evt-x' }, 'shareAdjustment');
+      await flushAsync();
+
+      const stale = requireTestid('trades-refresh-error');
+      expect(stale.textContent).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+      expect(document.body.textContent).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+    });
+
+    it("cause 'trade' 的重讀失敗仍用 portfolioStaleAfterTrade", async () => {
+      let fail = false;
+      const fetchMock = scriptedFetch(() => (fail
+        ? failure('PORTFOLIO_ACTIVITIES_UNAVAILABLE', 'trace-stale')
+        : success(page({ items: [DIV_ROW] }))));
+      await mountApiTrades(fetchMock);
+
+      fail = true;
+      bumpPortfolioRevision('trade');
+      await flushAsync();
+
+      expect(requireTestid('trades-refresh-error').textContent).toContain(t('en', 'portfolioStaleAfterTrade'));
+    });
+  });
+
+  describe('initialFilter(U-11)', () => {
+    it("initialFilter 'dividend':掛載時預選股利頁籤,第一個請求含 type=DIVIDEND;之後切換頁籤不受 prop 影響", async () => {
+      const fetchMock = eventsFetch({ activities: () => success(page({ items: [DIV_ROW] })) });
+      await mountApi(fetchMock, { initialFilter: 'dividend' });
+
+      expect(activityUrls(fetchMock)).toHaveLength(1);
+      expect(paramsOf(activityUrls(fetchMock)[0]).get('type')).toBe('DIVIDEND');
+      expect(chip('dividend').classList.contains('active')).toBe(true);
+
+      clickChip('all');
+      await flushAsync();
+      expect(paramsOf(lastUrl(fetchMock)).get('type')).toBeNull();
+      expect(chip('all').classList.contains('active')).toBe(true);
+    });
+
+    it('無效的 initialFilter 退回「全部」', async () => {
+      const fetchMock = eventsFetch({ activities: () => success(page()) });
+      await mountApi(fetchMock, { initialFilter: 'bogus' });
+
+      expect(paramsOf(activityUrls(fetchMock)[0]).get('type')).toBeNull();
+      expect(chip('all').classList.contains('active')).toBe(true);
+    });
+  });
+});
+
+// =====================================================================================
+// 04.2-review WR-11:活動列表只套用最新一次請求的回應(較舊的回應 / 錯誤一律丟棄)。
+// =====================================================================================
+
+describe('Trades — 活動列表過時回應守門(04.2-review WR-11)', () => {
+  it('股利寫入觸發「全部」重讀在飛時點「股利」:較舊的「全部」回應後到不得蓋掉股利結果', async () => {
+    const allGate = deferred<Response>();
+    const dividendGate = deferred<Response>();
+    const fetchMock = scriptedFetch((call, url) => {
+      if (call === 0) return success(page({ items: [trade({ id: 't1', symbol: 'AAA' })], totalElements: 1, totalPages: 1 }));
+      return paramsOf(url).get('type') === 'DIVIDEND' ? dividendGate.promise : allGate.promise;
+    });
+    await mountApiTrades(fetchMock);
+
+    bumpPortfolioRevision('dividend');
+    await flushAsync();
+    clickChip('dividend');
+    await flushAsync();
+    expect(urls(fetchMock)).toHaveLength(3);
+
+    dividendGate.resolve(success(page({
+      items: [activity({ id: 'd1', kind: 'CASH_DIVIDEND', symbol: 'DIV', amount: 12 })],
+      totalElements: 1,
+      totalPages: 1,
+    })));
+    await flushAsync();
+    expect(rows()).toHaveLength(1);
+
+    allGate.resolve(success(page({
+      items: [trade({ id: 't1', symbol: 'AAA' }), trade({ id: 't2', symbol: 'BBB' })],
+      totalElements: 45,
+      totalPages: 3,
+    })));
+    await flushAsync();
+
+    expect(rows(), '「股利」頁籤下不得出現較舊的「全部」結果').toHaveLength(1);
+    expect(rows()[0].textContent).toContain('DIV');
+    expect(testid('trades-refreshing')).toBeNull();
+  });
+
+  it('較舊的請求在較新的成功之後失敗:不得把列表換成錯誤狀態', async () => {
+    const firstChipGate = deferred<Response>();
+    const fetchMock = scriptedFetch((call, url) => {
+      if (call === 0) return success(page({ items: [trade({ id: 't1', symbol: 'AAA' })], totalElements: 1, totalPages: 1 }));
+      if (paramsOf(url).get('type') === 'BUY') return firstChipGate.promise;
+      return success(page({ items: [trade({ id: 's1', symbol: 'SEL', type: 'SELL' })], totalElements: 1, totalPages: 1 }));
+    });
+    await mountApiTrades(fetchMock);
+
+    clickChip('buy');
+    await flushAsync();
+    clickChip('sell');
+    await flushAsync();
+    expect(rows()[0].textContent).toContain('SEL');
+
+    firstChipGate.resolve(failure('INTERNAL_ERROR', 'trace-stale'));
+    await flushAsync();
+
+    expect(testid('trades-error'), '較舊請求的錯誤不得顯示').toBeNull();
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('SEL');
   });
 });

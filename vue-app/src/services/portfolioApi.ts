@@ -1,9 +1,11 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
+import { isMockHoldingEventTradeRow, listMockHoldingEventsForTests } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type {
   AllocationSliceDto,
   HoldingDto,
   PaginatedResponse,
+  PortfolioActivityDto,
   PortfolioSummaryDto,
   RuntimeDataMode,
   SectorAllocationDto,
@@ -28,6 +30,15 @@ export interface TradeListParams {
 }
 
 /**
+ * `GET /api/v1/portfolio/activities` 的參數(PORT-13):參數名與 {@link TradeListParams} 相同,
+ * 只有 `type` / `sort` 的白名單不同(後端 400 `fields.type` / `fields.sort`)。
+ */
+export type ActivityListParams = Omit<TradeListParams, 'type' | 'sort'> & {
+  type?: 'BUY' | 'SELL' | 'DIVIDEND' | 'SHARE_ADJUSTMENT';
+  sort?: 'executedAt' | 'createdAt' | 'total' | 'quantity';
+};
+
+/**
  * mock mode 專用的 reactive 資料視窗。
  * 三個屬性都是 getter,每次存取才解析 store —— 絕不在 factory 時捕捉陣列參照,
  * 否則整個陣列被替換(`portfolio.trades = [...]`)或測試換 pinia 後會讀到過期資料。
@@ -36,6 +47,14 @@ export interface PortfolioLiveMockData {
   readonly trades: Trade[];
   readonly positions: Position[];
   readonly lastFill: { sym: string; type: 'BUY' | 'SELL'; qty: number; px: number } | null;
+  /**
+   * 04.2-21:本 session 由 mock holdingEventApi 記錄的股利 / 股數調整(活動列形狀,依建立順序,回傳 clone)。
+   * Trades mock 模式以此與靜態交易列合併(UI-SPEC §Interaction 0)。**不是** reactive:事件狀態在 adapter 模組內,
+   * 頁面於 `portfolioRevision` 變動時重讀。
+   */
+  readonly holdingEvents: PortfolioActivityDto[];
+  /** 04.2-21:這列 mock 交易是否由 mock 股利寫入 —— 該筆已由 {@link holdingEvents} 代表,靜態列表需排除以免出現兩次。 */
+  isHoldingEventTrade(trade: Trade): boolean;
 }
 
 /**
@@ -51,6 +70,8 @@ export interface PortfolioApi {
   getSummary(): Promise<PortfolioSummaryDto>;
   listHoldings(): Promise<HoldingDto[]>;
   listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
+  /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
+  listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivityDto>>;
   /** 僅 mock 實作提供(Q3 裁決)。 */
   live?: PortfolioLiveMockData;
 }
@@ -113,6 +134,9 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
     cash: 0,
     totalEquity: totalMarketValue,
     cashBalances: [],
+    // mock KPI 是寫死值、不隨 mock 股利變動;股利收入附加列在 mock 不渲染(UI-SPEC §Interaction 0)。
+    dividendIncome: 0,
+    dividendTaxWithheld: 0,
     allocation: positions.length === 0
       ? []
       : ([{ category: 'STOCK', value: totalMarketValue, weight: 1 }] satisfies AllocationSliceDto[]),
@@ -193,6 +217,76 @@ function applyTradeParams(trades: TradeDto[], params: TradeListParams): TradeDto
   return filtered.sort((a, b) => (sortValue(a, sort) - sortValue(b, sort)) * factor);
 }
 
+/**
+ * mock 交易 → 活動列。靜態 `DIV` 示範列沒有可沖銷的 id,`reversible` 恆 false(UI-SPEC §Interaction 0:
+ * 不顯示比顯示了卻 no-op 誠實)。mock `Trade` 沒有幣別,不猜測(U-29)。
+ */
+function activityFromTrade(trade: Trade, index: number): PortfolioActivityDto {
+  const occurredAt = `${trade.d}T00:00:00Z`;
+  const isDividend = trade.type === 'DIV';
+  return {
+    id: `mock-${index}`,
+    kind: trade.type === 'DIV' ? 'CASH_DIVIDEND' : trade.type,
+    symbol: trade.sym,
+    currency: null,
+    occurredAt,
+    effectiveDate: null,
+    createdAt: occurredAt,
+    quantity: isDividend ? null : trade.qty,
+    price: isDividend ? null : trade.px,
+    fee: isDividend ? null : trade.fee,
+    // 交易 = quantity × price(不含 fee);靜態 DIV 列的「每股股利 × 股數」即實領總額。
+    amount: trade.qty * trade.px,
+    withholdingTax: isDividend ? 0 : null,
+    ratioNew: null,
+    ratioOld: null,
+    note: trade.note,
+    reversalOfId: null,
+    reversalOfOccurredAt: null,
+    reversalOfEffectiveDate: null,
+    reversed: false,
+    reversible: false,
+  };
+}
+
+const ACTIVITY_KINDS_BY_TYPE: Record<NonNullable<ActivityListParams['type']>, PortfolioActivityDto['kind'][]> = {
+  BUY: ['BUY'],
+  SELL: ['SELL'],
+  DIVIDEND: ['CASH_DIVIDEND'],
+  SHARE_ADJUSTMENT: ['STOCK_DIVIDEND', 'SPLIT'],
+};
+
+function activitySortValue(activity: PortfolioActivityDto, sort: NonNullable<ActivityListParams['sort']>): number | null {
+  if (sort === 'quantity') return activity.quantity;
+  if (sort === 'total') return activity.amount;
+  if (sort === 'createdAt') return Date.parse(activity.createdAt);
+  return Date.parse(activity.occurredAt);
+}
+
+/** 與後端同義:篩選 type / symbol / 半開區間 [dateFrom, dateTo)(作用於 occurredAt);排序欄位 NULLS LAST。 */
+function applyActivityParams(activities: PortfolioActivityDto[], params: ActivityListParams): PortfolioActivityDto[] {
+  const from = params.dateFrom ? Date.parse(params.dateFrom) : null;
+  const to = params.dateTo ? Date.parse(params.dateTo) : null;
+  const kinds = params.type ? ACTIVITY_KINDS_BY_TYPE[params.type] : null;
+  const filtered = activities.filter(activity => {
+    if (kinds && !kinds.includes(activity.kind)) return false;
+    if (params.symbol && activity.symbol !== params.symbol) return false;
+    const occurredAt = Date.parse(activity.occurredAt);
+    if (from !== null && occurredAt < from) return false;
+    if (to !== null && occurredAt >= to) return false;
+    return true;
+  });
+
+  const sort = params.sort ?? 'executedAt';
+  const factor = (params.direction ?? 'desc') === 'asc' ? 1 : -1;
+  return filtered.sort((a, b) => {
+    const left = activitySortValue(a, sort);
+    const right = activitySortValue(b, sort);
+    if (left === null || right === null) return left === right ? 0 : left === null ? 1 : -1;
+    return (left - right) * factor;
+  });
+}
+
 export function createMockPortfolioApi(): PortfolioApi {
   // 每個 getter 都重新呼叫 useMockPortfolioStore():延遲解析是 reactivity 與
   // 跨測試隔離(testSetup 每個測試換 pinia)的關鍵,不可改成在此捕捉 store/陣列。
@@ -205,6 +299,12 @@ export function createMockPortfolioApi(): PortfolioApi {
     },
     get lastFill() {
       return useMockPortfolioStore().lastFill;
+    },
+    get holdingEvents() {
+      return listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+    },
+    isHoldingEventTrade(trade) {
+      return isMockHoldingEventTradeRow(trade);
     },
   };
 
@@ -230,6 +330,25 @@ export function createMockPortfolioApi(): PortfolioApi {
         totalPages: Math.ceil(matched.length / size),
       };
     },
+    async listActivities(params = {}) {
+      const store = useMockPortfolioStore();
+      // 由 mock holdingEventApi 寫入的 DIV 列已由事件本身代表(可沖銷);這裡排除,避免同一筆出現兩次。
+      const fromTrades = store.trades
+        .map((trade, index) => ({ trade, index }))
+        .filter(({ trade }) => !isMockHoldingEventTradeRow(trade))
+        .map(({ trade, index }) => activityFromTrade(trade, index));
+      const fromEvents = listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+      const matched = applyActivityParams([...fromTrades, ...fromEvents], params);
+      const page = params.page ?? DEFAULT_PAGE;
+      const size = params.size ?? DEFAULT_SIZE;
+      return structuredClone({
+        items: matched.slice(page * size, page * size + size),
+        page,
+        size,
+        totalElements: matched.length,
+        totalPages: Math.ceil(matched.length / size),
+      });
+    },
   };
 }
 
@@ -240,6 +359,18 @@ export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
     listHoldings: () => apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`),
     listTrades: params => apiPaginatedRequest<TradeDto>(
       `${basePath}/trades${buildQueryString({
+        symbol: params?.symbol,
+        type: params?.type,
+        dateFrom: params?.dateFrom,
+        dateTo: params?.dateTo,
+        sort: params?.sort,
+        direction: params?.direction,
+        page: params?.page ?? DEFAULT_PAGE,
+        size: params?.size ?? DEFAULT_SIZE,
+      })}`,
+    ),
+    listActivities: params => apiPaginatedRequest<PortfolioActivityDto>(
+      `${basePath}/portfolio/activities${buildQueryString({
         symbol: params?.symbol,
         type: params?.type,
         dateFrom: params?.dateFrom,

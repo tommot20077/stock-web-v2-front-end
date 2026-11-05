@@ -38,12 +38,12 @@
       <Chart v-else-if="page === 'chart'" :lang="tweaks.lang" :sym="chartSymbol" :theme-mode="tweaks.chartTheme" :theme="tweaks.theme" @order="openTicket" @back="page = 'markets'" />
       <Positions v-else-if="page === 'positions'" :lang="tweaks.lang" @order="openTicket" />
       <Analytics v-else-if="page === 'analytics'" :lang="tweaks.lang" @order="openTicket" @toast="showToast" />
-      <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" @order="openTicket" />
-      <Cash v-else-if="page === 'cash'" :lang="tweaks.lang" />
+      <Trades v-else-if="page === 'trades'" :lang="tweaks.lang" :initial-filter="tradesInitialFilter" @order="openTicket" />
+      <Cash v-else-if="page === 'cash'" :lang="tweaks.lang" @navigate="onCashNavigate" />
       <Alerts v-else-if="page === 'alerts'" :lang="tweaks.lang" />
       <Notifications v-else-if="page === 'notifications'" :lang="tweaks.lang" />
       <Settings v-else-if="page === 'settings'" :lang="tweaks.lang" :theme="tweaks.theme" @set-tweak="onSettingsTweak" @toast="showToast" />
-      <Watchlist v-else-if="page === 'watchlist'" :lang="tweaks.lang" @chart="openChart" />
+      <Watchlist v-else-if="page === 'watchlist'" :lang="tweaks.lang" @chart="openChart" @navigate="page = $event" />
       <Backtest v-else-if="page === 'backtest'" :lang="tweaks.lang" />
       <Ops v-else-if="page === 'ops'" :lang="tweaks.lang" @toast="showToast" />
     </main>
@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useTweaks, type Tweaks } from './useTweaks';
 import { useShortcuts } from './useShortcuts';
 import type { Page } from './types';
@@ -170,6 +170,19 @@ function openChart(preset: { sym: string }) {
   page.value = 'chart';
 }
 function onTicketNav(p: 'positions') { page.value = p; ticketOpen.value = false; }
+
+/**
+ * 04.2-21(U-11):現金頁股利說明的連結 → Trades 並預選「股利」頁籤。
+ * Trades 只在掛載時讀一次 initialFilter;離開 Trades 時清掉,下次經導覽進入不會沿用。
+ */
+const tradesInitialFilter = ref<string | undefined>(undefined);
+function onCashNavigate(p: 'trades', opts: { tradesFilter: 'dividend' }) {
+  tradesInitialFilter.value = opts.tradesFilter;
+  page.value = p;
+}
+watch(page, (next, prev) => {
+  if (prev === 'trades' && next !== 'trades') tradesInitialFilter.value = undefined;
+});
 function onSettingsTweak(payload: SettingsTweakPayload) {
   if (payload.key === 'theme') {
     set('theme', payload.value);
@@ -275,6 +288,17 @@ async function logout() {
 function focusAuthPanel() {
   authPanelRef.value?.$el?.querySelector('h2')?.focus();
 }
+
+/**
+ * 04.2-review WR-05:登出或 refresh 過期會讓即時報價串流停在 closed(ticket 401 / 連續 4001)。
+ * 同分頁重新登入(或 session 恢復)後頁面可能一直掛著、不會再 watch,所以在 session 進入 authenticated 時
+ * 讓 closed 的串流重連一次。replaced(被別處接手)刻意不動,只接受使用者手動重連(04.2-14)。
+ */
+watch(() => sessionState.value.status, (next, prev) => {
+  if (!apiMode || next !== 'authenticated' || prev === 'authenticated') return;
+  const quotes = getRuntimeApiClients().quotes;
+  if (quotes.status.value === 'closed') quotes.reconnect();
+});
 
 onMounted(() => {
   if (apiMode) void restoreSession();

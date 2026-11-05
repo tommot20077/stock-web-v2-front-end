@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <MockDataNotice :lang="lang" />
+    <MockDataNotice :lang="lang" exception="mockDataNoticeExceptWatchlist" />
     <div class="row-between" style="margin-bottom:18px">
       <h2>{{ t(lang, 'markets') }}</h2>
       <div class="search-wrap">
@@ -21,6 +21,18 @@
       <button class="live" :class="{ on: liveOn }" @click="liveOn = !liveOn">
         <span class="live-dot" />
         {{ liveOn ? 'LIVE' : 'PAUSED' }}
+      </button>
+    </div>
+
+    <!-- 清單載入失敗:行內提示 + 重試,不擋行情列表(UI-SPEC §Interaction 7) -->
+    <div v-if="listsError" class="wl-load-error" role="alert" data-testid="markets-watchlist-error">
+      <span class="wl-load-error-text">{{ t(lang, 'watchlistLoadFailedInline') }}</span>
+      <span class="wl-load-error-details">
+        <span>{{ listsError.code }}</span>
+        <span v-if="listsError.requestId">{{ t(lang, 'authRequestId') }} {{ listsError.requestId }}</span>
+      </span>
+      <button type="button" class="wl-retry" data-testid="markets-watchlist-retry" @click="loadLists">
+        {{ t(lang, 'authRetry') }}
       </button>
     </div>
 
@@ -67,12 +79,19 @@
             @click="$emit('chart', { sym: row.sym })"
           >
             <td style="padding-left:16px">
+              <!-- D-16:星號開觀察清單選擇器;字符是裝飾,語意由 aria-label 承擔 -->
               <button
+                type="button"
                 class="star-btn"
-                :class="{ on: portfolio.isWatched(row.sym) }"
-                :title="portfolio.isWatched(row.sym) ? 'Watched' : 'Add to watchlist'"
-                @click.stop="portfolio.toggleWatch(row.sym)"
-              >★</button>
+                :class="{ on: isWatched(row.sym) }"
+                data-testid="markets-star"
+                :data-symbol="row.sym"
+                :aria-label="tf(lang, isWatched(row.sym) ? 'watchlistStarManage' : 'watchlistStarAdd', { symbol: row.sym })"
+                aria-haspopup="dialog"
+                :aria-expanded="pickerSymbol === row.sym ? 'true' : 'false'"
+                :aria-controls="pickerSymbol === row.sym ? WATCHLIST_PICKER_ID : undefined"
+                @click.stop="togglePicker(row.sym, $event)"
+              ><span aria-hidden="true">★</span></button>
             </td>
             <td style="font-weight:600">{{ row.sym }}</td>
             <td style="color:var(--fg-dim)">{{ row.name }}</td>
@@ -121,22 +140,96 @@
         <Bars :data="bondRows.map(b => ({ label: b.country, v: b.yld }))" />
       </div>
     </div>
+
+    <WatchlistPicker
+      :open="pickerSymbol !== null"
+      :lang="lang"
+      :symbol="pickerSymbol ?? ''"
+      :anchor="pickerAnchor"
+      :lists="lists"
+      :loading="listsLoading"
+      :load-error="listsError"
+      @close="closePicker"
+      @changed="onListChanged"
+      @created="onListCreated"
+      @retry="loadLists"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import MockDataNotice from '../components/MockDataNotice.vue';
 import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, FX, BONDS, fmtNum, fmtPct } from '../data';
-import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { ApiClientError } from '../services/apiClient';
+import { getRuntimeApiClients } from '../services/pageApiClients';
+import type { WatchlistDto } from '../services/watchlistApi';
 import type { Lang, MarketTab } from '../types';
 import Bars from '../components/Bars.vue';
+import WatchlistPicker, { WATCHLIST_PICKER_ID } from '../components/WatchlistPicker.vue';
 
 const props = defineProps<{ lang: Lang }>();
 defineEmits<{ (e: 'order', preset: { sym: string }): void; (e: 'chart', preset: { sym: string }): void }>();
 
-const portfolio = useMockPortfolioStore();
+// WATCH-03 / judgment §3:觀察清單只經 watchlist service(不 import mock store)。頁級 ref 是星號、
+// ★ 觀察 chip、觀察清單 tab 與選擇器的唯一狀態來源;選擇器寫入後以回應 DTO 回填(不樂觀更新)。
+const lists = ref<WatchlistDto[] | null>(null);
+const listsLoading = ref(false);
+const listsError = ref<ApiClientError | null>(null);
+
+/**
+ * WR-06:過時回應守門。每次 GET 開始與每次選擇器寫入回填都遞增;GET 回來時序號已不是最新 → 丟棄
+ * (選擇器要求重讀後又寫入成功時,較舊的 GET 快照不得蓋掉較新的回應 DTO)。
+ */
+let listsSeq = 0;
+/** 最近一次 loadLists 的序號:只有它結束時才收起 listsLoading。 */
+let latestLoadSeq = 0;
+
+async function loadLists() {
+  const seq = ++listsSeq;
+  latestLoadSeq = seq;
+  listsLoading.value = true;
+  listsError.value = null;
+  try {
+    const data = await getRuntimeApiClients().watchlist.list();
+    if (seq !== listsSeq) return;
+    lists.value = data;
+  } catch (error) {
+    if (seq !== listsSeq) return;
+    listsError.value = error instanceof ApiClientError
+      ? error
+      : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+  } finally {
+    if (seq === latestLoadSeq) listsLoading.value = false;
+  }
+}
+
+function onListChanged(updated: WatchlistDto) {
+  listsSeq += 1;
+  lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
+}
+
+function onListCreated(created: WatchlistDto) {
+  listsSeq += 1;
+  lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
+}
+
+const pickerSymbol = ref<string | null>(null);
+const pickerAnchor = ref<HTMLElement | null>(null);
+
+function togglePicker(sym: string, event: MouseEvent) {
+  if (pickerSymbol.value === sym) {
+    closePicker();
+    return;
+  }
+  pickerAnchor.value = event.currentTarget as HTMLElement;
+  pickerSymbol.value = sym;
+}
+
+function closePicker() {
+  pickerSymbol.value = null;
+}
 
 const tabs: MarketTab[] = ['stocks','forex','crypto','bonds','watchlist'];
 const tab = ref<MarketTab>('stocks');
@@ -171,11 +264,19 @@ const cryptoRows = computed(() => CRYPTO);
 const fxRows = computed(() => FX);
 const bondRows = computed(() => BONDS);
 const watchableRows = computed(() => [...SYMBOLS, ...CRYPTO, ...FX, ...BONDS]);
-const watchedSymbols = computed(() =>
-  portfolio.watchlists
-    .flatMap(l => l.syms)
-    .filter((sym, idx, all) => all.indexOf(sym) === idx),
-);
+/** 所有清單 symbol 的聯集(RESEARCH Q9.4,與舊 mock isWatched 同義)。 */
+const watchedSymbols = computed(() => {
+  const seen = new Set<string>();
+  for (const list of lists.value ?? []) {
+    for (const item of list.items) seen.add(item.symbol);
+  }
+  return [...seen];
+});
+const watchedSet = computed(() => new Set(watchedSymbols.value));
+function isWatched(sym: string): boolean {
+  return watchedSet.value.has(sym);
+}
+// 聯集中不在 data.ts 的代號在 Markets 不顯示(行情是示範資料;Watchlist 頁才是權威畫面)。
 const watchedRows = computed(() =>
   watchedSymbols.value
     .map(sym => watchableRows.value.find(s => s.sym === sym))
@@ -224,7 +325,7 @@ function tabCount(k: MarketTab): number {
   if (k === 'crypto') return CRYPTO.length;
   if (k === 'forex') return FX.length;
   if (k === 'bonds') return BONDS.length;
-  if (k === 'watchlist') return watchedSymbols.value.length;
+  if (k === 'watchlist') return watchedRows.value.length;
   return SYMBOLS.length;
 }
 
@@ -235,7 +336,7 @@ const displayRows = computed(() => {
   if (!isBonds.value) {
     if (chip.value === 'gainers') rows = rows.filter(r => changeOf(r) >= 0);
     else if (chip.value === 'losers') rows = rows.filter(r => changeOf(r) < 0);
-    else if (chip.value === 'star') rows = rows.filter(r => portfolio.isWatched(r.sym));
+    else if (chip.value === 'star') rows = rows.filter(r => isWatched(r.sym));
   }
 
   // search
@@ -304,6 +405,7 @@ function tick() {
 
 onMounted(() => {
   tickIv = setInterval(tick, 1400);
+  void loadLists();
 });
 onUnmounted(() => {
   if (tickIv) clearInterval(tickIv);
@@ -358,6 +460,19 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--up) 0%, transparent); }
 }
 
+.wl-load-error {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  margin-bottom: 12px; font-size: 13px; color: var(--fg);
+}
+.wl-load-error-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.wl-load-error-details { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--fg-dim); }
+.wl-load-error-details span { overflow-wrap: anywhere; user-select: text; }
+.wl-retry {
+  min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.wl-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .filters { display: flex; gap: 8px; margin-bottom: 12px; }
 .chip {
   padding: 5px 12px; background: var(--surface); color: var(--fg-dim);
@@ -387,16 +502,24 @@ tbody td { padding: 11px 0; }
 
 .px-cell { transition: background .35s ease-out, color .25s; position: relative; padding-right: 16px !important; border-radius: 4px; }
 .star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px;
+  margin-block: -8px;
   background: transparent;
   border: 0;
   color: var(--fg-mute);
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 8px;
   cursor: pointer;
 }
 .star-btn.on { color: var(--accent); }
 .star-btn:hover { background: var(--surface2); }
+.star-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .quick-order {
   background: var(--surface2); border: 1px solid var(--border); color: var(--fg-mute);
   width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 13px;

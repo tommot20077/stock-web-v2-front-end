@@ -300,11 +300,97 @@
       </div>
     </div>
 
-    <div class="card col-6 stack-mobile" style="padding: 20px">
-      <div class="row-between" style="margin-bottom:12px">
-        <div class="ttl">★ {{ t(lang, 'watchlist') }}</div>
-        <button class="link" @click="emit('navigate', 'watchlist')">→</button>
+    <!--
+      觀察清單卡(D-26)。mock mode:沿用 data.ts 的 star 列與 sparkline(不改)。
+      API mode:watchlist service 第一個清單的前 6 檔 + 即時價(U-21);只 watch 其中的 STOCK / CRYPTO(U-20)。
+    -->
+    <div class="card col-6 stack-mobile" style="padding: 20px" data-testid="overview-watchlist">
+      <div class="wl-head">
+        <div class="row-between">
+          <div class="wl-title">
+            <div class="ttl"><span aria-hidden="true">★ </span>{{ t(lang, 'watchlist') }}</div>
+            <span
+              v-if="!live && wlFirst"
+              class="wl-list-name"
+              data-testid="overview-watchlist-name"
+              :title="wlFirst.name"
+            >{{ wlFirst.name }}</span>
+          </div>
+          <button
+            type="button"
+            class="link"
+            data-testid="overview-watchlist-go"
+            :aria-label="t(lang, 'overviewWatchlistGo')"
+            @click="emit('navigate', 'watchlist')"
+          >→</button>
+        </div>
+        <LiveQuoteStatus
+          v-if="!live"
+          :lang="lang"
+          :status="wlStreamStatus"
+          :updated-at="wlLastUpdatedAt"
+          @reconnect="quotes.reconnect()"
+        />
       </div>
+
+      <template v-if="!live">
+        <div v-if="wlState.status === 'loading'" class="wl-state" data-testid="overview-watchlist-loading">
+          <div>{{ t(lang, 'loading') }}</div>
+          <div class="skeleton-row" aria-hidden="true" />
+          <div class="skeleton-row" aria-hidden="true" />
+          <div class="skeleton-row" aria-hidden="true" />
+        </div>
+        <div v-else-if="wlState.status === 'error'" class="wl-error" role="alert" data-testid="overview-watchlist-error">
+          <div>{{ t(lang, 'loadFailed') }}</div>
+          <div class="wl-details">
+            <span data-testid="overview-watchlist-error-code">{{ wlState.error.code }}</span>
+            <span v-if="wlState.error.traceId" data-testid="overview-watchlist-trace-id">
+              {{ t(lang, 'authRequestId') }} {{ wlState.error.traceId }}
+            </span>
+          </div>
+          <button type="button" class="wl-retry" data-testid="overview-watchlist-retry" @click="loadWatchlist">
+            {{ t(lang, 'authRetry') }}
+          </button>
+        </div>
+        <div v-else-if="wlRows.length === 0" class="wl-empty" data-testid="overview-watchlist-empty">
+          <div>{{ tf(lang, 'overviewWatchlistEmpty', { name: wlFirst?.name ?? '' }) }}</div>
+          <button type="button" class="link-btn wl-empty-go" @click="emit('navigate', 'markets')">
+            {{ t(lang, 'watchlistGoMarkets') }}
+          </button>
+        </div>
+        <template v-else>
+          <div
+            v-for="s in wlLiveRows"
+            :key="s.uuid"
+            class="wl-row"
+            data-testid="overview-watchlist-row"
+            :data-symbol="s.symbol"
+            :data-quote-source="s.quoteSource"
+          >
+            <div class="wl-tag">{{ s.symbol.slice(0, 2) }}</div>
+            <div class="wl-main">
+              <div class="wl-sym">{{ s.symbol }}</div>
+              <div class="wl-name">{{ s.name }}</div>
+            </div>
+            <div class="wl-quote">
+              <div class="num wl-price">
+                <!-- ● 與 sr-only「即時」只在 ws 列(D-23:非 live 不標示) -->
+                <span v-if="s.quoteSource === 'ws'" class="row-live" data-testid="overview-watchlist-row-live"><span
+                  class="live-dot"
+                  aria-hidden="true"
+                /><span class="sr-only">{{ t(lang, 'liveQuoteRowLive') }}</span></span>{{ wlPriceText(s) }}
+              </div>
+              <div class="num wl-chg" :class="wlChangeTone(s)">{{ wlChangeText(s) }}</div>
+            </div>
+          </div>
+          <div v-if="wlMore > 0" class="wl-more-row">
+            <button type="button" class="link-btn wl-more" data-testid="overview-watchlist-more" @click="emit('navigate', 'watchlist')">
+              {{ tf(lang, 'overviewWatchlistMore', { n: wlMore }) }}
+            </button>
+          </div>
+        </template>
+      </template>
+
       <div v-for="s in watchlist" :key="s.sym" class="wl-row">
         <div class="wl-tag">{{ s.sym.slice(0, 2) }}</div>
         <div style="flex:1">
@@ -321,8 +407,10 @@
       </div>
     </div>
 
-    <div class="card col-6 stack-mobile" style="padding: 20px">
+    <!-- 新聞卡仍是示範資料(無後端來源):API mode 由 MockDataNotice 標示(鐵律 6、D-26) -->
+    <div class="card col-6 stack-mobile" style="padding: 20px" data-testid="overview-news">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'news') }}</div>
+      <MockDataNotice :lang="lang" />
       <div v-for="(n, i) in NEWS" :key="i" class="news-row">
         <div class="news-thumb" />
         <div style="flex:1">
@@ -357,7 +445,8 @@ import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import type { AssetDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import type { WatchlistDto } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import type { CashEntryType } from '../services/cashApi';
@@ -365,11 +454,15 @@ import { bumpPortfolioRevision, portfolioRevision, portfolioRevisionCause } from
 import LineChart from '../components/LineChart.vue';
 import Donut from '../components/Donut.vue';
 import CashEntryDialog from '../components/CashEntryDialog.vue';
+import LiveQuoteStatus from '../components/LiveQuoteStatus.vue';
+import MockDataNotice from '../components/MockDataNotice.vue';
+import { useLiveQuotes } from '../composables/useLiveQuotes';
+import { useQuoteRefresh } from '../composables/useQuoteRefresh';
 
 const props = defineProps<{ lang: Lang }>();
 const emit = defineEmits<{
   order: [];
-  navigate: [page: 'watchlist' | 'trades' | 'positions' | 'cash'];
+  navigate: [page: 'watchlist' | 'trades' | 'positions' | 'cash' | 'markets'];
 }>();
 
 // judgment §3:頁面只認 domain service,永不 import mock store。
@@ -702,6 +795,8 @@ const apiKpis = computed<KpiCard[]>(() => {
 
   const roiText = fmtRatioPct(s.roi);
   const pnlSign = signTone(fmtSignedMoney(s.totalPnl, base, 0));
+  // DIV-02(D-01、U-10):roi / totalPnl 已含股利(後端),這裡只另列股利收入;兩者皆 0 不渲染。
+  const roiNotes = dividendIncomeNotes(s);
 
   return [
     {
@@ -732,9 +827,22 @@ const apiKpis = computed<KpiCard[]>(() => {
       v: roiText ?? '—',
       s: `${t(lang, 'totalPnlLabel')} ${fmtSignedMoney(s.totalPnl, base, 0)}`,
       ...pnlSign,
+      notes: roiNotes,
     },
   ];
 });
+
+/** KPI #4 的股利收入 Hint(`--fg-dim`,中性):有預扣稅另列;金額為基準幣、0 位小數(UI-SPEC §4)。 */
+function dividendIncomeNotes(s: PortfolioSummaryDto): { testid: string; text: string }[] {
+  const income = s.dividendIncome ?? 0;
+  const tax = s.dividendTaxWithheld ?? 0;
+  if (income === 0 && tax === 0) return [];
+  const amount = fmtSignedMoney(income, s.baseCurrency, 0);
+  const text = tax > 0
+    ? tf(props.lang, 'dividendIncomeLineWithTax', { amount, tax: fmtMoney(tax, s.baseCurrency, 0) })
+    : tf(props.lang, 'dividendIncomeLine', { amount });
+  return [{ testid: 'overview-kpi-dividend-income', text }];
+}
 
 const kpiCards = computed(() => (live ? mockKpis.value : apiKpis.value));
 
@@ -799,7 +907,101 @@ function tradeDate(trade: TradeDto): string {
   return trade.executedAt.slice(0, 10);
 }
 
-const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filter(c => c.star)]);
+// =============== 觀察清單卡(D-26;UI-SPEC §10、U-20 / U-21,API mode)===============
+/** U-21:第一個清單的前 6 檔 */
+const OVERVIEW_WATCHLIST_LIMIT = 6;
+const NO_ROWS: readonly AssetDto[] = [];
+const quotes = clients.quotes;
+
+const wlState = ref<BlockState<WatchlistDto[]>>({ status: 'loading' });
+/** 最後一次 GET 成功的前端收到時間(「更新於」下限,U-19) */
+const wlRestFetchedAt = ref<number | null>(null);
+/** 較舊的清單回應(重試與靜默重讀交疊)一律丟棄 */
+let wlSeq = 0;
+
+const wlFirst = computed(() => (wlState.value.status === 'loaded' ? wlState.value.data[0] ?? null : null));
+const wlRows = computed<readonly AssetDto[]>(() => wlFirst.value?.items.slice(0, OVERVIEW_WATCHLIST_LIMIT) ?? NO_ROWS);
+const wlMore = computed(() => Math.max(0, (wlFirst.value?.items.length ?? 0) - OVERVIEW_WATCHLIST_LIMIT));
+const wlLive = useLiveQuotes(wlRows, quotes, { restFetchedAt: wlRestFetchedAt });
+const wlLiveRows = wlLive.rows;
+const wlLastUpdatedAt = wlLive.lastUpdatedAt;
+const wlStreamStatus = computed(() => quotes.status.value);
+
+async function loadWatchlist() {
+  const seq = ++wlSeq;
+  wlState.value = { status: 'loading' };
+  try {
+    const data = await clients.watchlist.list();
+    if (seq !== wlSeq) return;
+    wlState.value = { status: 'loaded', data };
+    wlRestFetchedAt.value = Date.now();
+  } catch (error) {
+    if (seq !== wlSeq) return;
+    wlState.value = { status: 'error', error: describeError(error) };
+  }
+}
+
+/** 靜默重讀(resyncSeq / 每 5 分鐘 / 回前景):不閃 loading;失敗保留舊值,「更新於」停在上次成功時間。 */
+async function refreshWatchlist() {
+  const seq = ++wlSeq;
+  try {
+    const data = await clients.watchlist.list();
+    if (seq !== wlSeq) return;
+    wlState.value = { status: 'loaded', data };
+    wlRestFetchedAt.value = Date.now();
+  } catch {
+    // 保留舊值:這是背景重讀,不打擾使用者。
+  }
+}
+
+// mock mode 完全不碰 watchlist service 與報價串流(卡片維持 data.ts 原樣)。
+useQuoteRefresh(wlRows, quotes, refreshWatchlist, {
+  enabled: !live,
+  canRefresh: () => wlState.value.status === 'loaded',
+});
+
+onMounted(() => {
+  if (live) return;
+  void loadWatchlist();
+});
+
+function wlFinite(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function wlFixed(value: number, dp: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+
+/** 與 Watchlist 頁同一套(UI-SPEC §Money:觀察清單):FX 4 位、BOND 3 位(殖利率)、其餘 2 位 */
+function wlPriceText(row: AssetDto): string {
+  if (!wlFinite(row.latestPrice)) return '—';
+  const dp = row.assetType === 'FX' ? 4 : row.assetType === 'BOND' ? 3 : 2;
+  return wlFixed(row.latestPrice, dp);
+}
+
+/** BOND 用 change(殖利率變動,3 位、不加 %),其餘用 changePercent */
+function wlChangeValue(row: AssetDto): number | null {
+  const value = row.assetType === 'BOND' ? row.change : row.changePercent;
+  return wlFinite(value) ? value : null;
+}
+
+function wlChangeText(row: AssetDto): string {
+  const value = wlChangeValue(row);
+  if (value === null) return '—';
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  const body = row.assetType === 'BOND' ? wlFixed(Math.abs(value), 3) : `${wlFixed(Math.abs(value), 2)}%`;
+  return `${sign}${body}`;
+}
+
+function wlChangeTone(row: AssetDto): string {
+  const value = wlChangeValue(row);
+  if (value === null) return 'na';
+  return value > 0 ? 'up' : value < 0 ? 'dn' : '';
+}
+
+/** mock mode 的觀察清單卡(data.ts star 列,不改);API mode 不渲染這組列,改用 wlLiveRows(D-26)。 */
+const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRYPTO.filter(c => c.star)] : []));
 </script>
 
 <style scoped>
@@ -884,7 +1086,48 @@ const watchlist = computed(() => [...SYMBOLS.filter(s => s.star), ...CRYPTO.filt
   font-size: 12px; font-weight: 600; line-height: 1.2;
   border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
 }
-.wl-row { display: flex; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); gap: 12px; }
+.wl-row { display: flex; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); gap: 12px; }
+/* 04.2-24 觀察清單卡 API 模板(UI-SPEC §10;Typography 遷移 #8:代號 13/600、名稱 12/400、價格 13/600、漲跌 12/400) */
+.wl-head { margin-bottom: 12px; }
+.wl-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.wl-list-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim);
+}
+.wl-main { flex: 1 1 0; min-width: 0; }
+.wl-sym { font-size: 13px; font-weight: 600; line-height: 1.45; }
+.wl-name { font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); overflow-wrap: anywhere; }
+.wl-quote { text-align: right; white-space: nowrap; }
+.wl-price { font-size: 13px; font-weight: 600; line-height: 1.45; }
+.wl-chg { font-size: 12px; font-weight: 400; line-height: 1.35; }
+.wl-chg.up { color: var(--up); }
+.wl-chg.dn { color: var(--dn); }
+.wl-chg.na { color: var(--fg-dim); }
+/* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
+.row-live { display: inline-flex; align-items: center; margin-right: 4px; vertical-align: middle; }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--up); }
+.wl-more-row { display: flex; justify-content: flex-end; border-top: 1px solid var(--border); }
+.wl-state { padding: 16px 0; font-size: 13px; color: var(--fg-dim); }
+.wl-error { padding: 16px 0; font-size: 13px; }
+.wl-details {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  margin-top: 4px; color: var(--fg-dim); font-size: 12px; font-weight: 400;
+}
+.wl-details span { overflow-wrap: anywhere; user-select: text; }
+.wl-retry {
+  margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.wl-retry:focus-visible, .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wl-empty { padding: 16px 0; font-size: 13px; overflow-wrap: anywhere; }
+.wl-empty .wl-empty-go { margin-left: 0; }
+.skeleton-row {
+  height: 16px; margin: 8px 0; border-radius: 4px;
+  background: var(--surface2);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+@keyframes skeletonPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .wl-tag {
   width: 32px; height: 32px; background: var(--surface2); border-radius: 8px;
   display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
@@ -941,6 +1184,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
 .block-refreshing { opacity: .72; transition: opacity .15s; }
 @media (prefers-reduced-motion: reduce) {
   .block-refreshing { transition: none; }
+  .skeleton-row { animation: none; }
 }
 /* 響應式(U-27):只作用於本 phase 渲染的元素;宣告順序必須在 .col-* / .kpi-card 之後才能覆寫 */
 @media (max-width: 1099px) {

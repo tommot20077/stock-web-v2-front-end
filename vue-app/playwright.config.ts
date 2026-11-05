@@ -14,8 +14,10 @@ export default defineConfig({
   ],
   use: {
     baseURL: 'http://localhost:4173',
-    trace: 'on-first-retry',
+    // 每次都錄、只保留失敗案例:flaky(首跑失敗、重試通過)時仍留得住第一次失敗的現場
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [
     {
