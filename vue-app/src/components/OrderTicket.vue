@@ -1611,8 +1611,10 @@ function handleSubmitFailure(error: unknown) {
   `Record trade`(最寬者)在 13px/600 下約 88px,加 `.btn-accent` 的 32px 水平內距(8px 16px)約 120px;
   136px 下限保留餘裕,也讓 `Recording…` 切換時寬度不變(quick-261106-fbs 2c-addendum:高度與同列
   `.btn-ghost` 一致為 36px、內距 24px → 16px,下限仍為 136px)。
-  320px 時 footer 可用寬度為 320 − 48(內距) = 272px,ghost 鈕約 118px + 12px gap
-  + 136px = 266px,仍不換行。
+  窄螢幕實測(L17):面板 max-width 92vw 在 320px 只有約 292px,footer 扣 48px 內距剩 244px,
+  而記錄交易步驟需要 `← Back to edit` ghost 約 123px + 12px gap + 136px ≈ 271px —— ghost 會換成兩行、
+  整列被撐到 50px 以上。所以 <= 400px 時:面板兩側只留 8px、footer 內距 16px / gap 8px、ghost 內距 8px 12px,
+  可用 302 − 32 = 270px,需要約 115 + 8 + 136 = 259px,單列不換行(見下方 @media)。
 */
 .btn-submit { min-width: 136px; }
 .btn-accent:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
@@ -1627,6 +1629,12 @@ function handleSubmitFailure(error: unknown) {
 }
 .btn-ghost:hover:not(:disabled) { background: var(--surface); }
 .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+
+@media (max-width: 400px) {
+  .ticket { max-width: calc(100vw - 16px); }
+  .ft { padding: 16px; gap: 8px; }
+  .ft .btn-ghost { padding: 8px 12px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .mask, .ticket, .check { animation: none; }
