@@ -626,6 +626,68 @@ const REFRESHED_TRADES: TradeDto[] = [
 ];
 
 describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
+  /*
+   * quick-261106-fbs 2e(04.1 IN-03 / T2.7):近期交易與 summary 同樣以序號守門 ——
+   * 先發的 listTrades 較晚回來時,不得覆蓋較新請求的結果。
+   */
+  it('T2.7 首次載入未完成時又觸發重讀:較舊的 loadRecentTrades 回應不得覆蓋較新的結果', async () => {
+    const first = deferred<Response>();
+    let call = 0;
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => {
+        call += 1;
+        return call === 1 ? first.promise : tradePage(REFRESHED_TRADES);
+      },
+    });
+    await mountApiOverview(fetchMock);
+
+    // 首次載入還在飛 → refreshRecentTrades 退回 loadRecentTrades,發第二個請求並先回來
+    bumpPortfolioRevision('trade');
+    await flushAsync();
+    expect(callsMatching(fetchMock, '/trades')).toHaveLength(2);
+    expect(recentTradesCard().textContent).toContain('ZNEW');
+
+    first.resolve(tradePage(API_TRADES));
+    await flushAsync();
+
+    expect(allTestids('overview-trade-row')).toHaveLength(1);
+    expect(recentTradesCard().textContent).toContain('ZNEW');
+    expect(recentTradesCard().textContent).not.toContain('ZZA');
+  });
+
+  it('T2.7 兩次重讀交疊:較舊的 refreshRecentTrades 回應不得覆蓋較新的結果,更新中旗標隨最新請求結束', async () => {
+    const slow = deferred<Response>();
+    let call = 0;
+    const fetchMock = routedFetch({
+      summary: () => success(SUMMARY),
+      trades: () => {
+        call += 1;
+        if (call === 1) return tradePage(API_TRADES);
+        if (call === 2) return slow.promise;
+        return tradePage(REFRESHED_TRADES);
+      },
+    });
+    await mountApiOverview(fetchMock);
+    expect(allTestids('overview-trade-row')).toHaveLength(API_TRADES.length);
+
+    bumpPortfolioRevision('trade');
+    await flushAsync();
+    bumpPortfolioRevision('trade');
+    await flushAsync();
+    expect(callsMatching(fetchMock, '/trades')).toHaveLength(3);
+    expect(recentTradesCard().textContent).toContain('ZNEW');
+    expect(recentTradesCard().getAttribute('aria-busy')).toBe('false');
+
+    slow.resolve(tradePage(API_TRADES));
+    await flushAsync();
+
+    expect(allTestids('overview-trade-row')).toHaveLength(1);
+    expect(recentTradesCard().textContent).toContain('ZNEW');
+    expect(recentTradesCard().textContent).not.toContain('ZZA');
+    expect(recentTradesCard().getAttribute('aria-busy')).toBe('false');
+  });
+
   it('Test 1(D-10):revision 變動後 summary 與近期交易各自重讀一次', async () => {
     const fetchMock = routedFetch({
       summary: () => success(SUMMARY),

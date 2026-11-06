@@ -1325,6 +1325,16 @@ function sectorCells(): HTMLElement[] {
 const NBSP = '\u00a0';
 
 describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
+  // quick-261106-fbs 2e(04.1 IN-04 / T2.8):summary 缺 sectorAllocation(舊後端 / 欄位遺失)時頁面不炸,產業卡為空狀態。
+  it('T2.8 summary 缺 sectorAllocation 時頁面不炸、產業卡顯示空狀態', async () => {
+    const legacy = summaryWith({ totalMarketValue: 1, holdingCount: 1 }) as Partial<PortfolioSummaryDto>;
+    delete legacy.sectorAllocation;
+    await mountApiWith([holding({ symbol: 'ZZA' })], legacy as PortfolioSummaryDto);
+
+    expect(rows()).toHaveLength(1);
+    expect(requireTestid('positions-sector-empty').textContent).toContain(t('en', 'noHoldings'));
+  });
+
   const SECTOR_SUMMARY = summaryWith({
     totalMarketValue: 100000,
     holdingCount: 4,
