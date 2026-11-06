@@ -261,7 +261,7 @@
                     :fill="b.color" rx="2" />
               <!-- value -->
               <text :x="b.x + b.w/2" :y="b.valY" text-anchor="middle"
-                    :font-size="11" :fill="b.kind === 'total' ? 'var(--fg)' : b.color"
+                    :font-size="11" :fill="b.kind === 'total' ? 'var(--fg)' : b.labelColor"
                     font-weight="600">{{ b.label }}</text>
               <!-- label -->
               <text :x="b.x + b.w/2" :y="350" text-anchor="middle"
@@ -636,15 +636,19 @@ const waterfall = computed(() => {
     const it = items[i];
     const x = xLeft + i * (barW + 8);
     let yTopBar: number, h: number, color: string;
+    // 數值標籤是文字:上漲用 --up-text;bar 的 fill 維持圖表色 --up(quick-261106-fbs A2)。
+    let labelColor: string;
     if (it.kind === 'start') {
       // Anchor bar from value down to baseline at minV
       yTopBar = scale(it.v);
       h = Math.max(scale(minV) - yTopBar, 4);
       color = 'var(--fg-mute)';
+      labelColor = color;
     } else if (it.kind === 'total') {
       yTopBar = scale(it.v);
       h = Math.max(scale(minV) - yTopBar, 4);
       color = 'var(--accent)';
+      labelColor = color;
     } else {
       const before = running;
       const after = running + it.v;
@@ -653,13 +657,14 @@ const waterfall = computed(() => {
       yTopBar = scale(top);
       h = Math.max(Math.abs(scale(top) - scale(bot)), 3);
       color = it.v >= 0 ? 'var(--up)' : 'var(--dn)';
+      labelColor = it.v >= 0 ? 'var(--up-text)' : 'var(--dn)';
       running = after;
     }
     const labelTxt = it.kind === 'start' || it.kind === 'total'
       ? '$' + fmtK(it.v)
       : (it.v >= 0 ? '+' : '') + fmtK(it.v);
     out.push({
-      l: it.l, x, y: yTopBar, w: barW, h, color, kind: it.kind,
+      l: it.l, x, y: yTopBar, w: barW, h, color, labelColor, kind: it.kind,
       label: labelTxt,
       valY: yTopBar - 6,
       connectorY: yTopBar + (it.v < 0 ? h : 0),
@@ -716,7 +721,7 @@ function fmtK(n: number) {
 .ml { font-size: 11px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.5px }
 .num { font-variant-numeric: tabular-nums; font-weight: 500 }
 .num.lg { font-size: 18px; font-weight: 600; margin-top: 4px }
-.num.up, .up { color: var(--up) }
+.num.up, .up { color: var(--up-text) }
 .num.dn, .dn { color: var(--dn) }
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace }
 .padlg { padding: 18px 22px }
@@ -775,11 +780,11 @@ function fmtK(n: number) {
 .metric .ml { font-size: 11px }
 .metric .mv { display: flex; gap: 6px; align-items: center }
 .metric-delta { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; font-weight: 600 }
-.metric-delta.good { background: rgba(16,185,129,0.12); color: var(--up) }
+.metric-delta.good { background: rgba(16,185,129,0.12); color: var(--up-text) }
 .metric-delta.bad { background: rgba(239,68,68,0.12); color: var(--dn) }
 
 .apply-btn {
-  width: 100%; padding: 9px; background: var(--accent); color: #fff;
+  width: 100%; padding: 9px; background: var(--accent); color: var(--on-accent);
   border: 0; border-radius: 6px; font-weight: 600; font-size: 12.5px; cursor: pointer;
 }
 .apply-btn:disabled { background: var(--surface2); color: var(--fg-mute); cursor: not-allowed }

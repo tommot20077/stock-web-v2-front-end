@@ -454,7 +454,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .btn-ghost:disabled:hover { border-color: var(--border); color: var(--fg-mute); }
 .btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 7px 14px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 14px;
   border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }

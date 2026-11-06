@@ -427,14 +427,14 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .row { display: flex; align-items: center; }
 .ttl { font-size: 13px; font-weight: 600; }
 .hint { font-size: 11.5px; color: var(--fg-mute); margin-top: 2px; }
-.up { color: var(--up); font-weight: 600; }
+.up { color: var(--up-text); font-weight: 600; }
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .padlg { padding: 18px 22px; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .btn-ghost { background: var(--surface); border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit; }
 .btn-ghost:hover { border-color: var(--fg-mute); }
-.btn-ghost.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-ghost.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .btn-ghost.sm { padding: 3px 8px; font-size: 14px; }
 
 .seg { display: inline-flex; background: var(--surface2); border-radius: 6px; padding: 2px; gap: 2px; }

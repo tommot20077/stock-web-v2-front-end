@@ -397,12 +397,13 @@
           <div style="font-weight:500">{{ s.sym }}</div>
           <div style="font-size:11px;color:var(--fg-dim)">{{ s.name }}</div>
         </div>
+        <!-- 走勢圖容器:color 只驅動 SVG currentColor 的線條(非文字),維持圖表色 --up -->
         <div style="width:70px;height:24px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
           <LineChart :data="genSeries(20, s.price, 0.02, s.sym.charCodeAt(0))" />
         </div>
         <div style="text-align:right;min-width:90px">
           <div class="num" style="font-weight:500">{{ fmtNum(s.price) }}</div>
-          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
         </div>
       </div>
     </div>
@@ -758,7 +759,8 @@ interface KpiCard {
 }
 
 function toneColor(tone: KpiTone): string {
-  return tone === 'up' ? 'var(--up)' : tone === 'dn' ? 'var(--dn)' : 'var(--fg-dim)';
+  // KPI 副標是文字:上漲用 --up-text(quick-261106-fbs A2),--up 只留給圖表 / 圓點。
+  return tone === 'up' ? 'var(--up-text)' : tone === 'dn' ? 'var(--dn)' : 'var(--fg-dim)';
 }
 
 /** 依已格式化文字的正負號決定色調:四捨五入後為零的值不上色、不加箭頭。 */
@@ -1100,7 +1102,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .wl-quote { text-align: right; white-space: nowrap; }
 .wl-price { font-size: 13px; font-weight: 600; line-height: 1.45; }
 .wl-chg { font-size: 12px; font-weight: 400; line-height: 1.35; }
-.wl-chg.up { color: var(--up); }
+.wl-chg.up { color: var(--up-text); }
 .wl-chg.dn { color: var(--dn); }
 .wl-chg.na { color: var(--fg-dim); }
 /* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
@@ -1137,7 +1139,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .news-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--fg-dim); margin-bottom: 3px; }
 .news-bullet { width: 3px; height: 3px; background: var(--fg-mute); border-radius: 50%; }
 .news-tag { margin-left: auto; padding: 1px 8px; background: var(--surface2); border-radius: 99px; font-size: 10px; font-weight: 500; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; }
 .link { background: transparent; border: 0; color: var(--fg-dim); font-size: 12px; }
 table { width: 100%; }
 thead th {
@@ -1157,7 +1159,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
   font-size: 11px; font-weight: 500;
   background: var(--surface2); color: var(--fg-dim);
 }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 /* 區塊級狀態(D-11/D-12):診斷樣式沿用 SessionBanner 的 code/traceId 呈現慣例 */
 .block-state { padding: 14px 0; font-size: 13px; color: var(--fg-dim); }

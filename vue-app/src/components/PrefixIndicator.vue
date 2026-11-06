@@ -25,7 +25,7 @@ defineProps<{ prefix: string; lang: Lang }>();
 .pi-hint { color: var(--fg-dim); }
 kbd {
   display: inline-block; min-width: 18px; padding: 3px 8px;
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent);
   border-radius: 5px; font-family: ui-monospace, monospace;
   font-size: 12px; font-weight: 700; text-align: center;
   text-transform: uppercase;

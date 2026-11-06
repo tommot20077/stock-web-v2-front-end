@@ -801,7 +801,7 @@ function signedNumOrDash(value: number | null | undefined): string {
 
 function changeColor(value: number | null | undefined): string {
   if (value == null) return 'var(--fg-mute)';
-  return value >= 0 ? 'var(--up)' : 'var(--dn)';
+  return value >= 0 ? 'var(--up-text)' : 'var(--dn)';
 }
 
 // ---- debounce + 「只採最後一次結果」(DP-12 / T-04-11) ----
@@ -1438,7 +1438,7 @@ function handleSubmitFailure(error: unknown) {
 .sym-name { color: var(--fg-dim); }
 .sym-tag {
   /* §Spacing 的「規則優先於下表」:遷移表寫 2px 8px,但 2px 既非 4 的倍數也不屬 5 類 Exceptions */
-  background: var(--accent); color: #fff; padding: 4px 8px; border-radius: 4px;
+  background: var(--accent); color: var(--on-accent); padding: 4px 8px; border-radius: 4px;
   font-size: 12px; font-weight: 600; letter-spacing: 0;
 }
 .sym-pop {
@@ -1491,7 +1491,7 @@ function handleSubmitFailure(error: unknown) {
   border: 1px solid var(--border); border-radius: 8px;
   font-size: 13px; font-weight: 600; color: var(--fg-dim); cursor: pointer; transition: all .15s;
 }
-.side-btn.buy.active { background: rgba(22,163,74,0.12); color: var(--up); border-color: var(--up); }
+.side-btn.buy.active { background: rgba(22,163,74,0.12); color: var(--up-text); border-color: var(--up); }
 .side-btn.sell.active { background: rgba(220,38,38,0.10); color: var(--dn); border-color: var(--dn); }
 
 .seg { display: inline-flex; background: var(--surface2); border-radius: 8px; padding: 4px; gap: 4px; }
@@ -1509,7 +1509,7 @@ function handleSubmitFailure(error: unknown) {
   padding: 40px 16px; text-align: center; color: var(--fg-mute); font-size: 13px; font-weight: 400;
 }
 .row-between { display: flex; justify-content: space-between; align-items: flex-start; }
-.quote-lab, .qm-l { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); }
+.quote-lab, .qm-l { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-dim); }
 /* U-18:報價卡最新價降為 Heading,不與 step 1 的 Display 焦點競爭 */
 .quote-last { font-size: 16px; font-weight: 600; line-height: 1.35; margin-top: 4px; }
 .quote-chg-wrap { text-align: right; }
@@ -1557,7 +1557,7 @@ function handleSubmitFailure(error: unknown) {
 /* Review */
 .review { padding: 32px; text-align: center; }
 .big-side { font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: 0; margin-bottom: 24px; }
-.big-side.buy { color: var(--up); }
+.big-side.buy { color: var(--up-text); }
 .big-side.sell { color: var(--dn); }
 .rev-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 0;
@@ -1602,21 +1602,24 @@ function handleSubmitFailure(error: unknown) {
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; min-height: 36px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
 }
 /*
   §5 / §Responsive:`記錄交易` ↔ `記錄中…`、`Record trade` ↔ `Recording…` 的標籤切換
   不得讓按鈕縮放而造成版位跳動,所以由**最寬的那個標籤**決定下限。
-  136px = 13px/600 下 `Record trade`(最寬者)約 88px + `.btn-accent` 的 48px 水平內距。
+  `Record trade`(最寬者)在 13px/600 下約 88px,加 `.btn-accent` 的 32px 水平內距(8px 16px)約 120px;
+  136px 下限保留餘裕,也讓 `Recording…` 切換時寬度不變(quick-261106-fbs 2c-addendum:高度與同列
+  `.btn-ghost` 一致為 36px、內距 24px → 16px,下限仍為 136px)。
   320px 時 footer 可用寬度為 320 − 48(內距) = 272px,ghost 鈕約 118px + 12px gap
   + 136px = 266px,仍不換行。
 */
 .btn-submit { min-width: 136px; }
 .btn-accent:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
 .btn-accent:disabled { opacity: .4; cursor: not-allowed; }
-.btn-accent.buy { background: var(--up); }
-.btn-accent.sell { background: var(--dn); }
+/* 買賣方向鈕:按鈕底色 token + 白字(2c-addendum);紅漲綠跌時 token 隨 data-up-color 對調。 */
+.btn-accent.buy { background: var(--btn-up-bg); color: #fff; }
+.btn-accent.sell { background: var(--btn-dn-bg); color: #fff; }
 .btn-ghost {
   background: transparent; border: 1px solid var(--border); color: var(--fg);
   padding: 8px 16px; min-height: 36px; border-radius: 8px;

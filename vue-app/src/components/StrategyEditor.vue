@@ -154,9 +154,9 @@ onMounted(checkSyntax);
 .se-hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface2); }
 .se-hd-l { display: flex; gap: 12px; align-items: center; }
 .inp { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--fg); font-family: inherit; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .status { font-size: 11px; color: var(--fg-mute); font-family: 'JetBrains Mono', monospace; }
-.status.ok { color: var(--up); }
+.status.ok { color: var(--up-text); }
 .status.err { color: var(--dn); }
 
 .se-body { display: grid; grid-template-columns: 1fr 240px; min-height: 360px; }

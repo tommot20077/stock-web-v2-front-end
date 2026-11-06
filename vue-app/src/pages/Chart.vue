@@ -483,9 +483,9 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .px-line { display: flex; align-items: baseline; gap: 10px; }
 .px { font-size: 26px; font-weight: 600; letter-spacing: -0.6px; }
 .px-chg { font-size: 13px; font-weight: 500; }
-.px-chg.up { color: var(--up); }
+.px-chg.up { color: var(--up-text); }
 .px-chg.dn { color: var(--dn); }
-.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: rgba(22,163,74,0.12); color: var(--up); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
+.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: rgba(22,163,74,0.12); color: var(--up-text); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--up); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .top-actions { display: flex; gap: 8px; }
@@ -500,8 +500,9 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .btn-watch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn-watch.on .watch-glyph { color: var(--accent); }
 .btn-accent { color: #fff; border: 0; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.btn-accent.buy { background: var(--up); }
-.btn-accent.sell { background: var(--dn); }
+/* 買賣方向鈕:按鈕底色 token + 白字(quick-261106-fbs 2c-addendum),紅漲綠跌時隨 data-up-color 對調。 */
+.btn-accent.buy { background: var(--btn-up-bg); color: #fff; }
+.btn-accent.sell { background: var(--btn-dn-bg); color: #fff; }
 .btn-accent:hover { transform: translateY(-1px); }
 .order-unavailable {
   display: inline-flex;
@@ -549,8 +550,8 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .ob td:first-child, .ts td:first-child { padding-left: 14px; }
 .ob td:last-child, .ts td:last-child { padding-right: 10px; text-align: right; }
 .ob .ask td:first-child { color: var(--dn); }
-.ob .bid td:first-child { color: var(--up); }
-.ts tr.b td:nth-child(2) { color: var(--up); }
+.ob .bid td:first-child { color: var(--up-text); }
+.ts tr.b td:nth-child(2) { color: var(--up-text); }
 .ts tr.s td:nth-child(2) { color: var(--dn); }
 .dim { color: var(--fg-dim); }
 .depth { height: 14px; border-radius: 2px; }

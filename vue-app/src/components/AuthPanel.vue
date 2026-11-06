@@ -216,10 +216,11 @@ input:focus {
 }
 .auth-submit {
   min-height: 36px; border: 0; border-radius: 6px;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent);
   font: inherit; font-size: 13px; font-weight: 600;
 }
-.auth-submit.danger { background: var(--dn); }
+/* 危險動作鈕:--dn 在深色主題白字不足 AA,改用按鈕底色 token + 白字(quick-261106-fbs A2)。 */
+.auth-submit.danger { background: var(--btn-dn-bg); color: #fff; }
 .auth-submit:disabled, .seg-pill button:disabled, input:disabled {
   opacity: .62; cursor: not-allowed;
 }

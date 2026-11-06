@@ -526,7 +526,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey));
 .btn-accent {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 9px 14px; border-radius: 8px;
-  background: var(--accent); color: white; border: 0;
+  background: var(--accent); color: var(--on-accent); border: 0;
   font-size: 13px; font-weight: 600;
   white-space: nowrap; transition: filter 0.12s, transform 0.12s;
 }

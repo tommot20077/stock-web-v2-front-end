@@ -106,7 +106,7 @@
             <td
               class="num"
               style="text-align:right"
-              :style="{ color: changeOf(row) >= 0 ? 'var(--up)' : 'var(--dn)' }"
+              :style="{ color: changeOf(row) >= 0 ? 'var(--up-text)' : 'var(--dn)' }"
             >
               {{ changeText(row) }}
             </td>
@@ -452,7 +452,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   border-radius: 99px; font-size: 11px; font-weight: 600; letter-spacing: .6px;
   color: var(--fg-mute); cursor: pointer; margin-bottom: 8px;
 }
-.live.on { color: var(--up); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
+.live.on { color: var(--up-text); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
 .live.on .live-dot { background: var(--up); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse {
@@ -526,7 +526,7 @@ tbody td { padding: 11px 0; }
   display: inline-flex; align-items: center; justify-content: center;
   transition: all .15s; padding: 0;
 }
-.quick-order:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.quick-order:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .row:hover .quick-order { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
 .order-unavailable {
   display: inline-flex;
@@ -537,7 +537,7 @@ tbody td { padding: 11px 0; }
   color: var(--fg-mute);
   font-size: 13px;
 }
-.tick-up { color: var(--up); animation: flash-up .6s ease-out; }
+.tick-up { color: var(--up-text); animation: flash-up .6s ease-out; }
 .tick-dn { color: var(--dn); animation: flash-dn .6s ease-out; }
 @keyframes flash-up {
   0% { background: color-mix(in oklch, var(--up) 22%, transparent); }

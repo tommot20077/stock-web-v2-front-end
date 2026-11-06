@@ -994,7 +994,7 @@ function csvCell(value: CsvValue) {
 .page { padding: 22px; position: relative; }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
 .btn-ghost { background: var(--surface); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 13px; color: var(--fg); cursor: pointer; }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 04.2-21:列內「沖銷這筆」與空狀態動作(12 / 600、36px 觸控目標、中性) */
@@ -1047,7 +1047,7 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   font-size: 11px; font-weight: 500;
   background: var(--surface2); color: var(--fg-dim);
 }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
 /*
@@ -1059,7 +1059,7 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;
   background: var(--surface2); color: var(--fg);
 }
-.kind-pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.kind-pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
 .kind-pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 .kind-pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
 /* 已沖銷:中性 pill(與 Cash.vue 的 .status-pill 同規格),原紀錄金額 / 股數加刪除線 */

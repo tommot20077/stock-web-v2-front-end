@@ -146,7 +146,7 @@ const sessionTone = computed(() => {
 .logo {
   width: 22px; height: 22px; background: var(--accent); border-radius: 6px;
   display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 12px; font-weight: 700;
+  color: var(--on-accent); font-size: 12px; font-weight: 700;
 }
 .nav {
   display: flex; gap: 2px; min-width: 0;

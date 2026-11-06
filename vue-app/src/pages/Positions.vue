@@ -49,7 +49,7 @@
             <span v-else>
               {{ scrubDays }} {{ lang === 'zh' ? '天前' : 'days ago' }}
               <span style="color:var(--fg-mute);margin:0 6px">·</span>
-              <span :style="{ color: scrubDelta >= 0 ? 'var(--up)' : 'var(--dn)' }">
+              <span :style="{ color: scrubDelta >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
                 {{ lang === 'zh' ? '相對今日' : 'vs today' }} {{ scrubDelta >= 0 ? '+' : '' }}${{ fmtNum(Math.abs(scrubDelta), 0) }}
                 ({{ fmtPct(safePct(scrubDelta, totalCost)) }})
               </span>
@@ -141,8 +141,8 @@
         :aria-busy="summaryRefreshing"
       >
         <div class="stat-l">{{ s.l }}</div>
-        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
-        <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
+        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up-text)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
+        <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up-text)' : 'var(--dn)' }">{{ s.delta }}</div>
         <!-- 04.2-21(DIV-02):總損益卡的股利收入附加列;API mode 且股利收入或預扣稅不為 0 才渲染 -->
         <div v-if="s.note" class="stat-note" data-testid="positions-stat-dividend-income">{{ s.note }}</div>
       </div>
@@ -154,11 +154,11 @@
         <div>
           <div class="ttl">{{ t(lang, 'assetTrend') }}</div>
           <div class="sub" style="margin-top:2px">
-            <span :style="{ color: pnlAbs >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <span :style="{ color: pnlAbs >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               {{ pnlAbs >= 0 ? '+' : '' }}${{ fmtNum(Math.abs(pnlAbs), 0) }}
             </span>
             <span style="color:var(--fg-dim)">·</span>
-            <span :style="{ color: pnlAbs >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(safePct(pnlAbs, totalCost)) }}</span>
+            <span :style="{ color: pnlAbs >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(safePct(pnlAbs, totalCost)) }}</span>
             <span style="color:var(--fg-mute);margin-left:8px;font-size:11px">{{ rangeLabel }}</span>
           </div>
         </div>
@@ -188,10 +188,10 @@
           </div>
         </div>
         <div style="text-align:right">
-          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
+          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
             {{ fmtSignedMoney(m.pnl, m.ccy, 0) }}
           </div>
-          <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
         </div>
       </div>
       <div v-if="moversFxExcluded > 0" data-testid="positions-movers-fx-excluded" class="movers-note">
@@ -229,7 +229,7 @@
           </div>
           <div class="row-between" style="font-size:12px;color:var(--fg-dim);margin-top:4px">
             <span>{{ s.weightText }}</span>
-            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up)' : 'var(--dn)' }">{{ s.pnlText }}</span>
+            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up-text)' : 'var(--dn)' }">{{ s.pnlText }}</span>
           </div>
         </div>
       </div>
@@ -333,12 +333,12 @@
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(p.avg) }}</td>
             <td class="num" style="text-align:right">
               ${{ fmtNum(effPrice(p)) }}
-              <div v-if="scrubDays > 0" class="scrub-cmp" :style="{ color: p.price > effPrice(p) ? 'var(--up)' : 'var(--dn)' }">
+              <div v-if="scrubDays > 0" class="scrub-cmp" :style="{ color: p.price > effPrice(p) ? 'var(--up-text)' : 'var(--dn)' }">
                 {{ lang === 'zh' ? '今' : 'now' }} ${{ fmtNum(p.price) }}
               </div>
             </td>
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(p.qty * effPrice(p), 0) }}</td>
-            <td class="num" style="text-align:right" :style="{ color: effPnl(p) >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <td class="num" style="text-align:right" :style="{ color: effPnl(p) >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               <div>{{ effPnl(p) >= 0 ? '+' : '-' }}${{ fmtNum(Math.abs(effPnl(p)), 0) }}</div>
               <div style="font-size:11px">{{ fmtPct(effPnlPct(p)) }}</div>
             </td>
@@ -392,7 +392,7 @@
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
             <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
-            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
               <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
             </td>
@@ -1105,7 +1105,7 @@ const scrubMarkerPct = computed(() => {
 .page { padding: 22px; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-start; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .btn-accent:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .sub { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
@@ -1180,7 +1180,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
   border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
 }
 .currency-note { padding: 8px 16px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
-.day-up { color: var(--up); }
+.day-up { color: var(--up-text); }
 .day-dn { color: var(--dn); }
 .day-na { color: var(--fg-dim); }
 /* 04.2-21(D-11):動作欄在最右;動作鈕中性(不是 accent),12px / 600、36px 觸控目標 */
