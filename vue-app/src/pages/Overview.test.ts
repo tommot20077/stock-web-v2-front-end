@@ -231,7 +231,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(ratio!.textContent).toContain('+1.04%');
     expect(ratio!.textContent).toContain(fmtRatioPct(SUMMARY.dayPricePnlRatio)!);
     expect(ratio!.querySelector('[aria-hidden="true"]')?.textContent).toBe('↗');
-    expect(ratio!.getAttribute('style')).toContain('var(--up)');
+    expect(ratio!.getAttribute('style')).toContain('var(--up-text)');
     // 數值本身維持 --fg(不上色)
     expect(dayPnl.querySelector('.kpi-v')!.getAttribute('style') ?? '').not.toContain('--up');
     // 常駐「不含匯差」說明,沒有未計入列

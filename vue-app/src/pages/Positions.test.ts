@@ -1381,7 +1381,7 @@ describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
 
     const pnlOf = (name: string) =>
       sectorCells().find(c => c.textContent?.includes(name))!.querySelector<HTMLElement>('.sec-pnl')!;
-    expect(pnlOf('Semiconductors-API').getAttribute('style')).toContain('var(--up)');
+    expect(pnlOf('Semiconductors-API').getAttribute('style')).toContain('var(--up-text)');
     expect(pnlOf(t('en', 'sectorUncategorized')).getAttribute('style')).toContain('var(--dn)');
     expect(pnlOf(t('en', 'sectorUncategorized')).textContent).toContain(`-500${NBSP}TWD`);
   });
