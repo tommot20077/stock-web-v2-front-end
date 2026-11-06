@@ -933,8 +933,10 @@ const sectorRows = computed<SectorRow[]>(() => {
   if (!s) return [];
   const base = s.baseCurrency;
   // 後端已依 value 降冪、null 最後;這裡再做一次穩定分割,不把「未分類排最後」押在後端順序上。
-  const classified = s.sectorAllocation.filter(x => x.sector !== null);
-  const unclassified = s.sectorAllocation.filter(x => x.sector === null);
+  // 缺 sectorAllocation(舊後端 / 欄位遺失)視為沒有分組 → 空狀態,不讓整頁炸掉(04.1 IN-04)。
+  const allocation = s.sectorAllocation ?? [];
+  const classified = allocation.filter(x => x.sector !== null);
+  const unclassified = allocation.filter(x => x.sector === null);
   return [...classified, ...unclassified].map((x, i) => {
     const uncategorized = x.sector === null;
     return {
