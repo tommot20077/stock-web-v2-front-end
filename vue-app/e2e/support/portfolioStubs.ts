@@ -140,6 +140,7 @@ function holding(
     sector: 'Technology',
     baseCurrency: 'TWD',
     marketValueInBase: 179842345.68,
+    unrealizedPnlInBase: -2345678.12,
     previousClose: 1440.12,
     dayPricePnl: 2056789.01,
     dayPricePnlRatio: 0.0116,
@@ -149,9 +150,9 @@ function holding(
 
 const HOLDINGS: HoldingDto[] = [
   holding(1, { symbol: '2330.TW', assetName: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)', currency: 'TWD' }),
-  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', marketValueInBase: 5800000000 }),
-  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', marketValueInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
-  holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', marketValueInBase: null }),
+  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', marketValueInBase: 5800000000, unrealizedPnlInBase: -76043912.31 }),
+  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
+  holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', marketValueInBase: null, unrealizedPnlInBase: null }),
   holding(5, { symbol: 'BTC-USD', assetName: 'Bitcoin', currency: 'USD', assetType: 'CRYPTO', sector: null }),
   holding(6, { symbol: '2317.TW', assetName: 'Hon Hai Precision Industry', currency: 'TWD', sector: null }),
 ];

@@ -173,8 +173,11 @@
       </div>
     </div>
 
-    <!-- Top movers:API mode 由後端 unrealizedPnl 排序推導(D-16 例外:可真實推導者不隱藏) -->
-    <div v-if="live || movers.length" class="card" :style="{ gridColumn: live ? 'span 4' : 'span 12', padding: '20px' }">
+    <!--
+      Top movers:API mode 以後端基準幣 unrealizedPnlInBase 的絕對值排序(D-16 例外:可真實推導者不隱藏;
+      quick-261106-fbs:不再以原幣 unrealizedPnl 跨幣別比大小)。缺匯率(null)的持倉不進榜,以提示列出檔數。
+    -->
+    <div v-if="live || movers.length || moversFxExcluded > 0" class="card" :style="{ gridColumn: live ? 'span 4' : 'span 12', padding: '20px' }">
       <div class="ttl" style="margin-bottom:14px">{{ t(lang, 'topMovers') }}</div>
       <div v-for="m in movers" :key="m.sym" class="mover">
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
@@ -186,10 +189,13 @@
         </div>
         <div style="text-align:right">
           <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
-            {{ m.pnl >= 0 ? '+' : '-' }}${{ fmtNum(Math.abs(m.pnl), 0) }}
+            {{ fmtSignedMoney(m.pnl, m.ccy, 0) }}
           </div>
           <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
         </div>
+      </div>
+      <div v-if="moversFxExcluded > 0" data-testid="positions-movers-fx-excluded" class="movers-note">
+        {{ tf(lang, 'topMoversFxExcluded', { n: moversFxExcluded, base: moversBaseCurrency }) }}
       </div>
     </div>
 
@@ -829,20 +835,36 @@ function dividendIncomeNote(s: PortfolioSummaryDto): string {
 const statCards = computed(() => (live ? mockStats.value : apiStats.value));
 
 // Top movers (P&L abs) — top 4
+// mock 宇宙單一幣別:金額代碼取 MOCK_POSITION_CURRENCY(與對話框一致),不再寫死 `$`。
 const mockTopMovers = computed(() => {
   return [...mockPositions.value]
-    .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p) }))
+    .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p), ccy: MOCK_POSITION_CURRENCY }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
     .slice(0, 4);
 });
 
-// D-16 例外:可由後端 unrealizedPnl / roi 真實推導,故不隱藏。
+/**
+ * D-16 例外:由後端 unrealizedPnlInBase / roi 真實推導,故不隱藏。
+ * quick-261106-fbs:以**基準幣**未實現損益排序 —— 原幣 unrealizedPnl 跨幣別直接比大小是錯的(同 04.1 D-05)。
+ * 前端不換匯(D-21):unrealizedPnlInBase 為 null(缺匯率)的持倉不進榜,檔數另以 moversFxExcluded 提示。
+ */
+function hasBasePnl(x: HoldingDto): x is HoldingDto & { unrealizedPnlInBase: number } {
+  return x.unrealizedPnlInBase !== null && Number.isFinite(x.unrealizedPnlInBase);
+}
+
 const apiTopMovers = computed(() => {
-  return [...holdings.value]
-    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnl, pct: x.roi * 100 }))
+  return holdings.value
+    .filter(hasBasePnl)
+    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnlInBase, pct: x.roi * 100, ccy: x.baseCurrency }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
     .slice(0, 4);
 });
+
+/** 因缺匯率而未列入 Top movers 的持倉檔數(mock 單一幣別恆為 0)。 */
+const moversFxExcluded = computed(() => (live ? 0 : holdings.value.filter(x => !hasBasePnl(x)).length));
+
+/** 提示文案的基準幣代碼:summary 優先,summary 未載入時取持倉列(兩者同值,見 HoldingDto.baseCurrency)。 */
+const moversBaseCurrency = computed(() => summary.value?.baseCurrency ?? holdings.value[0]?.baseCurrency ?? '');
 
 const movers = computed(() => (live ? mockTopMovers.value : apiTopMovers.value));
 
@@ -1114,6 +1136,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 /* Top movers */
 .mover { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
 .mover + .mover { border-top: 1px solid var(--border); }
+.movers-note { font-size: 12px; color: var(--fg-dim); line-height: 1.5; }
+.mover + .movers-note { margin-top: 8px; }
 .mtag {
   width: 30px; height: 30px; border-radius: 7px; background: var(--surface2);
   font-size: 10px; font-weight: 700; color: var(--fg-dim);

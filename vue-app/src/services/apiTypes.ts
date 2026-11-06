@@ -185,6 +185,11 @@ export interface HoldingDto {
   baseCurrency: string;
   /** Phase 04.1:市值換算為基準幣的金額;缺匯率時為 null(該列不計入 summary 總額)。 */
   marketValueInBase: number | null;
+  /**
+   * quick-261106-fbs:未實現損益(unrealizedPnl,原幣)以目前匯率換算為基準幣的金額;缺匯率時為 null
+   * (與 marketValueInBase 同條件),該列不進任何基準幣排行(例如 Positions 的 Top movers)。
+   */
+  unrealizedPnlInBase: number | null;
   /** Phase 04.1:前收盤價(原幣);無資料時為 null。 */
   previousClose: number | null;
   /** Phase 04.1:今日價差損益(原幣);無前收盤時為 null。 */

@@ -167,6 +167,8 @@ function holdingFrom(position: Position): HoldingDto {
     sector: position.sector,
     baseCurrency: MOCK_CURRENCY,
     marketValueInBase: marketValue,
+    // mock 單一幣別(原幣 = 基準幣),基準幣未實現損益即原幣值,與 marketValueInBase 同做法。
+    unrealizedPnlInBase: unrealizedPnl,
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
