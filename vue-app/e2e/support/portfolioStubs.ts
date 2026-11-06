@@ -359,6 +359,11 @@ export interface MockPortfolioApiOptions {
   ticketGate?: Promise<void>;
   /** 覆寫 GET /watchlists 的回應(預設 20 個清單的 WATCHLISTS)。 */
   watchlists?: WatchlistDto[];
+  /**
+   * 開啟 GET /assets(OrderTicket 的標的搜尋):以 query 比對 WATCHLIST_ITEMS 的 symbol / name(不分大小寫)。
+   * 預設不開(維持 503),避免改變既有版面測試的頁面狀態。
+   */
+  assetSearch?: boolean;
 }
 
 function envelope<T>(data: T): { success: true; data: T; error: null; meta: { traceId: string } } {
@@ -469,6 +474,12 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
     if ((path === '/api/v1/portfolio/dividends' || path === '/api/v1/portfolio/share-adjustments') && method === 'POST') {
       await options.holdingEventPostGate;
       await unavailable(route);
+      return;
+    }
+    if (options.assetSearch && path === '/api/v1/assets' && method === 'GET') {
+      const needle = (url.searchParams.get('query') ?? '').trim().toLowerCase();
+      const matched = WATCHLIST_ITEMS.filter((a) => a.symbol.toLowerCase().includes(needle) || a.name.toLowerCase().includes(needle));
+      await route.fulfill({ json: envelope(paginate(matched, url, 10)) });
       return;
     }
     if (path === '/api/v1/trades' && method === 'GET') {
