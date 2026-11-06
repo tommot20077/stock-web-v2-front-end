@@ -43,5 +43,5 @@ npx playwright test e2e/tests/layout.spec.ts             # 動到版面 / CSS �
 ## 學習與 Git
 
 - 踩坑一行進 `docs/LEARNINGS.md`(格式見該檔);同坑第 2 次 → 晉升進本檔鐵律或對應文件。
-- Commit:Conventional Commits,繁中 subject;type/subject 規則同後端 `git-convention.md`,**scope 用 phase 編號(NN-NN),與後端的 module scope 不同**(例:`feat(02-05): ...`;quick task 用 `quick-YYMMDD-xxx`,例:`fix(quick-261106-fbs): ...`)。
+- Commit:Conventional Commits,繁中 subject;type/subject 規則同後端 `git-convention.md`,**scope 用 phase 編號(NN-NN)**(後端 git-convention 文字寫 module scope,但 GSD 工作兩邊實務都用 phase / quick id)(例:`feat(02-05): ...`;quick task 用 `quick-YYMMDD-xxx`,例:`fix(quick-261106-fbs): ...`)。
 - 本 repo CI(`.github/workflows/`,Node 20)在 develop 的 push / PR 跑 `npm ci → lint → test → build`;PR 開向 `develop`。
