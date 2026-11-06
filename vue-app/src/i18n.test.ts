@@ -726,3 +726,34 @@ describe('i18n phase 04.2 copy', () => {
     expect(I18N.en.holdingEventErrRatio ?? '').toContain('1 to 1000');
   });
 });
+
+// quick-261106-fbs(Yuan 2026-11-06 核准的小修批次)新增的文案鍵。
+const QUICK_261106_FBS_KEYS = ['topMoversFxExcluded'];
+const QUICK_261106_FBS_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
+  topMoversFxExcluded: ['base', 'n'],
+};
+
+describe('i18n quick-261106-fbs copy', () => {
+  it('provides every quick-261106-fbs key in both languages, listed once', () => {
+    expect(new Set(QUICK_261106_FBS_KEYS).size).toBe(QUICK_261106_FBS_KEYS.length);
+    for (const key of QUICK_261106_FBS_KEYS) {
+      expect(I18N.zh[key], `zh.${key}`).toBeTruthy();
+      expect(I18N.en[key], `en.${key}`).toBeTruthy();
+    }
+  });
+
+  it('keeps the same placeholders in zh and en', () => {
+    for (const key of QUICK_261106_FBS_KEYS) {
+      const expected = QUICK_261106_FBS_PLACEHOLDERS_BY_KEY[key] ?? [];
+      expect(placeholdersOf(I18N.zh[key] ?? ''), `zh.${key}`).toEqual(expected);
+      expect(placeholdersOf(I18N.en[key] ?? ''), `en.${key}`).toEqual(expected);
+    }
+  });
+
+  it('fills the top movers FX exclusion hint in both languages', () => {
+    expect(tf('zh', 'topMoversFxExcluded', { n: 2, base: 'TWD' }))
+      .toBe('2 檔缺少換算成 TWD 的匯率,未列入排行。');
+    expect(tf('en', 'topMoversFxExcluded', { n: 2, base: 'TWD' }))
+      .toBe('2 holdings have no exchange rate to TWD and are not ranked.');
+  });
+});
