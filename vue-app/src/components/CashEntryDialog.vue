@@ -513,8 +513,12 @@ function localFieldInvalid(field: string): boolean {
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFieldKeys.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
-  return '';
+  if (serverFieldKeys.value.includes(field)) return t(props.lang, key);
+  if (!localFieldInvalid(field)) return '';
+  // quick-261106-fbs:發生時間被清空是「未填」,不是「晚於現在」—— 給專屬文案;
+  // 本地未來時間與後端 fields.occurredAt 仍走 FIELD_ERROR_COPY 的 cashErrOccurredAt。
+  if (field === 'occurredAt' && !occurredAt.value) return t(props.lang, 'cashErrOccurredAtRequired');
+  return t(props.lang, key);
 }
 
 /** 多個 id 以空白分隔;沒有任何關聯節點時回 undefined(不渲染空屬性)。 */
