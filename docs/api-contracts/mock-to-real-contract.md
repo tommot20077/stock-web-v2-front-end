@@ -2,6 +2,12 @@
 
 Date: 2026-05-16
 
+> **狀態(2026-11-06 文件掃描,以後端 `stock-web-v2` 程式核對):**
+> - **Common API Conventions**:已與後端 `ApiResponse<T>` / `ApiMeta` / `ApiError` / `PageResponse<T>` 逐欄一致。
+> - **Backtest**:端點與 DTO 對應後端 `BacktestController`(`/api/v1/backtests`,類別層 `@PreAuthorize("isAuthenticated()")`);請求規則與錯誤碼已依後端修正(見各節)。
+> - **Ops / AI Access**:後端**目前沒有**對應的 controller、端點或 `ErrorCode`;這兩節仍是前端提案,前端頁面須維持 Preview / Simulated 標示(AGENTS.md 鐵律 6),實作前需先與後端定案。
+> - 本檔只涵蓋 Backtest / Ops / AI Access。Auth / CSRF 見後端 `ai-docs/browser-auth-contract.md`;交易、持倉、現金、股利、股數調整、活動列表見後端 `ai-docs/trading-portfolio-contract.md`;觀察清單見後端 `ai-docs/watchlist-contract.md`。衝突時一律以後端為準。
+
 ## Purpose
 
 This contract defines the first real API boundary for the current mock MVP. It covers the three preview-heavy areas that should move from local mock state to server-backed flows first:
@@ -24,7 +30,7 @@ The goal is not to define the full backend product. The goal is to give the fron
 
 When replacing mocks, add service modules instead of calling `fetch` directly from pages:
 
-- `src/services/apiClient.ts`: base URL, auth headers, request id, common error parsing.
+- `src/services/apiClient.ts`: base URL, `credentials: 'include'`(HttpOnly cookie,token 不進 JS)、unsafe method 的 `X-XSRF-TOKEN` header、`ApiResponse<T>` 信封解析(追蹤 id 讀 `meta.traceId`)、401 / 403 處理;是唯一的 transport 邊界。
 - `src/services/backtestApi.ts`: backtest run creation, polling, result loading.
 - `src/services/opsApi.ts`: action catalog, job trigger, current job, logs.
 - `src/services/aiAccessApi.ts`: API keys, MCP endpoints, agents, audit calls.
@@ -168,6 +174,8 @@ Rules:
 - `strategyCode` is required only when `strategyId = custom`.
 - `initialCapital` must be finite and greater than zero.
 - `period` is initially one of `1Y`, `3Y`, `5Y`.
+- 後端目前只接受 `currency = "USD"`、`benchmark = "buy_hold"`(否則 400 `VALIDATION_FAILED`)與 `dataMode = "cached"`(否則 400 `BACKTEST_UNSUPPORTED_DATA_MODE`);`symbol` 必填、最長 32 字。
+- 後端目前**同步執行**:`createRun` 回傳時 `status` 已為 `succeeded`(編譯失敗則 400 `BACKTEST_STRATEGY_COMPILE_FAILED`);`queued` / `running` 狀態保留給日後非同步化。
 
 Response:
 
@@ -182,10 +190,12 @@ Response:
     "period": "3Y",
     "initialCapital": 100000,
     "currency": "USD",
-    "status": "queued",
+    "status": "succeeded",
+    "progress": 1,
     "createdAt": "2026-05-16T01:30:00Z",
-    "startedAt": null,
-    "completedAt": null
+    "startedAt": "2026-05-16T01:30:00Z",
+    "completedAt": "2026-05-16T01:30:01Z",
+    "error": null
   },
   "error": null,
   "meta": { "traceId": "..." }
@@ -331,13 +341,19 @@ GET /api/v1/backtests/runs?symbol=AAPL&page=0&size=20
 
 ### Backtest Error Codes
 
-- `BACKTEST_INVALID_INITIAL_CAPITAL`
-- `BACKTEST_UNSUPPORTED_SYMBOL`
-- `BACKTEST_UNSUPPORTED_PERIOD`
-- `BACKTEST_MARKET_DATA_UNAVAILABLE`
-- `BACKTEST_STRATEGY_COMPILE_FAILED`
-- `BACKTEST_RUN_TIMEOUT`
-- `BACKTEST_RUN_NOT_FOUND`
+後端 `ErrorCode` 現有的 backtest 錯誤碼(2026-11-06 核對):
+
+- `BACKTEST_INVALID_INITIAL_CAPITAL`(400)
+- `BACKTEST_UNSUPPORTED_SYMBOL`(400)
+- `BACKTEST_UNSUPPORTED_PERIOD`(400)
+- `BACKTEST_UNSUPPORTED_STRATEGY`(400)
+- `BACKTEST_UNSUPPORTED_DATA_MODE`(400)
+- `BACKTEST_STRATEGY_COMPILE_FAILED`(400)
+- `BACKTEST_RUN_NOT_FOUND`(404;他人的 run 也回此碼)
+- `BACKTEST_RESULT_NOT_READY`(409)
+
+另外可能收到通用的 `VALIDATION_FAILED`(400,`currency` / `benchmark` 不符或 bean validation)。
+草案曾列的 `BACKTEST_MARKET_DATA_UNAVAILABLE`、`BACKTEST_RUN_TIMEOUT` 後端**未定義**(前端測試中的 `BACKTEST_RUN_TIMEOUT` / `BACKTEST_PERMISSION_DENIED` 僅作為「任意錯誤碼可透傳」的 fixture)。
 
 ### FE Mapping
 
@@ -354,6 +370,8 @@ Real adapter:
 - Existing local result should remain visible while a new run is pending.
 
 ## Ops Contract
+
+> ⚠️ **後端尚未實作(2026-11-06 核對)**:後端沒有 `/api/v1/ops/**` 端點,也沒有 `OPS_*` 錯誤碼。本節為前端提案;Ops 頁須維持 Preview / Simulated 標示。
 
 ### UI Needs
 
@@ -549,6 +567,8 @@ Real adapter:
 - The UI should continue disabling action buttons while `currentJob != null`.
 
 ## AI Access Contract
+
+> ⚠️ **後端尚未實作(2026-11-06 核對)**:後端沒有 `/api/v1/ai-access/**` 端點,也沒有 `AI_ACCESS_*` 錯誤碼。本節為前端提案;AI Access 設定頁須維持 Preview / Simulated 標示。
 
 ### UI Needs
 
@@ -927,7 +947,7 @@ Contract tests should validate:
 
 These are intentionally kept as product/backend decisions, not frontend blockers:
 
-- Whether backtest execution is synchronous for small runs or always queued.
+- Whether backtest execution is synchronous for small runs or always queued.(目前後端一律同步執行,見 Create Run。)
 - Whether custom strategy sandbox runs server-side only or can pre-validate in the browser.
 - Whether Ops jobs can run concurrently by category or must be globally single-flight.
 - Whether AI Access admin endpoint should ever be user-editable in this product.

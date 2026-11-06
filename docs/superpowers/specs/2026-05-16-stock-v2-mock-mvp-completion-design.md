@@ -1,5 +1,7 @@
 # Stock V2 Mock MVP Completion Design
 
+> 📜 **歷史文件(2026-05-16),不隨程式維護。** 內容反映當時的 mock MVP 規劃;現況以 `vue-app/` 程式碼、`AGENTS.md` 與後端 `ai-docs/` 契約為準。
+
 ## Context
 
 `stock-v2` is currently a browser-loaded Vue prototype under `vue-app/`, with earlier React design directions and screenshots kept at the workspace root. The app already has meaningful screens for market data, charts, watchlists, positions, trades, alerts, notifications, settings, backtesting, and admin operations.
