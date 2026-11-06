@@ -17,7 +17,7 @@ const PORTFOLIO_STATE_KEYS = [
   'costBasis',
 ];
 
-// Phase 04.1 入出金、基準幣、KPI 與配置的全部新文案(81 個),權威來源是
+// Phase 04.1 入出金、基準幣、KPI 與配置的全部新文案(82 個;quick-261106-fbs 追加 cashErrOccurredAtRequired),權威來源是
 // `.planning/phases/04.1-.../04.1-UI-SPEC.md` §Copywriting Contract。
 const PHASE41_KEYS = [
   // 動作與標題(18)
@@ -85,11 +85,12 @@ const PHASE41_KEYS = [
   'cashEntriesEmpty',
   'cashEntriesEmptyBody',
   'allocationEmpty',
-  // 對話框錯誤(13)
+  // 對話框錯誤(14)
   'cashErrType',
   'cashErrCurrency',
   'cashErrAmount',
   'cashErrOccurredAt',
+  'cashErrOccurredAtRequired',
   'cashErrValidation',
   'cashErrKeyReused',
   'cashErrAlreadyReversed',
@@ -748,6 +749,12 @@ describe('i18n quick-261106-fbs copy', () => {
       expect(placeholdersOf(I18N.zh[key] ?? ''), `zh.${key}`).toEqual(expected);
       expect(placeholdersOf(I18N.en[key] ?? ''), `en.${key}`).toEqual(expected);
     }
+  });
+
+  it('gives the cleared cash occurred-at field its own required copy (todo cash-occurred-at-empty-copy)', () => {
+    expect(I18N.zh.cashErrOccurredAtRequired).toBe('請填寫發生時間。');
+    expect(I18N.en.cashErrOccurredAtRequired).toBe('Occurred at is required.');
+    expect(I18N.zh.cashErrOccurredAtRequired).not.toBe(I18N.zh.cashErrOccurredAt);
   });
 
   it('fills the top movers FX exclusion hint in both languages', () => {
