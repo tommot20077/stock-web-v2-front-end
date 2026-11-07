@@ -398,12 +398,18 @@
               class="inp num"
               data-testid="holding-event-effective-date"
               :aria-invalid="invalidAttr('effectiveDate')"
-              :aria-describedby="describedBy('effectiveDate', 'holding-event-effective-date-hint')"
+              :aria-describedby="describedBy('effectiveDate', 'holding-event-effective-date-hint', 'holding-event-market-date')"
               :max="maxEffectiveDate"
               :disabled="submitting"
               @blur="touched.effectiveDate = true"
             />
             <p id="holding-event-effective-date-hint" class="hint">{{ t(lang, 'holdingEventEffectiveDateHint') }}</p>
+            <!-- WR-09:預設值與 max 以哪個市場的日期計(查不到市場時如實顯示 fallback 的美東) -->
+            <span
+              id="holding-event-market-date"
+              class="hint market-date"
+              data-testid="holding-event-market-date"
+            >{{ marketDateText }}</span>
             <p
               v-if="fieldErrorText('effectiveDate')"
               :id="fieldErrorId('effectiveDate')"
@@ -564,6 +570,11 @@ import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyHoldingEventCreated } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
+import { classifyDateInput, classifyInstantInput } from '../eventTimeBounds';
+import type { TimeFieldIssue } from '../eventTimeBounds';
+import { FALLBACK_MARKET_DAY_RULE, marketDayRuleOf, marketToday, marketZoneLabelKey } from '../marketDate';
+import type { MarketDayRule } from '../marketDate';
+import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
 import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
@@ -594,6 +605,16 @@ const emit = defineEmits<{
   (e: 'reversalConflict', code: string): void;
 }>();
 
+/**
+ * IN-09(quick-261107-1j4):對話框開啟時每 30 秒前進的 reactive 時鐘,讓「未來時間」「市場今天」隨時間更新,
+ * 不必等使用者編輯欄位。取值一律經 `clockNow()`:與當下 `Date.now()` 取大者,欄位一被編輯就用最新時間。
+ * 送出前的自檢(`isFormValid`)仍直接用 `Date.now()` 重算,不依賴本時鐘。
+ */
+const now = useNow({ active: () => props.open });
+function clockNow(): number {
+  return Math.max(now.value, Date.now());
+}
+
 const MODE_OPTIONS: ReadonlyArray<{ mode: HoldingEventMode; testid: string; labelKey: string }> = [
   { mode: 'cashDividend', testid: 'holding-event-mode-cash-dividend', labelKey: 'holdingEventModeCashDividend' },
   { mode: 'stockDividend', testid: 'holding-event-mode-stock-dividend', labelKey: 'holdingEventModeStockDividend' },
@@ -616,7 +637,6 @@ const shares = ref('');
 const ratioNew = ref('');
 const ratioOld = ref('');
 const effectiveDate = ref('');
-const maxEffectiveDate = ref('');
 const note = ref('');
 
 /** 欄位被使用者離開過才算「碰過」:空欄位在 blur 前不提早罵人。 */
@@ -708,11 +728,6 @@ const reversalNoteText = computed(() => t(
   props.reversalOf?.kind === 'CASH_DIVIDEND' ? 'holdingEventReversalNoteDividend' : 'holdingEventReversalNoteAdjustment',
 ));
 
-/** 本機日期 `YYYY-MM-DD`;除權日是標的市場的交易日,前端只以本機日期擋「晚於今天」。 */
-function todayLocalDate(): string {
-  return toLocalInputValue(new Date()).slice(0, 10);
-}
-
 /** 清空模式專屬欄位(切換模式與開啟共用);標的與備註不在此列。 */
 function resetModeFields() {
   amount.value = '';
@@ -720,11 +735,11 @@ function resetModeFields() {
   shares.value = '';
   ratioNew.value = '';
   ratioOld.value = '';
-  const now = new Date();
-  paidAt.value = toLocalInputValue(now);
-  maxPaidAt.value = toLocalInputValue(now);
-  effectiveDate.value = todayLocalDate();
-  maxEffectiveDate.value = todayLocalDate();
+  const openedAt = new Date();
+  paidAt.value = toLocalInputValue(openedAt);
+  maxPaidAt.value = toLocalInputValue(openedAt);
+  // WR-09:除權日預設 = 標的市場的今天(後端以 TradingDay.startOf 換算,市場今天恰為可接受上限)。
+  effectiveDate.value = maxEffectiveDate.value;
   touched.amount = false;
   touched.paidAt = false;
   touched.shares = false;
@@ -746,8 +761,11 @@ function resetForm() {
     selectedCurrency.value = props.holding?.currency ?? null;
   }
   note.value = '';
-  resetModeFields();
+  // 先清掉上一次開啟的標的(typeahead 選定 / 鎖定標的查詢結果),再依目前規則重設除權日預設值。
   resetSymbolSearch();
+  resetLockedAsset();
+  if (!original && props.symbol) void lookupLockedAsset(props.symbol);
+  resetModeFields();
   recorded.value = null;
   submitError.value = null;
   lockedError.value = null;
@@ -993,6 +1011,49 @@ function restoreFocus() {
   if (target && target !== document.body && target.isConnected) target.focus();
 }
 
+// =================== WR-09:除權日用標的市場的今天(quick-261107-1j4) ===================
+/**
+ * 從持倉開啟(標的鎖定)時,開啟當下以同一個 market adapter 查一次該代號,取市場資訊。
+ * `HoldingDto` 沒有 market,所以只能查;失敗吞掉 —— 規則維持 fallback,提示如實顯示 fallback 時區。
+ */
+const lockedAsset = ref<AssetDto | null>(null);
+let lockedLookupSeq = 0;
+
+function resetLockedAsset() {
+  lockedLookupSeq += 1;
+  lockedAsset.value = null;
+}
+
+async function lookupLockedAsset(symbol: string) {
+  const seq = ++lockedLookupSeq;
+  try {
+    const page = await getRuntimeApiClients().market.searchAssets({ query: symbol, page: 0, size: SEARCH_SIZE });
+    // 對話框已關閉重開、或換了標的:過時回應一律丟棄。
+    if (seq !== lockedLookupSeq) return;
+    lockedAsset.value = page.items.find(asset => asset.symbol.toUpperCase() === symbol.toUpperCase()) ?? null;
+  } catch {
+    // 查不到市場不阻擋記錄:沿用 fallback 規則(紐約),後端仍是最終權威。
+  }
+}
+
+/** 沖銷模式不用(日期取自原列);typeahead 看選定資產,鎖定標的看查詢結果;都沒有 → fallback。 */
+const marketRule = computed<MarketDayRule>(() => {
+  const asset = isTypeahead.value ? pickedAsset.value : lockedAsset.value;
+  return asset ? marketDayRuleOf(asset.assetType, asset.market) : FALLBACK_MARKET_DAY_RULE;
+});
+
+/** 除權日 max = 標的市場的今天;跟隨規則與 reactive 時鐘。 */
+const maxEffectiveDate = computed(() => marketToday(marketRule.value, clockNow()));
+
+const marketDateText = computed(() => tf(props.lang, 'holdingEventMarketDate', {
+  zone: t(props.lang, marketZoneLabelKey(marketRule.value)),
+}));
+
+/** 規則或日期改變時,使用者沒動過、且仍等於前一個預設的除權日跟著更新;動過的值不覆寫。 */
+watch(maxEffectiveDate, (next, previous) => {
+  if (!touched.effectiveDate && effectiveDate.value === previous) effectiveDate.value = next;
+});
+
 watch(() => props.open, async (open) => {
   if (!open) {
     restoreFocus();
@@ -1106,7 +1167,6 @@ const RATIO_MAX = 1000;
 const MAX_DECIMALS = 8;
 const DECIMAL_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
 const INTEGER_PATTERN = /^\d+$/;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function decimalWithin(text: string, min: number, max: number, allowZero: boolean): boolean {
   if (!DECIMAL_PATTERN.test(text)) return false;
@@ -1133,19 +1193,25 @@ const ratioValid = computed(() => {
   return ratioSideValid(n) && ratioSideValid(o) && Number(n) !== Number(o);
 });
 
-/** 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。 */
+/**
+ * 入帳時間三態(quick-261107-1j4 B1):空白 / 早於 1900-01-01(instant)/ 晚於現在。
+ * computed 依 reactive 時鐘重算(IN-09);送出時 `isPaidAtValid()` 以當下時間重算,不快取。
+ */
+const paidAtIssue = computed<TimeFieldIssue>(() => classifyInstantInput(paidAt.value, clockNow()));
+const paidAtValid = computed(() => paidAtIssue.value === null);
 function isPaidAtValid(): boolean {
-  if (!paidAt.value) return false;
-  const time = new Date(paidAt.value).getTime();
-  return Number.isFinite(time) && time <= Date.now();
+  return classifyInstantInput(paidAt.value, Date.now()) === null;
 }
-const paidAtValid = computed(() => isPaidAtValid());
 
-/** 只擋「晚於今天」;時序規則(早於最近一筆調整)由後端判斷,同一天多筆依記錄順序疊加,不擋。 */
+/**
+ * 除權日三態:空白 / 早於 1900-01-01 / 晚於標的市場的今天(WR-09)。
+ * 時序規則(早於最近一筆調整)由後端判斷,同一天多筆依記錄順序疊加,不擋。
+ */
+const effectiveDateIssue = computed<TimeFieldIssue>(() => classifyDateInput(effectiveDate.value, maxEffectiveDate.value));
+const effectiveDateValid = computed(() => effectiveDateIssue.value === null);
 function isEffectiveDateValid(): boolean {
-  return DATE_PATTERN.test(effectiveDate.value) && effectiveDate.value <= todayLocalDate();
+  return classifyDateInput(effectiveDate.value, marketToday(marketRule.value, Date.now())) === null;
 }
-const effectiveDateValid = computed(() => isEffectiveDateValid());
 
 /** 送出前自檢(送出當下重算時間類規則)。 */
 function isFormValid(): boolean {
@@ -1241,11 +1307,31 @@ function localFieldInvalid(field: string): boolean {
   }
 }
 
+/**
+ * 入帳時間 / 除權日依**目前輸入值**歸類(quick-261107-1j4 B1):空白、早於 1900-01-01 各有專屬文案;
+ * 其餘(晚於上限,或後端 fields 但輸入看似合法 —— 例如股數調整時序錯誤)沿用 FIELD_ERROR_COPY 的既有鍵。
+ * 依輸入值而非後端訊息分派,符合 04.2 UI-SPEC「前端不區分未來與時序」的原則。
+ */
+const TIME_ISSUE_COPY: Record<'paidAt' | 'effectiveDate', Record<'required' | 'tooEarly', string>> = {
+  paidAt: { required: 'holdingEventErrPaidAtRequired', tooEarly: 'holdingEventErrPaidAtTooEarly' },
+  effectiveDate: { required: 'holdingEventErrEffectiveDateRequired', tooEarly: 'holdingEventErrEffectiveDateTooEarly' },
+};
+
+function timeIssueOf(field: string): TimeFieldIssue {
+  if (field === 'paidAt') return paidAtIssue.value;
+  if (field === 'effectiveDate') return effectiveDateIssue.value;
+  return null;
+}
+
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFields.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
-  return '';
+  if (!serverFields.value.includes(field) && !localFieldInvalid(field)) return '';
+  const issue = timeIssueOf(field);
+  if ((field === 'paidAt' || field === 'effectiveDate') && (issue === 'required' || issue === 'tooEarly')) {
+    return t(props.lang, TIME_ISSUE_COPY[field][issue]);
+  }
+  return t(props.lang, key);
 }
 
 /** 多個 id 以空白分隔;沒有任何關聯節點時回 undefined(不渲染空屬性)。 */
@@ -1554,6 +1640,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 }
 .lab:first-child { margin-top: 0; }
 .hint { font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); margin: 4px 0 0; }
+.market-date { display: block; }
 .note-first { margin-top: 16px; }
 
 /* 鎖定標的:代號 13/600 + 名稱 12/400 + 幣別 pill */

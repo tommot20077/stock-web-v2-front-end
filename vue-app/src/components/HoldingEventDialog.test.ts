@@ -426,6 +426,8 @@ describe('HoldingEventDialog — 配股(D-05)', () => {
     expect(bodyText()).not.toContain('1,050');
     expect(bodyText()).not.toContain('1050');
     await submit();
+    // 假時鐘下 flushAsync 只跑 microtask 輪次;多跑幾輪讓 result 之後的 nextTick → emit 完成。
+    await flushAsync(16);
 
     const calls = adjustmentCalls(fetchImpl);
     expect(calls).toHaveLength(1);
@@ -1762,8 +1764,13 @@ describe('HoldingEventDialog — 沖銷模式(D-13)', () => {
 /** 2026-11-05T01:00Z:紐約仍是 11-04(EST),台北 / UTC 已是 11-05。 */
 const WR09_NOW = Date.parse('2026-11-05T01:00:00Z');
 
-function useWr09Clock() {
-  vi.useFakeTimers();
+/**
+ * 固定時鐘。預設只假 `Date`:送出路徑的 `flushAsync` 需要真的 macrotask hop 才跑得完 fetch → json → nextTick;
+ * 需要推進 debounce / interval 的測試傳 `{ timers: true }` 改假全部計時器(以 `advance()` 推進)。
+ */
+function useWr09Clock({ timers = false }: { timers?: boolean } = {}) {
+  if (timers) vi.useFakeTimers();
+  else vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(WR09_NOW);
 }
 
@@ -1845,7 +1852,7 @@ describe('HoldingEventDialog — 入帳時間 / 除權日三種文案(quick-2611
 
 describe('HoldingEventDialog — 除權日用標的市場的今天(quick-261107-1j4 WR-09)', () => {
   it('typeahead 選美股 → 預設與 max = 紐約日期 2026-11-04,提示「以美東日期計」', async () => {
-    useWr09Clock();
+    useWr09Clock({ timers: true });
     await mountDialog({
       fetchImpl: holdingEventFetch({ assets: () => assetPage([AAPL_ASSET]) }),
       props: { ...FROM_TRADES, initialMode: 'stockDividend' },
@@ -1860,7 +1867,7 @@ describe('HoldingEventDialog — 除權日用標的市場的今天(quick-261107-
   });
 
   it('typeahead 選台股 → 2026-11-05 + 台北;選加密 → 2026-11-05 + UTC', async () => {
-    useWr09Clock();
+    useWr09Clock({ timers: true });
     await mountDialog({
       fetchImpl: holdingEventFetch({
         assets: query => assetPage(query.toUpperCase() === 'BTC' ? [BTC_ASSET] : [TSMC_ASSET]),
@@ -1951,7 +1958,7 @@ describe('HoldingEventDialog — 除權日用標的市場的今天(quick-261107-
 
 describe('HoldingEventDialog — 合法性隨 reactive 時鐘更新(quick-261107-1j4 IN-09)', () => {
   it('paidAt = now + 60s → 送出鈕 disabled;時鐘走過後自動 enabled,不需編輯欄位', async () => {
-    useWr09Clock();
+    useWr09Clock({ timers: true });
     await mountDialog();
     await typeInto('holding-event-amount', '100');
     await setValue(requireTestid('holding-event-paid-at') as HTMLInputElement, toLocalInputValue(new Date(WR09_NOW + 60_000)));

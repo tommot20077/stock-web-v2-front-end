@@ -45,6 +45,7 @@
 // 只呈現 QuoteStream 的狀態,不碰瀏覽器連線(wsBoundary.test.ts 守門);非 live 狀態不顯示實心圓點與 liveQuoteLive。
 import { computed } from 'vue';
 import { t } from '../i18n';
+import { useNow } from '../composables/useNow';
 import type { QuoteStreamStatus } from '../services/quoteStream';
 import type { Lang } from '../types';
 
@@ -55,12 +56,18 @@ function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
 
+/**
+ * IN-09(quick-261107-1j4):「是不是今天」跟著每分鐘前進的 reactive 時鐘走,過午夜不需任何 prop 變動就改帶日期;
+ * 只有顯示時間的 degraded / closed 兩態需要時鐘。
+ */
+const clock = useNow({ intervalMs: 60_000, active: () => props.status === 'degraded' || props.status === 'closed' });
+
 /** U-19:本機 24 小時 `HH:mm`;不是今天時 `MM-DD HH:mm`。沒有任何成功資料 → `—`。 */
 const timeText = computed(() => {
   const at = props.updatedAt;
   if (at === null || !Number.isFinite(at)) return '—';
   const date = new Date(at);
-  const now = new Date();
+  const now = new Date(Math.max(clock.value, Date.now()));
   const hhmm = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
   const sameDay = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
