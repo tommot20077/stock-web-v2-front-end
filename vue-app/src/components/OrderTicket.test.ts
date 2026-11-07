@@ -1026,6 +1026,7 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     currency: 'USD',
     assetType: 'STOCK',
     sector: null,
+    market: 'US',
     baseCurrency: 'TWD',
     marketValueInBase: null,
     unrealizedPnlInBase: null,

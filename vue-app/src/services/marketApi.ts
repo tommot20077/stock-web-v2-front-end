@@ -108,8 +108,11 @@ export function createHttpMarketApi(basePath = '/api/v1'): MarketApi {
   };
 }
 
-/** mock 的 `Symbol` 沒有 market 欄位;`.TW` 後綴是本地假資料唯一可辨識的市場線索。 */
-function mockMarketOf(symbol: MockSymbol): string {
+/**
+ * mock 的 `Symbol` 沒有 market 欄位;`.TW` 後綴是本地假資料唯一可辨識的市場線索。
+ * mock tradingApi 新建持倉時也用它(quick-261107-1j4 E2),兩處 market 值域因此一致。
+ */
+export function mockMarketOf(symbol: MockSymbol): string {
   if (symbol.cat === 'crypto') return 'CRYPTO';
   if (symbol.cat === 'fx') return 'FX';
   return symbol.sym.endsWith('.TW') ? 'TW' : 'US';

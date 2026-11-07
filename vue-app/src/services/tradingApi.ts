@@ -2,6 +2,7 @@ import { ApiClientError, apiRequest } from './apiClient';
 import { CRYPTO, FX, SYMBOLS, fmtNum } from '../data';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { mockMarketOf } from './marketApi';
 import type { RuntimeDataMode, TradeDto } from './apiTypes';
 import type { Symbol as MockSymbol } from '../types';
 
@@ -149,6 +150,9 @@ export function createMockTradingApi(): TradingApi {
         px: request.price,
         fee: request.fee,
         sector: mockSectorOf(asset),
+        // quick-261107-1j4 E2:與 mock market adapter 的 AssetDto 同值(assetType = cat 大寫、market = mockMarketOf)。
+        assetType: asset?.cat.toUpperCase(),
+        market: asset ? mockMarketOf(asset) : null,
         note: request.note ?? '',
       });
 

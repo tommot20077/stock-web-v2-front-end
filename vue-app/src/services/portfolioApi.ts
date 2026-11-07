@@ -163,8 +163,10 @@ function holdingFrom(position: Position): HoldingDto {
     priceTime: null,
     lastUpdated: null,
     currency: MOCK_CURRENCY,
-    assetType: 'STOCK',
+    // quick-261107-1j4 E2:種子持倉帶 assetType / market;自訂或舊形狀的持倉缺值 → STOCK / null(對話框退回 UTC)。
+    assetType: position.assetType ?? 'STOCK',
     sector: position.sector,
+    market: position.market ?? null,
     baseCurrency: MOCK_CURRENCY,
     marketValueInBase: marketValue,
     // mock 單一幣別(原幣 = 基準幣),基準幣未實現損益即原幣值,與 marketValueInBase 同做法。

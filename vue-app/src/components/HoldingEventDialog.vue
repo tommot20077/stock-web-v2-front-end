@@ -583,13 +583,27 @@ import type { Lang } from '../types';
 /** 三種記錄模式;名稱依 D-11(「股利與股數調整」)。 */
 export type HoldingEventMode = 'cashDividend' | 'stockDividend' | 'split';
 
+/** 從持倉開啟時開啟者傳入的持倉摘要。 */
+export interface HoldingEventHolding {
+  totalQuantity: number;
+  currency?: string;
+  name?: string;
+  /** `HoldingDto.assetType`(大寫字串);可缺。 */
+  assetType?: string | null;
+  /** `HoldingDto.market`(後端 2026-11-07 新增);null / 缺值 / 無法辨識 → UTC fallback。 */
+  market?: string | null;
+}
+
 const props = withDefaults(defineProps<{
   open: boolean;
   lang: Lang;
   /** 有值 = 從持倉開啟,標的鎖定(D-11)。 */
   symbol?: string | null;
-  /** 開啟者已知的持倉;只顯示、不計算(Phase 3 D-04)。 */
-  holding?: { totalQuantity: number; currency?: string; name?: string } | null;
+  /**
+   * 開啟者已知的持倉;只顯示、不計算(Phase 3 D-04)。
+   * `assetType` / `market` 取自 `HoldingDto`(quick-261107-1j4 E2),只用來決定除權日的「市場今天」;缺值 → UTC fallback。
+   */
+  holding?: HoldingEventHolding | null;
   initialMode?: HoldingEventMode;
   /** 有值 = 沖銷模式(Trades 活動列「沖銷這筆」);值全取自此列,只有備註可改(D-13)。 */
   reversalOf?: PortfolioActivityDto | null;
@@ -761,10 +775,8 @@ function resetForm() {
     selectedCurrency.value = props.holding?.currency ?? null;
   }
   note.value = '';
-  // 先清掉上一次開啟的標的(typeahead 選定 / 鎖定標的查詢結果),再依目前規則重設除權日預設值。
+  // 先清掉上一次開啟的 typeahead 選定標的,再依目前規則重設除權日預設值。
   resetSymbolSearch();
-  resetLockedAsset();
-  if (!original && props.symbol) void lookupLockedAsset(props.symbol);
   resetModeFields();
   recorded.value = null;
   submitError.value = null;
@@ -1013,33 +1025,17 @@ function restoreFocus() {
 
 // =================== WR-09:除權日用標的市場的今天(quick-261107-1j4) ===================
 /**
- * 從持倉開啟(標的鎖定)時,開啟當下以同一個 market adapter 查一次該代號,取市場資訊。
- * `HoldingDto` 沒有 market,所以只能查;失敗吞掉 —— 規則維持 fallback,提示如實顯示 fallback 時區。
+ * 沖銷模式不用(日期取自原列)。typeahead 看選定資產的 `assetType` / `market`;
+ * 從持倉開啟(標的鎖定)直接用持倉自帶的 `assetType` / `market`(E2:`HoldingDto.market`,不再另查 `searchAssets`)。
+ * 尚未選定、持倉缺值或市場無法辨識 → UTC fallback(與後端 `TradingDay.of` 相同),提示如實顯示 UTC。
  */
-const lockedAsset = ref<AssetDto | null>(null);
-let lockedLookupSeq = 0;
-
-function resetLockedAsset() {
-  lockedLookupSeq += 1;
-  lockedAsset.value = null;
-}
-
-async function lookupLockedAsset(symbol: string) {
-  const seq = ++lockedLookupSeq;
-  try {
-    const page = await getRuntimeApiClients().market.searchAssets({ query: symbol, page: 0, size: SEARCH_SIZE });
-    // 對話框已關閉重開、或換了標的:過時回應一律丟棄。
-    if (seq !== lockedLookupSeq) return;
-    lockedAsset.value = page.items.find(asset => asset.symbol.toUpperCase() === symbol.toUpperCase()) ?? null;
-  } catch {
-    // 查不到市場不阻擋記錄:沿用 fallback 規則(紐約),後端仍是最終權威。
-  }
-}
-
-/** 沖銷模式不用(日期取自原列);typeahead 看選定資產,鎖定標的看查詢結果;都沒有 → fallback。 */
 const marketRule = computed<MarketDayRule>(() => {
-  const asset = isTypeahead.value ? pickedAsset.value : lockedAsset.value;
-  return asset ? marketDayRuleOf(asset.assetType, asset.market) : FALLBACK_MARKET_DAY_RULE;
+  if (isTypeahead.value) {
+    const asset = pickedAsset.value;
+    return asset ? marketDayRuleOf(asset.assetType, asset.market) : FALLBACK_MARKET_DAY_RULE;
+  }
+  const holding = props.holding;
+  return holding ? marketDayRuleOf(holding.assetType, holding.market) : FALLBACK_MARKET_DAY_RULE;
 });
 
 /** 除權日 max = 標的市場的今天;跟隨規則與 reactive 時鐘。 */

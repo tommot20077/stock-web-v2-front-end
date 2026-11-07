@@ -33,11 +33,11 @@ const MARKET_RULES: Record<string, MarketDayRule> = {
 };
 
 /**
- * 前端還不知道標的的市場時(查詢中、查詢失敗)使用的規則:紐約、換日 0。
- * 理由:支援的市場中紐約日期最晚換日,以它當預設 / max 不會讓除權日被後端判為未來而拒絕;
- * FX 不可新建股利 / 股數調整紀錄,不影響。提示會如實顯示這個 fallback 時區。
+ * 前端不知道標的的市場時(typeahead 尚未選定、持倉 `market` 為 null 或無法辨識)使用的規則:UTC、換日 0。
+ * 與後端 `TradingDay.of` 對未知市場的 fallback(`TradingDay.UTC`)相同(quick-261107-1j4 E2 補充;原為紐約,
+ * 與後端不一致)。提示會如實顯示 UTC。
  */
-export const FALLBACK_MARKET_DAY_RULE: MarketDayRule = NEW_YORK_RULE;
+export const FALLBACK_MARKET_DAY_RULE: MarketDayRule = UTC_RULE;
 
 /**
  * 依資產類型與市場代號取得交易日規則(鏡像 `TradingDay.of`)。
