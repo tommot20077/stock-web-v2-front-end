@@ -86,6 +86,11 @@ const CHANNEL_PATTERN = /^tick\.[A-Z0-9./-]+$/i;
 
 /** mock 假推播:每秒一次、每步 ±0.5% 隨機漫步 */
 const MOCK_TICK_INTERVAL_MS = 1000;
+/**
+ * 04.2-review IN-07:socket 建立後多久沒收到 WELCOME 視為卡住(代理扣住 upgrade、伺服器掛住)。
+ * 逾時 → 關閉該 socket、degraded、走既有退避重連,不讓狀態停在 connecting 直到瀏覽器自己 close。
+ */
+export const WELCOME_TIMEOUT_MS = 10_000;
 const MOCK_STEP_RATIO = 0.005;
 
 /** channel 以代號原樣組成(大小寫不改;伺服器廣播以原字串精確比對,P-W1) */
@@ -190,6 +195,7 @@ export function createHttpQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
   let releaseTimer: Timer | null = null;
   let syncTimer: Timer | null = null;
   let drainTimer: Timer | null = null;
+  let welcomeTimer: Timer | null = null;
 
   function clearTimer(timer: Timer | null): null {
     if (timer) clearTimeout(timer);
@@ -237,6 +243,8 @@ export function createHttpQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
     priorityQueue.length = 0;
     normalQueue.length = 0;
     drainTimer = clearTimer(drainTimer);
+    // 連線被拆除 / 關閉(detachSocket、handleClose)時一併取消 WELCOME 逾時。
+    welcomeTimer = clearTimer(welcomeTimer);
   }
 
   // ---- 訂閱同步:200 ms 視窗合併成至多一則 UNSUBSCRIBE + 一則 SUBSCRIBE ----
@@ -291,6 +299,7 @@ export function createHttpQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
   }
 
   function handleWelcome(): void {
+    welcomeTimer = clearTimer(welcomeTimer);
     transition('live');
     backoffAttempt = 0;
     authRetryUsed = false;
@@ -447,6 +456,14 @@ export function createHttpQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
     }
     socket = ws;
     resetConnectionState();
+    welcomeTimer = setTimeout(() => {
+      welcomeTimer = null;
+      // 只處理仍是目前這條的 socket(過期計時器理論上已被 resetConnectionState 清掉,這裡再守一次)。
+      if (socket !== ws || disposed) return;
+      detachSocket();
+      transition('degraded');
+      scheduleReconnect();
+    }, WELCOME_TIMEOUT_MS);
     ws.onmessage = event => {
       if (socket === ws) handleMessage(event.data);
     };

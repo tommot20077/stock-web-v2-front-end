@@ -330,6 +330,7 @@ import {
   type PortfolioRevisionCause,
 } from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
+import { csvCell, type CsvValue } from '../csvCell';
 import type { Lang, Trade } from '../types';
 import type { PortfolioActivityKind } from '../services/apiTypes';
 
@@ -884,8 +885,6 @@ const mockEventRows = computed<PortfolioActivityDto[]>(() => {
 // reversal_of 為原紀錄日期,**不輸出 uuid**(T-04.2-44);reversed 為 `true` 或空。
 const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed'.split(',');
 
-type CsvValue = string | number | null | undefined;
-
 function downloadCsv(rows: CsvValue[][]) {
   const csv = [CSV_HEADER, ...rows]
     .map(row => row.map(csvCell).join(','))
@@ -983,11 +982,6 @@ function activityCsvRow(row: PortfolioActivityDto): CsvValue[] {
   ];
 }
 
-function csvCell(value: CsvValue) {
-  const text = String(value ?? '');
-  if (!/[",\n\r]/.test(text)) return text;
-  return `"${text.replace(/"/g, '""')}"`;
-}
 </script>
 
 <style scoped>

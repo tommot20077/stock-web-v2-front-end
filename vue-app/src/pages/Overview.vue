@@ -629,7 +629,10 @@ watch(portfolioRevision, () => {
  */
 const staleText = computed(() => {
   const cause = portfolioRevisionCause.value;
-  if (cause === 'cash') return t(props.lang, 'portfolioStaleAfterCashEntry');
+  // 04.2-review IN-06:股利 / 股數調整與入出金同屬「非交易的帳本異動」,文案比照 Positions。
+  if (cause === 'cash' || cause === 'dividend' || cause === 'shareAdjustment') {
+    return t(props.lang, 'portfolioStaleAfterCashEntry');
+  }
   if (cause === 'baseCurrency') return t(props.lang, 'portfolioStaleAfterBaseCurrency');
   return t(props.lang, 'portfolioStaleAfterTrade');
 });
