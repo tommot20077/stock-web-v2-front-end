@@ -297,6 +297,7 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyCashEntryCreated } from '../services/portfolioRevision';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
+import { classifyInstantInput, type TimeFieldIssue } from '../eventTimeBounds';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
 import type { CashEntryDto, CashEntryType } from '../services/cashApi';
@@ -457,11 +458,15 @@ const amountValid = computed(() => {
   return Number.isFinite(value) && value > 0 && value <= AMOUNT_MAX;
 });
 
-/** 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。 */
+/**
+ * 發生時間的三態歸類(quick-261107-1j4):空白 / 早於 1900-01-01(與後端 fields.occurredAt 同一個 instant)/ 未來。
+ * 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。
+ */
+function occurredAtIssue(): TimeFieldIssue {
+  return classifyInstantInput(occurredAt.value, Date.now());
+}
 function isOccurredAtValid(): boolean {
-  if (!occurredAt.value) return false;
-  const time = new Date(occurredAt.value).getTime();
-  return Number.isFinite(time) && time <= Date.now();
+  return occurredAtIssue() === null;
 }
 const occurredAtValid = computed(() => isOccurredAtValid());
 
@@ -510,14 +515,25 @@ function localFieldInvalid(field: string): boolean {
   return false;
 }
 
+/**
+ * 發生時間依**目前輸入值**歸類文案(quick-261107-1j4,取代 quick-261106-fbs「清空才給專屬文案」的特例):
+ * 空白 → 請填寫;早於 1900-01-01 → 不可早於;其餘(未來,或後端 fields.occurredAt 但輸入看似合法)→ 不可晚於現在。
+ * 後端 fields 的 value 不入 DOM,只用 key 判斷欄位。
+ */
+const OCCURRED_AT_ISSUE_COPY: Record<'required' | 'tooEarly', string> = {
+  required: 'cashErrOccurredAtRequired',
+  tooEarly: 'cashErrOccurredAtTooEarly',
+};
+
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFieldKeys.value.includes(field)) return t(props.lang, key);
-  if (!localFieldInvalid(field)) return '';
-  // quick-261106-fbs:發生時間被清空是「未填」,不是「晚於現在」—— 給專屬文案;
-  // 本地未來時間與後端 fields.occurredAt 仍走 FIELD_ERROR_COPY 的 cashErrOccurredAt。
-  if (field === 'occurredAt' && !occurredAt.value) return t(props.lang, 'cashErrOccurredAtRequired');
+  const serverInvalid = serverFieldKeys.value.includes(field);
+  if (!serverInvalid && !localFieldInvalid(field)) return '';
+  if (field === 'occurredAt') {
+    const issue = occurredAtIssue();
+    if (issue === 'required' || issue === 'tooEarly') return t(props.lang, OCCURRED_AT_ISSUE_COPY[issue]);
+  }
   return t(props.lang, key);
 }
 

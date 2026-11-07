@@ -181,6 +181,9 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrNote: '備註最多 500 字。',
     // Phase 04.2(04.2-02 option-recommended):POST /trades 拒絕早於最近一筆未沖銷股數調整的 executedAt。
     tradeErrExecutedAt: '成交時間不可晚於現在,也不可早於這檔標的最近一筆股數調整的除權日。',
+    // quick-261107-1j4(裁決 3B):成交時間空白 / 早於 1900-01-01 各有專屬文案(後端 fields.executedAt 下限)。
+    tradeErrExecutedAtRequired: '請填寫成交時間。',
+    tradeErrExecutedAtTooEarly: '成交時間不可早於 1900-01-01。',
     // 底部錯誤:依 error.code 分派,絕不假設錯誤出現順序。
     tradeErrOversell: '持倉不足，無法賣出這個數量，交易未記錄。請調整數量後再送出。',
     tradeErrAssetNotFound: '這個標的不存在或目前不可交易，交易未記錄。請重新選擇標的。',
@@ -268,6 +271,8 @@ export const I18N: Record<Lang, Record<string, string>> = {
     cashErrAmount: '金額必須大於 0、不超過 1,000,000,000,000,最多 8 位小數。',
     cashErrOccurredAt: '發生時間不可晚於現在。',
     cashErrOccurredAtRequired: '請填寫發生時間。',
+    // quick-261107-1j4(裁決 3B):後端 fields.occurredAt 的 1900-01-01 下限。
+    cashErrOccurredAtTooEarly: '發生時間不可早於 1900-01-01。',
     cashErrValidation: '有欄位不符合規則,這筆紀錄未寫入。請檢查上方欄位後再送出。',
     cashErrKeyReused: '這次送出的內容與前一次重試不一致,這筆紀錄未寫入。請確認欄位後重新送出。',
     cashErrAlreadyReversed: '這筆已經沖銷過了,這次沒有寫入新紀錄。列表已重新整理。',
@@ -605,6 +610,9 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrNote: 'Note must be 500 characters or fewer.',
     // Phase 04.2 (04.2-02 option-recommended): POST /trades rejects executedAt before the latest non-reversed share adjustment.
     tradeErrExecutedAt: "Executed at cannot be in the future or earlier than this asset's latest share adjustment ex-date.",
+    // quick-261107-1j4 (decision 3B): dedicated copy for an empty executedAt and one before 1900-01-01.
+    tradeErrExecutedAtRequired: 'Executed at is required.',
+    tradeErrExecutedAtTooEarly: 'Executed at cannot be earlier than 1900-01-01.',
     tradeErrOversell: 'Not enough holding for this quantity; nothing was recorded. Adjust the quantity and submit again.',
     tradeErrAssetNotFound: 'That symbol does not exist or is not tradeable; nothing was recorded. Pick another symbol.',
     tradeErrValidation: 'Some fields are invalid; nothing was recorded. Check the fields above and submit again.',
@@ -691,6 +699,8 @@ export const I18N: Record<Lang, Record<string, string>> = {
     cashErrAmount: 'Amount must be greater than 0, at most 1,000,000,000,000, with at most 8 decimals.',
     cashErrOccurredAt: 'Occurred at cannot be in the future.',
     cashErrOccurredAtRequired: 'Occurred at is required.',
+    // quick-261107-1j4 (decision 3B): backend fields.occurredAt floor of 1900-01-01.
+    cashErrOccurredAtTooEarly: 'Occurred at cannot be earlier than 1900-01-01.',
     cashErrValidation: 'Some fields are invalid; nothing was recorded. Check the fields above and submit again.',
     cashErrKeyReused: 'This submission differs from the previous retry, so nothing was recorded. Check the fields and submit again.',
     cashErrAlreadyReversed: 'This entry has already been reversed; nothing new was recorded. The list has been refreshed.',

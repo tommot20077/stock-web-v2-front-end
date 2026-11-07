@@ -302,8 +302,9 @@
                 />
                 <p id="trade-executed-at-hint" class="hint">{{ t(lang, 'tradeExecutedAtHint') }}</p>
                 <!--
-                  executedAt 在後端沒有任何 Bean Validation 註解,所以**不會**出現在
-                  `fields` 裡;這個節點承接的是前端自檢(未來時間)之外的意外情況。
+                  後端以 `fields.executedAt` 回兩種錯誤:早於 1900-01-01(quick-261107-1j4)與早於這檔標的
+                  最近一筆未沖銷股數調整的除權日(04.2-02);晚於現在 5 分鐘以上則是無 fields 的 400。
+                  這個節點承接前者,文案依目前輸入值歸類(value 不入 DOM)。
                 -->
                 <p
                   v-if="fieldErrorText('executedAt')"
@@ -351,7 +352,7 @@
               </div>
             </template>
 
-            <div v-if="validationError" class="form-error" role="alert">{{ validationError }}</div>
+            <div v-if="validationError" class="form-error" role="alert" data-testid="ticket-form-error">{{ validationError }}</div>
           </div>
 
           <div class="right">
@@ -620,6 +621,7 @@ import {
   portfolioRevision,
 } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
+import { classifyInstantInput } from '../eventTimeBounds';
 import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
@@ -1026,11 +1028,21 @@ const sellPrecheckError = computed(() => {
   return '';
 });
 
-/** 前端自檢(Q8.4 的 (ii)):擋未來時間。**這是 UX,不是後端驗證的替代品**。 */
+/**
+ * 前端自檢(Q8.4 的 (ii) + quick-261107-1j4):依目前輸入歸類為空白 / 早於 1900-01-01 / 未來,各給專屬文案。
+ * 下限以 instant(UTC 1900-01-01 00:00)比較,與後端 `fields.executedAt` 一致。**這是 UX,不是後端驗證的替代品**。
+ */
+const executedAtIssue = computed(() => classifyInstantInput(executedAt.value, Date.now()));
+
+const EXECUTED_AT_ISSUE_COPY = {
+  required: 'tradeErrExecutedAtRequired',
+  tooEarly: 'tradeErrExecutedAtTooEarly',
+  future: 'tradeErrExecutedAt',
+} as const;
+
 const executedAtError = computed(() => {
-  const parsed = executedAt.value ? new Date(executedAt.value) : null;
-  if (!parsed || Number.isNaN(parsed.getTime())) return t(props.lang, 'tradeErrExecutedAt');
-  return parsed.getTime() > Date.now() ? t(props.lang, 'tradeErrExecutedAt') : '';
+  const issue = executedAtIssue.value;
+  return issue ? t(props.lang, EXECUTED_AT_ISSUE_COPY[issue]) : '';
 });
 
 const feeError = computed(() => (fee.value < 0 || !Number.isFinite(fee.value) ? t(props.lang, 'tradeErrFee') : ''));
@@ -1110,6 +1122,9 @@ function fieldErrorId(field: string): string {
 
 function fieldErrorText(field: string): string {
   if (!fieldErrorKeys.value.includes(field)) return '';
+  // quick-261107-1j4:後端 fields.executedAt 同時涵蓋 1900-01-01 下限與股數調整時序;依**目前輸入值**
+  // 歸類 —— 輸入早於下限 → 專屬文案,否則維持涵蓋「未來 / 早於最近除權日」的既有文案。
+  if (field === 'executedAt' && executedAtIssue.value === 'tooEarly') return t(props.lang, 'tradeErrExecutedAtTooEarly');
   const key = FIELD_ERROR_COPY[field];
   return key ? t(props.lang, key) : '';
 }
