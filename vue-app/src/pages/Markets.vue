@@ -48,7 +48,8 @@
     </div>
 
     <div class="card">
-      <table>
+      <!-- tabindex="-1":只供選擇器在觸發列消失時回填焦點(WR-08),不進 Tab 順序 -->
+      <table ref="tableEl" tabindex="-1" data-testid="markets-table">
         <thead>
           <tr>
             <th style="width:36px"></th>
@@ -151,6 +152,7 @@
       :lists="lists"
       :loading="listsLoading"
       :load-error="listsError"
+      :fallback-focus="tableEl"
       @close="closePicker"
       @changed="onListChanged"
       @created="onListCreated"
@@ -219,6 +221,11 @@ function onListCreated(created: WatchlistDto) {
 
 const pickerSymbol = ref<string | null>(null);
 const pickerAnchor = ref<HTMLElement | null>(null);
+/**
+ * 04.2-review WR-08:「觀察清單」tab 與 ★ chip 下,取消勾選會讓觸發列(含星號)卸載;
+ * 選擇器關閉時改把焦點還給行情表本身(同一張表、使用者剛操作的位置附近,一直都在)。
+ */
+const tableEl = ref<HTMLTableElement | null>(null);
 
 function togglePicker(sym: string, event: MouseEvent) {
   if (pickerSymbol.value === sym) {
@@ -459,7 +466,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tab:hover { color: var(--fg); }
 .tab.active { border-bottom-color: var(--accent); color: var(--fg); font-weight: 600; }
 .tab-count { background: var(--surface2); color: var(--fg-mute); border-radius: 10px; padding: 1px 6px; font-size: 10px; font-weight: 500; }
-.tab.active .tab-count { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent); }
+.tab.active .tab-count { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent-text); }
 
 .live {
   flex: none; white-space: nowrap;
@@ -468,12 +475,12 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   border-radius: 99px; font-size: 11px; font-weight: 600; letter-spacing: .6px;
   color: var(--fg-mute); cursor: pointer; margin-bottom: 8px;
 }
-.live.on { color: var(--up-text); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
+.live.on { color: var(--success); border-color: color-mix(in oklch, var(--success) 35%, var(--border)); }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
-.live.on .live-dot { background: var(--up); animation: pulse 1.4s ease-in-out infinite; }
+.live.on .live-dot { background: var(--success); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--up) 50%, transparent); }
-  50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--up) 0%, transparent); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 50%, transparent); }
+  50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--success) 0%, transparent); }
 }
 
 .wl-load-error {
@@ -502,6 +509,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .ttl { font-size: 14px; font-weight: 600; }
 table { width: 100%; font-size: 13px; }
+/* 選擇器回填焦點(WR-08)時鍵盤使用者看得到落點;內縮避免被卡片圓角裁掉 */
+table:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 thead tr {
   background: var(--surface2); color: var(--fg-dim);
   font-size: 11px; text-align: left; text-transform: uppercase; letter-spacing: 0.4px;
@@ -509,7 +518,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; cursor: pointer; user-select: none; transition: color .15s; }
 thead th:hover { color: var(--fg); }
 thead th:first-child { padding-left: 16px; cursor: default; }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 
 tbody tr.row { border-top: 1px solid var(--border); cursor: pointer; transition: background .15s; }
@@ -533,7 +542,7 @@ tbody td { padding: 11px 0; }
   border-radius: 8px;
   cursor: pointer;
 }
-.star-btn.on { color: var(--accent); }
+.star-btn.on { color: var(--accent-text); }
 .star-btn:hover { background: var(--surface2); }
 .star-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .quick-order {
@@ -543,7 +552,7 @@ tbody td { padding: 11px 0; }
   transition: all .15s; padding: 0;
 }
 .quick-order:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
-.row:hover .quick-order { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
+.row:hover .quick-order { color: var(--accent-text); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
 .order-unavailable {
   display: inline-flex;
   align-items: center;

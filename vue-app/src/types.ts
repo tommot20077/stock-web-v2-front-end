@@ -71,6 +71,10 @@ export interface Position {
   avg: number;
   price: number;
   sector: string;
+  /** quick-261107-1j4 E2:mock 持倉的資產類別(同 mock `AssetDto.assetType`);缺值時 mock HoldingDto 以 STOCK 代替。 */
+  assetType?: string;
+  /** quick-261107-1j4 E2:mock 持倉的市場(同 mock `AssetDto.market`);缺值 → HoldingDto.market = null。 */
+  market?: string | null;
 }
 
 export interface Trade {

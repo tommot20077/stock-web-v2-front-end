@@ -485,8 +485,8 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .px-chg { font-size: 13px; font-weight: 500; }
 .px-chg.up { color: var(--up-text); }
 .px-chg.dn { color: var(--dn); }
-.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: rgba(22,163,74,0.12); color: var(--up-text); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
-.live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--up); animation: pulse 1.6s infinite; }
+.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: color-mix(in oklch, var(--success) 12%, transparent); color: var(--success); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
+.live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .top-actions { display: flex; gap: 8px; }
 
@@ -498,7 +498,7 @@ function signedFmt(n: number | null | undefined, d = 2) {
 }
 .btn-watch:hover { background: var(--surface2); }
 .btn-watch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.btn-watch.on .watch-glyph { color: var(--accent); }
+.btn-watch.on .watch-glyph { color: var(--accent-text); }
 .btn-accent { color: #fff; border: 0; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 /* 買賣方向鈕:按鈕底色 token + 白字(quick-261106-fbs 2c-addendum),紅漲綠跌時隨 data-up-color 對調。 */
 .btn-accent.buy { background: var(--btn-up-bg); color: #fff; }

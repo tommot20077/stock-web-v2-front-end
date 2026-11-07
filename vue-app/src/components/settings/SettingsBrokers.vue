@@ -40,7 +40,7 @@
           <div class="key-r">
             <button class="btn-ghost" :disabled="k.testing" @click="testKey(k)">
               <span v-if="k.testing">{{ t(lang, 'testing') }}</span>
-              <span v-else-if="k.lastTest === 'ok'" style="color:var(--up-text)">✓ {{ t(lang, 'connected') }}</span>
+              <span v-else-if="k.lastTest === 'ok'" style="color:var(--success)">✓ {{ t(lang, 'connected') }}</span>
               <span v-else-if="k.lastTest === 'fail'" style="color:var(--dn)">! {{ lang === 'zh' ? '失敗' : 'Failed' }}</span>
               <span v-else>{{ t(lang, 'testConnection') }}</span>
             </button>
@@ -167,21 +167,21 @@ defineProps<{
   font-weight: 500; letter-spacing: .2px;
   white-space: nowrap;
 }
-.chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
-.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
+.chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent-text); }
+.chip.live { background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
 .chip.trade { background: color-mix(in oklch, #8B5CF6 18%, transparent); color: #8B5CF6; }
 .micro {
   background: transparent; border: 0; padding: 1px 6px; border-radius: 4px;
   font-size: 10px; color: var(--fg-mute); cursor: pointer; font-family: inherit;
   text-transform: uppercase; letter-spacing: .3px;
 }
-.micro:hover { color: var(--accent); background: var(--surface); }
+.micro:hover { color: var(--accent-text); background: var(--surface); }
 .btn-ghost {
   background: var(--surface2); border: 1px solid var(--border); padding: 6px 12px;
   border-radius: 6px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }
-.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
 .btn-ghost:disabled {
   opacity: .48; cursor: not-allowed; color: var(--fg-mute);
   border-color: var(--border); background: color-mix(in oklch, var(--surface2) 70%, transparent);

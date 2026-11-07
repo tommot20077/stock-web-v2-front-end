@@ -198,22 +198,44 @@ describe('OrderTicket 骨架契約 — 三步驟與欄位(U-01 / D-02 / D-03 / D
     expect(dots.children).toHaveLength(3);
   });
 
-  it('API mode 不渲染訂單類型 / TIF / 交易後現金(D-04:隱藏,不留空版位)', async () => {
-    await mountTicket({ mode: 'api' });
+  // quick-261107-1j4(Yuan 2026-11-07 裁決 3B):訂單類型(市價 / 限價)與有效時間(當日 / 長效)是委託單概念,
+  // 手動紀錄已成交交易用不到 —— 兩個模式都移除,review 畫面也不再有那一列。
+  for (const mode of ['mock', 'api'] as const) {
+    it(`${mode} mode 沒有訂單類型 / 有效時間控件,review 畫面也沒有那一列(quick-261107-1j4 B3)`, async () => {
+      await mountTicket({ mode });
 
+      for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
+        expect(buttonTexts(), `${mode} mode 不得出現 ${label} 控件`).not.toContain(label);
+      }
+      expect(document.getElementById('trade-ord-type-mkt'), '訂單類型的 label 目標').toBeNull();
+      expect(document.getElementById('trade-tif-day'), '有效時間的 label 目標').toBeNull();
+
+      await clickDeep(requireTestid('ticket-review-advance'));
+      const grid = document.body.querySelector<HTMLElement>('.rev-grid');
+      expect(grid, `${mode} mode 應進到 review`).toBeTruthy();
+      const labels = [...grid!.querySelectorAll('span')].map(span => span.textContent?.trim());
+      expect(labels, 'review 不得有訂單類型列').not.toContain('Type');
+      expect(grid!.textContent).not.toMatch(/\b(Market|Limit|DAY|GTC)\b/);
+    });
+  }
+
+  // 兩個獨立測試:testSetup.ts 的 mock 預設是 beforeEach 的 stubEnv,測試中途 cleanupMounted()
+  // (unstubAllEnvs)會把它一起清掉,`VITE_DATA_MODE=api npm test` 下第二次掛載就不再是 mock。
+  it('API mode 不渲染交易後現金(D-04:隱藏,不留空版位)', async () => {
+    await mountTicket({ mode: 'api' });
     expect(bodyText()).not.toContain(t('en', 'cashAfter'));
-    for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
-      expect(buttonTexts(), `API mode 不得出現 ${label} 控件`).not.toContain(label);
-    }
   });
 
-  it('mock mode 仍保留訂單類型 / TIF / 交易後現金(D-04:mock 四樣全部保留)', async () => {
+  it('mock mode 保留交易後現金(D-04)', async () => {
     await mountTicket();
-
     expect(bodyText()).toContain(t('en', 'cashAfter'));
-    for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
-      expect(buttonTexts(), `mock mode 應保留 ${label} 控件`).toContain(label);
-    }
+  });
+
+  it('原始碼不再有 ordType / tif 狀態(quick-261107-1j4 B3)', () => {
+    expect(orderTicketSource).not.toMatch(/\bordType\b/);
+    expect(orderTicketSource).not.toMatch(/\btif\b/);
+    expect(orderTicketSource).not.toContain('trade-ord-type');
+    expect(orderTicketSource).not.toContain('trade-tif');
   });
 
   it('兩個 mode 的畫面都沒有委託單生命週期語意(judgment §1 / D-09)', async () => {
@@ -1004,6 +1026,7 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     currency: 'USD',
     assetType: 'STOCK',
     sector: null,
+    market: 'US',
     baseCurrency: 'TWD',
     marketValueInBase: null,
     unrealizedPnlInBase: null,
@@ -1926,5 +1949,49 @@ describe('OrderTicket 送出路徑 — D-16 未知 fields key(F-3)', () => {
     // fields 的 value 與後端 message 一樣不得進入 DOM(T-04-09)。
     expect(bodyText()).not.toContain('required header is missing');
     expect(bodyText()).not.toContain('BackendMessageMustNotReachTheDom');
+  });
+});
+
+// =====================================================================================
+// quick-261107-1j4(Yuan 2026-11-07 裁決 3B / T2.4):成交時間 1900-01-01 下限與三種文案。
+// 後端 `POST /api/v1/trades` 對早於 1900-01-01T00:00:00Z 的 executedAt 回
+// 400 `fields.executedAt`;前端自檢以同一個 instant 比較,並分「空白 / 過早 / 未來」三種文案。
+// =====================================================================================
+
+describe('OrderTicket 成交時間自檢 — 空白 / 過早 / 未來(quick-261107-1j4)', () => {
+  for (const mode of ['mock', 'api'] as const) {
+    it(`${mode} mode:清空 → 請填寫;1800 年 → 不可早於 1900-01-01;未來 → 既有文案`, async () => {
+      await mountTicket({ mode });
+      const input = requireInput('ticket-executed-at');
+
+      await setInput(input, '');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAtRequired'));
+      expect(advanceButton().disabled, '空白時不得前進到確認步驟').toBe(true);
+
+      await setInput(input, '1800-01-01T00:00');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAtTooEarly'));
+      expect(advanceButton().disabled, '過早時不得前進到確認步驟').toBe(true);
+
+      await setInput(input, '2999-01-01T00:00');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+      expect(advanceButton().disabled, '未來時不得前進到確認步驟').toBe(true);
+    });
+  }
+
+  it('後端 400 fields.executedAt 且目前輸入合法 → 欄位節點顯示既有文案,value 不入 DOM', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { executedAt: 'must not be before 1900-01-01' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    const node = requireTestid('ticket-field-error-executedAt');
+    expect(node.textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+    expect(requireInput('ticket-executed-at').getAttribute('aria-invalid')).toBe('true');
+    expect(bodyText()).not.toContain('must not be before 1900-01-01');
   });
 });

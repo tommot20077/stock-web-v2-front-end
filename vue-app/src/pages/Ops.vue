@@ -9,7 +9,7 @@
     <div class="card stat health">
       <span class="hdot" />
       <div class="l">All services</div>
-      <div class="v" style="color:var(--up-text)">Healthy</div>
+      <div class="v" style="color:var(--success)">Healthy</div>
     </div>
 
     <div class="card" style="grid-column: span 7; padding: 20px">
@@ -28,7 +28,7 @@
     <div class="card" style="grid-column: span 5; padding: 20px">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'oplog') }}</div>
       <div v-for="(o, i) in logs" :key="o.id" class="log" :style="{ borderTop: i ? '1px solid var(--border)' : '0' }">
-        <span class="ldot" :style="{ background: o.status === 'success' ? 'var(--up)' : 'var(--dn)' }" />
+        <span class="ldot" :style="{ background: o.status === 'success' ? 'var(--success)' : 'var(--dn)' }" />
         <div style="flex:1">
           <div style="font-weight:500">{{ o.operation }}</div>
           <div style="color:var(--fg-dim);font-size:11px;margin-top:2px">{{ formatLogTime(o.time) }} · {{ o.actor }} · {{ formatDuration(o.durationMs) }}</div>
@@ -152,13 +152,13 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .fill { height: 100%; }
 .health { display: flex; flex-direction: column; justify-content: center; align-items: center; }
-.hdot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); margin-bottom: 6px; }
-.health .v { color: var(--up-text); font-size: 13px; }
+.hdot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); margin-bottom: 6px; }
+.health .v { color: var(--success); font-size: 13px; }
 .ttl { font-size: 14px; font-weight: 600; }
 .run-status {
   margin-bottom: 12px; border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border));
   background: color-mix(in oklch, var(--accent) 8%, transparent);
-  color: var(--accent); border-radius: 8px; padding: 8px 10px;
+  color: var(--accent-text); border-radius: 8px; padding: 8px 10px;
   font-size: 12px; font-weight: 600;
 }
 .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -10,7 +10,7 @@
 
 ## 這是什麼專案
 
-Vue 3 股票交易前端,對接 sibling Java 後端(Yuan 本機為 `../../java/stock-web-v2`;cloud 環境為 `../stock-web-v2`)。`VITE_DATA_MODE` 切換 mock / api(未設為 mock):auth、交易、持倉、現金、股利 / 股數調整、行情、觀察清單、個人設定、回測已接真 API;Ops 與 AI Access 後端尚無端點,仍為 Preview。
+Vue 3 股票交易前端,對接 sibling Java 後端(後端 repo 根:Yuan 本機為 `../../java/stock-web-v2`;cloud 環境為 `../stock-web-v2`;兩邊路徑對照見後端 `ai-docs/judgment.md` §8)。`VITE_DATA_MODE` 切換 mock / api(未設為 mock):auth、交易、持倉、現金、股利 / 股數調整、行情、觀察清單、個人設定、回測已接真 API;Ops 與 AI Access 後端尚無端點,仍為 Preview。
 
 ⚠️ **真正的專案根在 `vue-app/`**。repo root 的 `docs/`、`references/`(以及本機可能有、已 gitignore 的 `screenshots/`、`*.log`)是文件與雜物,不是程式碼;`npm` 命令一律在 `vue-app/` 下跑。
 
@@ -37,11 +37,11 @@ npx playwright test e2e/tests/layout.spec.ts             # 動到版面 / CSS �
 
 - `docs/api-contracts/mock-to-real-contract.md`(近千行,大檔)— Backtest/Ops/AI-Access 端點規格與錯誤碼;檔首有 2026-11-06 核對狀態(Ops / AI Access 後端未實作)。
 - `docs/superpowers/plans/`(最大 1630 行)、`docs/superpowers/specs/` — 2026-05 的歷史計畫/設計,不隨程式維護,查針對段落。
-- 後端契約與制度:`../../java/stock-web-v2/ai-docs/browser-auth-contract.md`(auth/CSRF 契約)、`../../java/stock-web-v2/ai-docs/judgment.md`(判斷準則)、`../../java/stock-web-v2/ai-docs/task-briefs.md`(交辦範本);交易 / 持倉 / 現金契約 `trading-portfolio-contract.md`、觀察清單契約 `watchlist-contract.md` 同目錄。
+- 後端契約與制度(皆在後端 repo 根的 `ai-docs/`):`browser-auth-contract.md`(auth/CSRF 契約)、`judgment.md`(判斷準則)、`task-briefs.md`(交辦範本);交易 / 持倉 / 現金契約 `trading-portfolio-contract.md`、觀察清單契約 `watchlist-contract.md` 同目錄。
 - `references/react-prototypes/` — 舊 React 視覺原型,僅供 UI 參考。
 
 ## 學習與 Git
 
 - 踩坑一行進 `docs/LEARNINGS.md`(格式見該檔);同坑第 2 次 → 晉升進本檔鐵律或對應文件。
-- Commit:Conventional Commits,繁中 subject;type/subject 規則同後端 `git-convention.md`,**scope 用 phase 編號(NN-NN)**(後端 git-convention 文字寫 module scope,但 GSD 工作兩邊實務都用 phase / quick id)(例:`feat(02-05): ...`;quick task 用 `quick-YYMMDD-xxx`,例:`fix(quick-261106-fbs): ...`)。
+- Commit:Conventional Commits,繁中 subject;type / subject / scope 規則同後端 `ai-docs/git-convention.md`:**GSD 工作 scope 用 phase / plan id(NN-NN)或 quick id**(例:`feat(02-05): ...`、`fix(quick-261106-fbs): ...`),非 GSD 變更才用 module scope。
 - 本 repo CI(`.github/workflows/`,Node 20)在 develop 的 push / PR 跑 `npm ci → lint → test → build`;PR 開向 `develop`。

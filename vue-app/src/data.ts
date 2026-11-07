@@ -33,12 +33,12 @@ export const BONDS: Bond[] = [
 ];
 
 export const POSITIONS: Position[] = [
-  { sym: 'AAPL', name: 'Apple Inc.', qty: 120, avg: 178.20, price: 218.40, sector: 'Tech' },
-  { sym: 'NVDA', name: 'NVIDIA Corp.', qty: 40, avg: 480.10, price: 1142.83, sector: 'Tech' },
-  { sym: '2330.TW', name: '台積電', qty: 1000, avg: 720.00, price: 945.00, sector: 'Tech' },
-  { sym: 'BTC', name: 'Bitcoin', qty: 0.42, avg: 42180, price: 67842.40, sector: 'Crypto' },
-  { sym: 'ETH', name: 'Ethereum', qty: 6.5, avg: 2180, price: 3482.18, sector: 'Crypto' },
-  { sym: 'MSFT', name: 'Microsoft', qty: 30, avg: 348.40, price: 432.85, sector: 'Tech' },
+  { sym: 'AAPL', name: 'Apple Inc.', qty: 120, avg: 178.20, price: 218.40, sector: 'Tech', assetType: 'STOCK', market: 'US' },
+  { sym: 'NVDA', name: 'NVIDIA Corp.', qty: 40, avg: 480.10, price: 1142.83, sector: 'Tech', assetType: 'STOCK', market: 'US' },
+  { sym: '2330.TW', name: '台積電', qty: 1000, avg: 720.00, price: 945.00, sector: 'Tech', assetType: 'STOCK', market: 'TW' },
+  { sym: 'BTC', name: 'Bitcoin', qty: 0.42, avg: 42180, price: 67842.40, sector: 'Crypto', assetType: 'CRYPTO', market: 'CRYPTO' },
+  { sym: 'ETH', name: 'Ethereum', qty: 6.5, avg: 2180, price: 3482.18, sector: 'Crypto', assetType: 'CRYPTO', market: 'CRYPTO' },
+  { sym: 'MSFT', name: 'Microsoft', qty: 30, avg: 348.40, price: 432.85, sector: 'Tech', assetType: 'STOCK', market: 'US' },
 ];
 
 export const TRADES: Trade[] = [

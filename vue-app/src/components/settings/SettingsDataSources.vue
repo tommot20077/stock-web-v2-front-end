@@ -67,7 +67,7 @@
         <div class="key-r">
           <button class="btn-ghost" :disabled="k.testing" @click="testKey(k)">
             <span v-if="k.testing">{{ t(lang, 'testing') }}</span>
-            <span v-else-if="k.lastTest === 'ok'" style="color:var(--up-text)">✓ {{ t(lang, 'connected') }}</span>
+            <span v-else-if="k.lastTest === 'ok'" style="color:var(--success)">✓ {{ t(lang, 'connected') }}</span>
             <span v-else-if="k.lastTest === 'fail'" style="color:var(--dn)">! {{ lang === 'zh' ? '失敗' : 'Failed' }}</span>
             <span v-else>{{ t(lang, 'testConnection') }}</span>
           </button>
@@ -133,11 +133,11 @@ defineProps<{
   font-weight: 500; letter-spacing: .2px;
   white-space: nowrap;
 }
-.chip.livefeed { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
+.chip.livefeed { background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
 .chip.cached { background: var(--surface); color: var(--fg-mute); }
-.chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
+.chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent-text); }
 .chip.readonly { background: var(--surface); color: var(--fg-dim); }
-.chip.ok { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
+.chip.ok { background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
 .chip.warn { background: color-mix(in oklch, var(--dn) 14%, transparent); color: var(--dn); }
 .chip.mute { color: var(--fg-mute); }
 .sw { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }
@@ -173,7 +173,7 @@ defineProps<{
   font-size: 10px; color: var(--fg-mute); cursor: pointer; font-family: inherit;
   text-transform: uppercase; letter-spacing: .3px;
 }
-.micro:hover { color: var(--accent); background: var(--surface); }
+.micro:hover { color: var(--accent-text); background: var(--surface); }
 .tag-mute { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--surface); color: var(--fg-dim); }
 .key-r { display: flex; gap: 6px; flex-shrink: 0; }
 .btn-ghost {
@@ -181,7 +181,7 @@ defineProps<{
   border-radius: 6px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }
-.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
 .btn-ghost:disabled {
   opacity: .48; cursor: not-allowed; color: var(--fg-mute);
   border-color: var(--border); background: color-mix(in oklch, var(--surface2) 70%, transparent);

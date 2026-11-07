@@ -432,7 +432,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   display: inline-flex; align-items: center; height: 20px;
   border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--border));
   border-radius: 999px; padding: 0 8px; font-size: 10px; font-weight: 700;
-  color: var(--accent); background: color-mix(in oklch, var(--accent) 10%, transparent);
+  color: var(--accent-text); background: color-mix(in oklch, var(--accent) 10%, transparent);
   letter-spacing: .4px;
 }
 .ttl { font-size: 13px; font-weight: 600; }
@@ -450,7 +450,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   font-family: inherit; transition: all .15s;
 }
 .btn-ghost:hover { color: var(--fg); border-color: var(--fg-mute); border-style: solid; }
-.btn-ghost.active { color: var(--accent); border-color: var(--accent); border-style: solid; background: color-mix(in oklch, var(--accent) 8%, transparent); }
+.btn-ghost.active { color: var(--accent-text); border-color: var(--accent); border-style: solid; background: color-mix(in oklch, var(--accent) 8%, transparent); }
 .btn-ghost .caret { font-size: 10px; opacity: .7; }
 .btn-ghost .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 2px; }
 .editor-wrap { margin-top: 12px; animation: slideDown .2s ease-out; }

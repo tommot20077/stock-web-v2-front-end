@@ -45,12 +45,14 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import type { Tweaks } from '../useTweaks';
+import { ACCENT_PRESETS } from '../accentTokens';
 
 defineProps<{ tweaks: Tweaks }>();
 const emit = defineEmits<{ set: [{ key: string; value: any }] }>();
 
 const open = ref(false);
-const accents = ['#ff6600', '#3b82f6', '#10b981', '#a855f7', '#ef4444', '#f59e0b', '#0ea5e9'];
+// 色票順序與值的單一來源是 accentTokens.ts(每個 preset 另配淺 / 深 --accent-text)。
+const accents = ACCENT_PRESETS.map(p => p.accent);
 </script>
 
 <style scoped>

@@ -181,6 +181,11 @@ export interface HoldingDto {
   assetType: string | null;
   /** Phase 04.1:產業;資產沒有產業資料時為 null。 */
   sector: string | null;
+  /**
+   * quick-261107-1j4 E2:資產的交易市場代號(後端 `assets.market` 原值,與 `AssetDto.market` 同值域,例如 US / TW / JP /
+   * DE / CRYPTO / FX);查無資產屬性或資產未設定市場時為 null。前端以 `marketDayRuleOf` 決定除權日的市場今天,null → UTC。
+   */
+  market: string | null;
   /** Phase 04.1:基準幣 ISO 代碼,與 PortfolioSummaryDto.baseCurrency 同值。 */
   baseCurrency: string;
   /** Phase 04.1:市值換算為基準幣的金額;缺匯率時為 null(該列不計入 summary 總額)。 */

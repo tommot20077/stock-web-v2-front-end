@@ -1,5 +1,5 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
-import { isMockHoldingEventTradeRow, listMockHoldingEventsForTests } from './holdingEventApi';
+import { isMockHoldingEventTradeRow, listMockHoldingEvents } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type {
   AllocationSliceDto,
@@ -163,8 +163,10 @@ function holdingFrom(position: Position): HoldingDto {
     priceTime: null,
     lastUpdated: null,
     currency: MOCK_CURRENCY,
-    assetType: 'STOCK',
+    // quick-261107-1j4 E2:種子持倉帶 assetType / market;自訂或舊形狀的持倉缺值 → STOCK / null(對話框退回 UTC)。
+    assetType: position.assetType ?? 'STOCK',
     sector: position.sector,
+    market: position.market ?? null,
     baseCurrency: MOCK_CURRENCY,
     marketValueInBase: marketValue,
     // mock 單一幣別(原幣 = 基準幣),基準幣未實現損益即原幣值,與 marketValueInBase 同做法。
@@ -303,7 +305,7 @@ export function createMockPortfolioApi(): PortfolioApi {
       return useMockPortfolioStore().lastFill;
     },
     get holdingEvents() {
-      return listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+      return listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
     },
     isHoldingEventTrade(trade) {
       return isMockHoldingEventTradeRow(trade);
@@ -339,7 +341,7 @@ export function createMockPortfolioApi(): PortfolioApi {
         .map((trade, index) => ({ trade, index }))
         .filter(({ trade }) => !isMockHoldingEventTradeRow(trade))
         .map(({ trade, index }) => activityFromTrade(trade, index));
-      const fromEvents = listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+      const fromEvents = listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
       const matched = applyActivityParams([...fromTrades, ...fromEvents], params);
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;

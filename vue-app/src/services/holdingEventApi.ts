@@ -208,7 +208,7 @@ let mockDividends: StoredDividend[] = [];
 let mockAdjustments: StoredAdjustment[] = [];
 let dividendKeys = new Map<string, DividendKeyRecord>();
 let adjustmentKeys = new Map<string, AdjustmentKeyRecord>();
-/** 依建立順序記錄兩表事件的交錯次序,讓 `listMockHoldingEventsForTests()` 回傳穩定順序。 */
+/** 依建立順序記錄兩表事件的交錯次序,讓 `listMockHoldingEvents()` 回傳穩定順序。 */
 let creationOrder: Array<{ table: 'dividend' | 'adjustment'; id: string }> = [];
 /**
  * 由本 mock 寫進 mock 交易列的 DIV 列(原始物件)。mock `listActivities` 以此排除重複 ——
@@ -312,7 +312,7 @@ function adjustmentToEvent(entry: StoredAdjustment): MockHoldingEvent {
  * 本 session 由 mock 記錄的事件(依建立順序),供 mock `listActivities` 與 Trades mock 模式合併。
  * 回傳 clone:呼叫端修改不會回灌 mock 狀態。
  */
-export function listMockHoldingEventsForTests(): MockHoldingEvent[] {
+export function listMockHoldingEvents(): MockHoldingEvent[] {
   return creationOrder.map(({ table, id }) => (table === 'dividend'
     ? dividendToEvent(mockDividends.find(candidate => candidate.id === id)!)
     : adjustmentToEvent(mockAdjustments.find(candidate => candidate.id === id)!)));

@@ -177,6 +177,11 @@ const props = defineProps<{
   lists: WatchlistDto[] | null;
   loading: boolean;
   loadError: ApiClientError | null;
+  /**
+   * 觸發鈕已被移出 DOM 時(例如 Markets「觀察清單」視圖取消勾選讓該列消失),關閉後焦點改落在這裡
+   * (04.2-review WR-08)。頁面傳一個穩定、可程式聚焦的元素;觸發鈕不會消失的頁面不必傳。
+   */
+  fallbackFocus?: HTMLElement | null;
 }>();
 
 const emit = defineEmits<{
@@ -318,6 +323,9 @@ async function submitCreate() {
   submitAttempted.value = true;
   if (createBusy.value || nameCheckError.value) return;
   const name = newName.value.trim();
+  // 04.2-review WR-10:await 期間選擇器可能被換到別的代號(watch 會 resetCreate),
+  // 一律加入送出當下的代號,不在 await 之後讀 props.symbol。
+  const symbol = props.symbol;
   const watchlist = getRuntimeApiClients().watchlist;
 
   createBusy.value = true;
@@ -337,7 +345,7 @@ async function submitCreate() {
   resetCreate();
   saving[created.id] = true;
   try {
-    emit('changed', await watchlist.addItem(created.id, props.symbol));
+    emit('changed', await watchlist.addItem(created.id, symbol));
   } catch (error) {
     recordItemFailure(created.id, error);
   } finally {
@@ -399,7 +407,10 @@ async function refocusRow(listId: string) {
 
 function requestClose(restoreFocus: boolean) {
   emit('close');
-  if (restoreFocus) props.anchor?.focus();
+  if (!restoreFocus) return;
+  // 04.2-review WR-08:觸發鈕已脫離 DOM 時 focus() 會讓焦點掉到 body,改給頁面提供的穩定元素。
+  if (props.anchor?.isConnected) props.anchor.focus();
+  else props.fallbackFocus?.focus();
 }
 
 function focusInitial() {
@@ -412,6 +423,8 @@ function reposition() {
   const panel = panelEl.value;
   const anchor = props.anchor;
   if (!panel || !anchor) return;
+  // 04.2-review WR-08:脫離 DOM 的觸發鈕 rect 全為 0,面板會跳到左上角;保留上次位置。
+  if (!anchor.isConnected) return;
   const rect = anchor.getBoundingClientRect();
   const width = panel.offsetWidth;
   const height = panel.offsetHeight;

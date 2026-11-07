@@ -77,9 +77,12 @@ export const useMockPortfolioStore = defineStore('mockPortfolio', {
       px: number;
       fee: number;
       sector: string;
+      /** quick-261107-1j4 E2:新建持倉的資產類別與市場(持股事件對話框的市場今天來源);可省略。 */
+      assetType?: string;
+      market?: string | null;
       note?: string;
     }): boolean {
-      const { sym, name, side, qty, px, fee, sector, note = '' } = opts;
+      const { sym, name, side, qty, px, fee, sector, assetType, market, note = '' } = opts;
       if (!Number.isFinite(qty) || !Number.isFinite(px) || !Number.isFinite(fee) || qty <= 0 || px <= 0) return false;
       const idx = this.positions.findIndex(p => p.sym === sym);
       if (side === 'BUY') {
@@ -90,7 +93,7 @@ export const useMockPortfolioStore = defineStore('mockPortfolio', {
           const newAvg = (p.qty * p.avg + qty * px) / newQty;
           this.positions[idx] = { ...p, qty: newQty, avg: newAvg, price: px };
         } else {
-          this.positions.unshift({ sym, name, qty, avg: px, price: px, sector });
+          this.positions.unshift({ sym, name, qty, avg: px, price: px, sector, assetType, market });
         }
       } else if (idx >= 0) {
         const p = this.positions[idx];

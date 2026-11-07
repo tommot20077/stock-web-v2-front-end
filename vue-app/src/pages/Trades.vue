@@ -330,6 +330,7 @@ import {
   type PortfolioRevisionCause,
 } from '../services/portfolioRevision';
 import { toLocalIso } from '../services/localTime';
+import { csvCell, type CsvValue } from '../csvCell';
 import type { Lang, Trade } from '../types';
 import type { PortfolioActivityKind } from '../services/apiTypes';
 
@@ -884,8 +885,6 @@ const mockEventRows = computed<PortfolioActivityDto[]>(() => {
 // reversal_of 為原紀錄日期,**不輸出 uuid**(T-04.2-44);reversed 為 `true` 或空。
 const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed'.split(',');
 
-type CsvValue = string | number | null | undefined;
-
 function downloadCsv(rows: CsvValue[][]) {
   const csv = [CSV_HEADER, ...rows]
     .map(row => row.map(csvCell).join(','))
@@ -983,11 +982,6 @@ function activityCsvRow(row: PortfolioActivityDto): CsvValue[] {
   ];
 }
 
-function csvCell(value: CsvValue) {
-  const text = String(value ?? '');
-  if (!/[",\n\r]/.test(text)) return text;
-  return `"${text.replace(/"/g, '""')}"`;
-}
 </script>
 
 <style scoped>
@@ -1027,7 +1021,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; }
 thead th.sortable { cursor: pointer; user-select: none; transition: color .15s; }
 thead th.sortable:hover { color: var(--fg); }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); transition: background .4s; }
 tbody td { padding: 11px 0; }

@@ -214,7 +214,8 @@ describe('Task 4 trade flow', () => {
     expect(notifications.notifications[0].text).toContain('filled');
   });
 
-  it('resets ticket side, order type, and TIF when reopened with a symbol-only preset', async () => {
+  // quick-261107-1j4 B3:訂單類型與有效時間已移除,只剩買賣方向需要重設。
+  it('resets ticket side when reopened with a symbol-only preset', async () => {
     const state = reactive({
       open: false,
       lang: 'en' as Lang,
@@ -224,20 +225,18 @@ describe('Task 4 trade flow', () => {
 
     await openTicket(state, { sym: 'AAPL', side: 'SELL' });
     clickButtonByText(document.body, 'Sell');
-    clickButtonByText(document.body, 'Limit');
-    clickButtonByText(document.body, 'GTC');
     await nextTick();
     expect(buttonByText(document.body, 'Sell').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'Limit').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'GTC').classList.contains('active')).toBe(true);
 
     await closeTicket(state);
     await openTicket(state, { sym: 'MSFT' });
 
     expect(buttonByText(document.body, 'Buy').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'Market').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'Day').classList.contains('active')).toBe(true);
     expect(document.body.textContent).toContain('Microsoft Corp.');
+    for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
+      expect([...document.body.querySelectorAll('button')].some(button => button.textContent?.trim() === label), label)
+        .toBe(false);
+    }
   });
 
   it('resets preset quantity when reopened with a different valid symbol', async () => {
@@ -413,7 +412,7 @@ describe('Task 4 trade flow', () => {
     expect(portfolio.trades).toHaveLength(initialTrades + 1);
   });
 
-  it('resets side, order type, and TIF when recording another trade', async () => {
+  it('resets side when recording another trade', async () => {
     const state = reactive({
       open: false,
       lang: 'en' as Lang,
@@ -424,9 +423,7 @@ describe('Task 4 trade flow', () => {
     portfolio.positions = customPositions();
 
     await openTicket(state, { sym: 'AAPL', side: 'SELL' });
-    clickButtonByText(document.body, 'Limit');
-    clickButtonByText(document.body, 'GTC');
-    await nextTick();
+    expect(buttonByText(document.body, 'Sell').classList.contains('active')).toBe(true);
     clickButtonByText(document.body, 'Review');
     await nextTick();
     clickButtonByText(document.body, 'Record trade');
@@ -435,8 +432,6 @@ describe('Task 4 trade flow', () => {
     await flushAsync();
 
     expect(buttonByText(document.body, 'Buy').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'Market').classList.contains('active')).toBe(true);
-    expect(buttonByText(document.body, 'Day').classList.contains('active')).toBe(true);
   });
 
   it('renders empty Positions without NaN, Infinity, or invalid percentage widths', async () => {

@@ -370,6 +370,61 @@ describe('createQuoteStream(api) — 重連與退避(D-23)', () => {
   });
 });
 
+describe('createQuoteStream(api) — WELCOME 逾時(04.2-review IN-07)', () => {
+  it('建立 socket 後 10 秒內沒有 WELCOME → 關閉該 socket、degraded,並依退避重連', async () => {
+    const h = apiHarness();
+    h.stream.watch(['AAPL']);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = h.sockets.last();
+    first.serverOpen();
+    expect(h.stream.status.value).toBe('connecting');
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(h.stream.status.value).toBe('connecting');
+    expect(first.closedWith).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.stream.status.value).toBe('degraded');
+    expect(first.closedWith).not.toBeNull();
+    expect(h.sockets.sockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.sockets.sockets).toHaveLength(2);
+    expect(h.stream.status.value).toBe('connecting');
+  });
+
+  it('10 秒內收到 WELCOME → 不觸發逾時,維持 live', async () => {
+    const h = apiHarness();
+    h.stream.watch(['AAPL']);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(9_000);
+    h.sockets.last().serverOpen();
+    h.sockets.last().serverSend({ type: 'WELCOME' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.stream.status.value).toBe('live');
+    expect(h.sockets.last().closedWith).toBeNull();
+    expect(h.sockets.sockets).toHaveLength(1);
+  });
+
+  it('逾時前 socket 已被關閉並重連:舊 socket 的計時器不影響新連線', async () => {
+    const h = apiHarness();
+    h.stream.watch(['AAPL']);
+    await vi.advanceTimersByTimeAsync(0);
+    h.sockets.last().serverClose(1006);
+    expect(h.stream.status.value).toBe('degraded');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.sockets.sockets).toHaveLength(2);
+    const second = h.sockets.last();
+    // 第一條 socket 建立後滿 10 秒(新連線才 9 秒):不得因舊計時器而關閉新 socket。
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(second.closedWith).toBeNull();
+    expect(h.stream.status.value).toBe('connecting');
+  });
+});
+
 describe('createQuoteStream(api) — 背景 / 前景與釋放延遲(D-23)', () => {
   it('hidden → close(1000)、idle 並保留訂閱;visible 且有消費者 → 重取 ticket 連線,WELCOME 後 resyncSeq 遞增', async () => {
     const h = apiHarness();

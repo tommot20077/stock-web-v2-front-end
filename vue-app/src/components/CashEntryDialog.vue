@@ -297,6 +297,7 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyCashEntryCreated } from '../services/portfolioRevision';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
+import { classifyInstantInput, type TimeFieldIssue } from '../eventTimeBounds';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
 import type { CashEntryDto, CashEntryType } from '../services/cashApi';
@@ -457,11 +458,15 @@ const amountValid = computed(() => {
   return Number.isFinite(value) && value > 0 && value <= AMOUNT_MAX;
 });
 
-/** 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。 */
+/**
+ * 發生時間的三態歸類(quick-261107-1j4):空白 / 早於 1900-01-01(與後端 fields.occurredAt 同一個 instant)/ 未來。
+ * 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。
+ */
+function occurredAtIssue(): TimeFieldIssue {
+  return classifyInstantInput(occurredAt.value, Date.now());
+}
 function isOccurredAtValid(): boolean {
-  if (!occurredAt.value) return false;
-  const time = new Date(occurredAt.value).getTime();
-  return Number.isFinite(time) && time <= Date.now();
+  return occurredAtIssue() === null;
 }
 const occurredAtValid = computed(() => isOccurredAtValid());
 
@@ -510,14 +515,25 @@ function localFieldInvalid(field: string): boolean {
   return false;
 }
 
+/**
+ * 發生時間依**目前輸入值**歸類文案(quick-261107-1j4,取代 quick-261106-fbs「清空才給專屬文案」的特例):
+ * 空白 → 請填寫;早於 1900-01-01 → 不可早於;其餘(未來,或後端 fields.occurredAt 但輸入看似合法)→ 不可晚於現在。
+ * 後端 fields 的 value 不入 DOM,只用 key 判斷欄位。
+ */
+const OCCURRED_AT_ISSUE_COPY: Record<'required' | 'tooEarly', string> = {
+  required: 'cashErrOccurredAtRequired',
+  tooEarly: 'cashErrOccurredAtTooEarly',
+};
+
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFieldKeys.value.includes(field)) return t(props.lang, key);
-  if (!localFieldInvalid(field)) return '';
-  // quick-261106-fbs:發生時間被清空是「未填」,不是「晚於現在」—— 給專屬文案;
-  // 本地未來時間與後端 fields.occurredAt 仍走 FIELD_ERROR_COPY 的 cashErrOccurredAt。
-  if (field === 'occurredAt' && !occurredAt.value) return t(props.lang, 'cashErrOccurredAtRequired');
+  const serverInvalid = serverFieldKeys.value.includes(field);
+  if (!serverInvalid && !localFieldInvalid(field)) return '';
+  if (field === 'occurredAt') {
+    const issue = occurredAtIssue();
+    if (issue === 'required' || issue === 'tooEarly') return t(props.lang, OCCURRED_AT_ISSUE_COPY[issue]);
+  }
   return t(props.lang, key);
 }
 
@@ -799,7 +815,7 @@ textarea.inp { resize: vertical; }
 
 .result { padding: 48px 32px; text-align: center; }
 .check {
-  width: 48px; height: 48px; border-radius: 50%; background: var(--up); color: #fff;
+  width: 48px; height: 48px; border-radius: 50%; background: var(--success); color: var(--on-success);
   font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
   margin-bottom: 16px;
   animation: pop .45s cubic-bezier(.2,1.4,.4,1);
@@ -817,13 +833,14 @@ textarea.inp { resize: vertical; }
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; min-height: 36px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
   white-space: nowrap;
 }
 /*
   標籤切換(`記錄出金` ↔ `記錄中…`、`Record withdrawal` ↔ `Recording…`)不得讓按鈕縮放而造成版位跳動,
-  所以由最寬的標籤(en `Record withdrawal`,13px/600 約 125px + 48px 水平內距)決定下限。
+  所以由最寬的標籤(en `Record withdrawal`,13px/600 約 125px + 32px 水平內距 ≈ 157px)決定下限;
+  quick-261107-1j4 A1 把主按鈕改為與 OrderTicket 同規格(36px、內距 8px 16px),176px 下限保留不變。
 */
 .btn-submit { min-width: 176px; }
 .btn-done { margin-left: auto; }
@@ -837,10 +854,10 @@ textarea.inp { resize: vertical; }
 .btn-ghost:hover:not(:disabled) { background: var(--surface); }
 .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
 
-/* < 400px:面板 92vw 約 294px,footer 內距與主按鈕內距降為 16px,否則最長標籤會溢出 */
+/* < 400px:面板 92vw 約 294px,footer 內距降為 16px、主按鈕下限降為 160px,否則最長標籤會溢出
+   (主按鈕內距已是 16px,不需再覆寫) */
 @media (max-width: 399px) {
   .ft { padding-left: 16px; padding-right: 16px; }
-  .btn-accent { padding-left: 16px; padding-right: 16px; }
   .btn-submit { min-width: 160px; }
 }
 

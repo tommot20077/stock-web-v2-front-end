@@ -468,6 +468,7 @@ import {
   type PortfolioRevisionCause,
 } from '../services/portfolioRevision';
 import HoldingEventDialog from '../components/HoldingEventDialog.vue';
+import type { HoldingEventHolding } from '../components/HoldingEventDialog.vue';
 import LineChart from '../components/LineChart.vue';
 
 const props = defineProps<{ lang: Lang }>();
@@ -628,7 +629,6 @@ watch(portfolioRevision, () => {
 });
 
 // =============== 04.2-21(D-11):列動作「股利與股數調整」 ===============
-type HoldingEventHolding = { totalQuantity: number; currency?: string; name?: string };
 
 /**
  * mock 宇宙(data.ts)是美股報價,mock 持倉幣別一律 USD(與 portfolioApi / holdingEventApi 的 `MOCK_CURRENCY` 同義);
@@ -639,13 +639,28 @@ const MOCK_POSITION_CURRENCY = 'USD';
 const holdingEventOpen = ref(false);
 const holdingEventTarget = ref<{ symbol: string; holding: HoldingEventHolding } | null>(null);
 
-/** 對話框只顯示、不計算持倉(Phase 3 D-04);幣別缺值不猜測(對話框以 — 代替)。 */
+/**
+ * 對話框只顯示、不計算持倉(Phase 3 D-04);幣別缺值不猜測(對話框以 — 代替)。
+ * quick-261107-1j4 E2:`assetType` / `market` 原樣帶入,對話框以此決定除權日的市場今天(不再另查 searchAssets)。
+ */
 function apiHoldingOf(h: HoldingDto): HoldingEventHolding {
-  return { totalQuantity: h.totalQuantity, currency: h.currency ?? undefined, name: h.assetName };
+  return {
+    totalQuantity: h.totalQuantity,
+    currency: h.currency ?? undefined,
+    name: h.assetName,
+    assetType: h.assetType,
+    market: h.market,
+  };
 }
 
 function mockHoldingOf(p: Position): HoldingEventHolding {
-  return { totalQuantity: p.qty, currency: MOCK_POSITION_CURRENCY, name: p.name };
+  return {
+    totalQuantity: p.qty,
+    currency: MOCK_POSITION_CURRENCY,
+    name: p.name,
+    assetType: p.assetType ?? null,
+    market: p.market ?? null,
+  };
 }
 
 function openHoldingEvent(symbol: string, holding: HoldingEventHolding) {
@@ -1163,7 +1178,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; cursor: pointer; user-select: none; transition: color .15s; }
 thead th:first-child { padding-left: 16px; }
 thead th:hover { color: var(--fg); }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); cursor: pointer; transition: background .15s; }
 tbody tr:hover { background: var(--surface2); }

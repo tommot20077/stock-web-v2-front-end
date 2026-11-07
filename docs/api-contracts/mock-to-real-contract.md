@@ -5,7 +5,7 @@ Date: 2026-05-16
 > **狀態(2026-11-06 文件掃描,以後端 `stock-web-v2` 程式核對):**
 > - **Common API Conventions**:已與後端 `ApiResponse<T>` / `ApiMeta` / `ApiError` / `PageResponse<T>` 逐欄一致。
 > - **Backtest**:端點與 DTO 對應後端 `BacktestController`(`/api/v1/backtests`,類別層 `@PreAuthorize("isAuthenticated()")`);請求規則與錯誤碼已依後端修正(見各節)。
-> - **Ops / AI Access**:後端**目前沒有**對應的 controller、端點或 `ErrorCode`;這兩節仍是前端提案,前端頁面須維持 Preview / Simulated 標示(AGENTS.md 鐵律 6),實作前需先與後端定案。
+> - **Ops / AI Access**:後端**目前沒有**對應的 controller、端點或 `ErrorCode`;這兩節仍是前端提案,前端頁面須維持 Preview / Simulated 標示(AGENTS.md 鐵律 6),實作前需先與後端定案。Yuan 2026-11-07 裁決(3C-5):兩節保留為提案,不在 v1.0;後端工作追蹤於後端 repo 根的 `.planning/todos/pending/2026-11-07-ops-and-ai-access-backend.md`(AI Access 另需獨立安全設計:金鑰範圍、交易權限、稽核)。
 > - 本檔只涵蓋 Backtest / Ops / AI Access。Auth / CSRF 見後端 `ai-docs/browser-auth-contract.md`;交易、持倉、現金、股利、股數調整、活動列表見後端 `ai-docs/trading-portfolio-contract.md`;觀察清單見後端 `ai-docs/watchlist-contract.md`。衝突時一律以後端為準。
 
 ## Purpose

@@ -156,7 +156,7 @@ onMounted(checkSyntax);
 .inp { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--fg); font-family: inherit; }
 .btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .status { font-size: 11px; color: var(--fg-mute); font-family: 'JetBrains Mono', monospace; }
-.status.ok { color: var(--up-text); }
+.status.ok { color: var(--success); }
 .status.err { color: var(--dn); }
 
 .se-body { display: grid; grid-template-columns: 1fr 240px; min-height: 360px; }
@@ -174,7 +174,7 @@ onMounted(checkSyntax);
 .side-sec + .side-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .side-ttl { font-size: 10px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; font-weight: 600; }
 .api-list { display: grid; grid-template-columns: 1fr; gap: 6px; font-size: 11px; }
-.api-list code { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 11px; padding: 1px 5px; background: var(--surface); border-radius: 3px; display: inline-block; }
+.api-list code { font-family: 'JetBrains Mono', monospace; color: var(--accent-text); font-size: 11px; padding: 1px 5px; background: var(--surface); border-radius: 3px; display: inline-block; }
 .api-list span { color: var(--fg-dim); font-size: 10.5px; padding-left: 4px; }
 .dim-text span { color: var(--fg-dim); display: block; font-size: 10.5px; }
 </style>

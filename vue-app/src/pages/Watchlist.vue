@@ -1033,7 +1033,7 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
 .quote-note { margin: 12px 0 0; }
 /* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
 .row-live { display: inline-flex; align-items: center; margin-right: 4px; vertical-align: middle; }
-.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--up); }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--success); }
 
 .limit-hint { margin: 0 0 16px; }
 .name-form { display: flex; flex-direction: column; min-width: 0; }

@@ -4,6 +4,7 @@ import { nextTick } from 'vue';
 // 所以直接守原始碼(沿用 OrderTicket.test.ts / mockStoreBoundary.test.ts 的 ?raw 手法,不走 node:fs)。
 import stylesSource from './styles.css?raw';
 import { useTweaks } from './useTweaks';
+import { composite, contrastRatio, surfacesOf } from './testing/wcag';
 
 /*
  * quick-261106-fbs A2(todo 2026-10-26-contrast-text-tokens,Yuan 於對比度樣式頁裁定的值):
@@ -158,8 +159,8 @@ describe('A2 .vue style 規則(T2.4)', () => {
   it("模板 / script 內的 'var(--up)' 只出現在白名單的非文字用途", () => {
     const ALLOWED: Record<string, { count: number; why: string }> = {
       'pages/Overview.vue': { count: 1, why: '70×24 sparkline 容器:color 只驅動 SVG currentColor 的線條,非文字' },
-      'pages/Ops.vue': { count: 1, why: '最近任務列的 .ldot 圓點 background' },
-      'pages/Analytics.vue': { count: 2, why: '持有天數 .dot 圓點 background;waterfall bar 的 fill(標籤文字另用 --up-text)' },
+      // quick-261107-1j4 2d:Ops `.ldot` 成功分支與 Analytics 持有天數圓點改 --success(狀態語意,不隨紅漲對調)。
+      'pages/Analytics.vue': { count: 1, why: 'waterfall bar 的 fill(標籤文字另用 --up-text)' },
     };
     const counts: Record<string, number> = {};
     for (const [file, source] of Object.entries(vueSources)) {
@@ -215,12 +216,9 @@ describe('A2 買進 / 賣出鈕底色(2c-addendum)', () => {
     }
   });
 
-  it('沒有其他規則以 var(--up) / var(--dn) 為底色配白字(成功打勾圓圈為圖示,列白名單)', () => {
-    // 48px 成功圓圈的 ✓ 是大型圖示(非文字 3:1 門檻,白 / #16a34a 約 3.3:1),語意是「成功」而非漲跌。
-    const CHECK_CIRCLES = ['components/CashEntryDialog.vue', 'components/OrderTicket.vue', 'components/HoldingEventDialog.vue'];
+  it('沒有任何規則以 var(--up) / var(--dn) 為底色配白字(成功打勾圓圈已改 --success / --on-success)', () => {
     const offenders = vueRules
       .filter(r => ['var(--up)', 'var(--dn)'].includes(backgroundOf(r) ?? '') && WHITE.test(r.decls.color ?? ''))
-      .filter(r => !CHECK_CIRCLES.some(file => r.file.endsWith(file)) || r.decls.width !== '48px')
       .map(r => `${r.file} ${r.selector}`);
     expect(offenders).toEqual([]);
   });
@@ -273,5 +271,297 @@ describe('A2 useTweaks 以 data-up-color 切換紅漲綠跌(T2.5)', () => {
     expect(root.dataset.upColor).toBe('green');
     expect(root.style.getPropertyValue('--up')).toBe('');
     expect(root.style.getPropertyValue('--accent')).toBe('#ff6600');
+  });
+});
+
+/*
+ * quick-261107-1j4 2d(Yuan 2026-11-07 3A 裁決;數值以下列量測為準):
+ * - A1 CashEntryDialog / HoldingEventDialog 主要按鈕與 OrderTicket「記錄交易」同規格(36px、內距 8px 16px)。
+ * - A2 --accent-text:accent 的文字安全版(preset 對照在 accentTokens.ts,此處守 styles.css 與套用點)。
+ * - A3 --success / --on-success:成功 / OK / live 語意的固定綠,紅漲綠跌偏好下不對調(與 --up 分離)。
+ * - A4 --fg-mute 加深到對該主題全部 surface ≥ 4.5:1。
+ * 規則:文字 token 對該主題每個 surface ≥ 4.5;放在色膠囊上的文字另對「膠囊色以其 alpha 疊在 surface」量測;
+ * 非文字圖形(圓點、打勾圖示與底色)≥ 3。
+ */
+const AA_TEXT = 4.5;
+const AA_GRAPHIC = 3;
+const surfaces = surfacesOf(stylesSource);
+const THEMES = ['light', 'dark'] as const;
+
+function themeVars(theme: 'light' | 'dark'): Record<string, string> {
+  const root = blockOf(':root');
+  return theme === 'light' ? root : { ...root, ...blockOf(':root[data-theme="dark"]') };
+}
+
+function rulesIn(file: string, selector: string): CssRule[] {
+  return vueRules.filter(r => r.file.endsWith(file) && r.selector.split(',').map(s => s.trim()).includes(selector));
+}
+
+describe('A4 --fg-mute 加深(T2.9)', () => {
+  it('淺色 #6b6b73、深色 #8f8c84;舊值 #a1a1aa / #62605a 不再出現', () => {
+    expect(blockOf(':root')['--fg-mute']).toBe('#6b6b73');
+    expect(blockOf(':root[data-theme="dark"]')['--fg-mute']).toBe('#8f8c84');
+    expect(stylesSource).not.toMatch(/#a1a1aa|#62605a/i);
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}:--fg-mute 對 --bg / --surface / --surface2 皆 ≥ 4.5`, () => {
+      const mute = themeVars(theme)['--fg-mute'];
+      for (const [name, surface] of Object.entries(surfaces[theme])) {
+        const ratio = contrastRatio(mute, surface);
+        expect(ratio, `${mute} on ${name} = ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+      }
+    });
+  }
+});
+
+describe('A2 --accent-text 套用點(T2.9)', () => {
+  it(':root 與深色區塊都定義 --accent-text', () => {
+    expect(blockOf(':root')['--accent-text']).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(blockOf(':root[data-theme="dark"]')['--accent-text']).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  for (const file of ['pages/Positions.vue', 'pages/Markets.vue', 'pages/Trades.vue']) {
+    it(`${file}:排序中欄位標頭 thead th.s 文字色為 var(--accent-text)`, () => {
+      const rules = rulesIn(file, 'thead th.s');
+      expect(rules.length, `${file} thead th.s`).toBeGreaterThan(0);
+      for (const r of rules) expect(r.decls.color).toBe('var(--accent-text)');
+    });
+  }
+
+  it('Markets 啟用中分頁計數:文字 var(--accent-text),膠囊底維持 accent 18%', () => {
+    const rules = rulesIn('pages/Markets.vue', '.tab.active .tab-count');
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) {
+      expect(r.decls.color).toBe('var(--accent-text)');
+      expect(backgroundOf(r)).toBe('color-mix(in oklch, var(--accent) 18%, transparent)');
+    }
+  });
+
+  it('沒有任何 .vue 規則把 var(--accent) 當一般文字色用在 th.s / tab-count', () => {
+    const offenders = vueRules
+      .filter(r => /th\.s|tab-count/.test(r.selector) && r.decls.color === 'var(--accent)')
+      .map(r => `${r.file} ${r.selector}`);
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('A2 useTweaks 同步 inline --accent-text(T2.9)', () => {
+  afterEach(() => {
+    useTweaks().reset();
+    localStorage.clear();
+  });
+
+  it('preset #a855f7:深色主題為深色值、淺色主題為淺色值', async () => {
+    const { set } = useTweaks();
+    set('accent', '#a855f7');
+    set('theme', 'dark');
+    await nextTick();
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--accent')).toBe('#a855f7');
+    expect(root.style.getPropertyValue('--accent-text')).toBe('#ba79f9');
+
+    set('theme', 'light');
+    await nextTick();
+    expect(root.style.getPropertyValue('--accent-text')).toBe('#830df4');
+  });
+
+  it('非 preset 的自訂 accent:移除 inline --accent-text,退回 styles.css 主題預設', async () => {
+    const { set } = useTweaks();
+    set('accent', '#a855f7');
+    await nextTick();
+    expect(document.documentElement.style.getPropertyValue('--accent-text')).not.toBe('');
+
+    set('accent', '#123456');
+    await nextTick();
+    expect(document.documentElement.style.getPropertyValue('--accent-text')).toBe('');
+  });
+});
+
+describe('A3 --success / --on-success(T2.9)', () => {
+  it(':root 與深色區塊定義 --success / --on-success;紅漲兩個區塊不覆寫(固定綠)', () => {
+    expect(blockOf(':root')['--success']).toBe('#166534');
+    expect(blockOf(':root')['--on-success']).toBe('#ffffff');
+    expect(blockOf(':root[data-theme="dark"]')['--success']).toBe('#22c55e');
+    expect(blockOf(':root[data-theme="dark"]')['--on-success']).toBe('#15171c');
+    for (const red of [':root[data-up-color="red"]', ':root[data-theme="dark"][data-up-color="red"]']) {
+      expect(blockOf(red)['--success'], red).toBeUndefined();
+      expect(blockOf(red)['--on-success'], red).toBeUndefined();
+    }
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}:--success 文字對 surface 與 15% / 12% 自身色膠囊 ≥ 4.5;--on-success 對 --success ≥ 3`, () => {
+      const vars = themeVars(theme);
+      const success = vars['--success'];
+      for (const [name, surface] of Object.entries(surfaces[theme])) {
+        const plain = contrastRatio(success, surface);
+        expect(plain, `${success} on ${name} = ${plain.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+        for (const alpha of [0.15, 0.12]) {
+          const pill = contrastRatio(success, composite(success, alpha, surface));
+          expect(pill, `${success} on ${alpha} pill over ${name} = ${pill.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+        }
+      }
+      const icon = contrastRatio(vars['--on-success'], success);
+      expect(icon, `--on-success on --success = ${icon.toFixed(2)}`).toBeGreaterThanOrEqual(AA_GRAPHIC);
+    });
+  }
+
+  // 審計結果(task2-report「var(--up) 歸類表」):成功 / OK / live / 健康 / 已連線 / 唯讀權限 語意。
+  const SUCCESS_PILL_15 = 'color-mix(in oklch, var(--success) 15%, transparent)';
+  const SUCCESS_RULES: Array<[string, string, Record<string, string>]> = [
+    ['components/CashEntryDialog.vue', '.check', { background: 'var(--success)', color: 'var(--on-success)' }],
+    ['components/OrderTicket.vue', '.check', { background: 'var(--success)', color: 'var(--on-success)' }],
+    ['components/HoldingEventDialog.vue', '.check', { background: 'var(--success)', color: 'var(--on-success)' }],
+    ['components/settings/SettingsAiAccess.vue', '.chip.ok', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/settings/SettingsAiAccess.vue', '.chip.live', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/settings/SettingsAiAccess.vue', '.mcp-tag.read', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/settings/SettingsBrokers.vue', '.chip.live', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/settings/SettingsDataSources.vue', '.chip.livefeed', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/settings/SettingsDataSources.vue', '.chip.ok', { background: SUCCESS_PILL_15, color: 'var(--success)' }],
+    ['components/StrategyEditor.vue', '.status.ok', { color: 'var(--success)' }],
+    ['components/LiveQuoteStatus.vue', '.live-dot.solid', { background: 'var(--success)' }],
+    ['pages/Markets.vue', '.live.on', { color: 'var(--success)', 'border-color': 'color-mix(in oklch, var(--success) 35%, var(--border))' }],
+    ['pages/Markets.vue', '.live.on .live-dot', { background: 'var(--success)' }],
+    ['pages/Ops.vue', '.hdot', { background: 'var(--success)' }],
+    ['pages/Ops.vue', '.health .v', { color: 'var(--success)' }],
+    ['pages/Watchlist.vue', '.live-dot', { background: 'var(--success)' }],
+    ['pages/Overview.vue', '.live-dot', { background: 'var(--success)' }],
+    ['pages/Chart.vue', '.live-dot', { background: 'var(--success)' }],
+    ['pages/Chart.vue', '.live-pill', { background: 'color-mix(in oklch, var(--success) 12%, transparent)', color: 'var(--success)' }],
+  ];
+
+  for (const [file, selector, expected] of SUCCESS_RULES) {
+    it(`${file} ${selector} 使用 --success`, () => {
+      // 同一選擇器可能另有只寫 animation 的規則(例如 reduced-motion 區塊),只看有宣告該屬性的規則。
+      const rules = rulesIn(file, selector);
+      for (const [prop, value] of Object.entries(expected)) {
+        const valueOf = (r: CssRule) => (prop === 'background' ? backgroundOf(r) : r.decls[prop]);
+        const declaring = rules.filter(r => valueOf(r) !== undefined);
+        expect(declaring.length, `${file} ${selector} 必須宣告 ${prop}`).toBeGreaterThan(0);
+        for (const r of declaring) expect(valueOf(r), `${file} ${selector} ${prop}`).toBe(value);
+      }
+    });
+  }
+
+  it('Markets live 脈衝 keyframes 的光暈改用 --success', () => {
+    const pulse = vueRules.filter(r => r.file.endsWith('pages/Markets.vue') && (r.selector === '0%, 100%' || r.selector === '50%') && r.decls['box-shadow'] !== undefined);
+    expect(pulse.length).toBe(2);
+    for (const r of pulse) expect(r.decls['box-shadow']).toContain('var(--success)');
+  });
+
+  it('模板內的成功狀態(已連線、Healthy、任務成功燈、長期持有燈)使用 var(--success)', () => {
+    const source = (file: string) => templateAndScriptOf(vueSources[`./${file}`]);
+    expect(source('components/settings/SettingsBrokers.vue')).toMatch(/style="color:var\(--success\)">✓/);
+    expect(source('components/settings/SettingsDataSources.vue')).toMatch(/style="color:var\(--success\)">✓/);
+    expect(source('pages/Ops.vue')).toMatch(/style="color:var\(--success\)">Healthy/);
+    expect(source('pages/Ops.vue')).toMatch(/o\.status === 'success' \? 'var\(--success\)'/);
+    expect(source('pages/Analytics.vue')).toMatch(/h\.daysHeld > 365 \? 'var\(--success\)'/);
+  });
+
+  it('--success 不出現在價格方向 / 買進類規則(.pill.buy、.side-btn.buy、.tick-up 維持 --up 系)', () => {
+    for (const [file, selector] of [
+      ['pages/Trades.vue', '.pill.buy'],
+      ['components/OrderTicket.vue', '.side-btn.buy.active'],
+      ['pages/Markets.vue', '.tick-up'],
+    ]) {
+      for (const r of rulesIn(file, selector)) {
+        expect(Object.values(r.decls).join(' '), `${file} ${selector}`).not.toContain('--success');
+      }
+    }
+  });
+});
+
+describe('A1 現金 / 股利對話框主要按鈕 36px(T2.9)', () => {
+  function rule(file: string, selector: string): CssRule {
+    const found = vueRules.find(r => r.file.endsWith(file) && r.selector === selector);
+    expect(found, `${file} ${selector}`).toBeTruthy();
+    return found!;
+  }
+
+  for (const [file, submitMin] of [['components/CashEntryDialog.vue', '176px'], ['components/HoldingEventDialog.vue', '208px']]) {
+    it(`${file}:.btn-accent 高 36px、內距 8px 16px(同 OrderTicket);.btn-submit min-width ${submitMin} 不變`, () => {
+      const accent = rule(file, '.btn-accent');
+      expect(accent.decls['min-height']).toBe('36px');
+      expect(accent.decls.padding).toBe('8px 16px');
+      expect(rule(file, '.btn-submit').decls['min-width']).toBe(submitMin);
+    });
+  }
+
+  it('CashEntryDialog < 400px 的 .btn-submit min-width 160px 保留', () => {
+    const source = styleBlocksOf(vueSources['./components/CashEntryDialog.vue']);
+    expect(source).toMatch(/@media \(max-width: 399px\) \{[\s\S]*?\.btn-submit \{ min-width: 160px; \}/);
+  });
+});
+
+/*
+ * quick-261107-1j4 E3(Yuan 3A 裁決延伸):Part 2 只改了 th.s / tab-count,其餘以 var(--accent) 當**文字色**的地方
+ * (連結 / 強調字、hover 文字、膠囊文字、狀態 ★ / ✕ / 圖示字形)一律改為 var(--accent-text);
+ * 背景、邊框、外框、SVG fill / stroke 與圖表容器(color 只驅動 currentColor 線條)維持 var(--accent)。
+ */
+describe('E3 其餘 accent 文字用法改用 --accent-text(quick-261107-1j4)', () => {
+  it('style 區塊沒有任何以 var(--accent) 當文字 color 的宣告', () => {
+    const offenders = vueRules
+      .filter(r => r.decls.color === 'var(--accent)')
+      .map(r => `${r.file} ${r.selector}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('模板內的靜態 color:var(--accent) 只剩圖表容器(currentColor 驅動 SVG 線條 / 長條,非文字)', () => {
+    const ALLOWED: Record<string, { count: number; why: string }> = {
+      'pages/Positions.vue': { count: 1, why: '權益曲線 LineChart 容器;容器內的 .sm-pill 自帶白字紫底' },
+      'pages/Markets.vue': { count: 1, why: '債券殖利率 Bars 容器;Bars 的標籤文字固定 fill var(--fg-dim)' },
+      'pages/Overview.vue': { count: 1, why: '權益曲線 LineChart 容器' },
+    };
+    const counts: Record<string, number> = {};
+    for (const [file, source] of Object.entries(vueSources)) {
+      const n = (templateAndScriptOf(source).match(/(^|[^-\w])color:\s*var\(--accent\)/g) ?? []).length;
+      if (n > 0) counts[file.replace(/^\.\//, '')] = n;
+    }
+    const expected: Record<string, number> = {};
+    for (const [file, entry] of Object.entries(ALLOWED)) expected[file] = entry.count;
+    expect(counts).toEqual(expected);
+  });
+
+  /** 代表性用法:[檔案, 選擇器, 該規則同時應保留的 accent 非文字宣告(屬性 → 值)]。 */
+  const REPRESENTATIVE: ReadonlyArray<[string, string, Record<string, string>]> = [
+    ['components/settings/SettingsBrokers.vue', '.chip.sandbox', { background: 'color-mix(in oklch, var(--accent) 14%, transparent)' }],
+    ['components/settings/SettingsDataSources.vue', '.chip.sandbox', { background: 'color-mix(in oklch, var(--accent) 14%, transparent)' }],
+    ['pages/Settings.vue', '.soon', { background: 'color-mix(in oklch, var(--accent) 18%, transparent)' }],
+    ['pages/Settings.vue', '.btn-ghost:hover:not(:disabled)', { 'border-color': 'var(--accent)' }],
+    ['components/settings/SettingsAiAccess.vue', '.btn-ghost:hover:not(:disabled)', { 'border-color': 'var(--accent)' }],
+    ['components/settings/SettingsAiAccess.vue', '.call-tool code', {}],
+    ['components/StrategyEditor.vue', '.api-list code', { background: 'var(--surface)' }],
+    ['pages/Backtest.vue', '.preview-badge', { background: 'color-mix(in oklch, var(--accent) 10%, transparent)' }],
+    ['pages/Backtest.vue', '.btn-ghost.active', { 'border-color': 'var(--accent)' }],
+    ['pages/Ops.vue', '.run-status', { background: 'color-mix(in oklch, var(--accent) 8%, transparent)' }],
+    ['pages/Alerts.vue', '.al-target', {}],
+    ['pages/Alerts.vue', '.ch-toggle.on', { 'border-color': 'var(--accent)' }],
+    ['pages/Analytics.vue', '.tab.on', { 'border-bottom-color': 'var(--accent)' }],
+    ['pages/Analytics.vue', '.slider-row .num.edited', {}],
+    ['pages/Notifications.vue', '.day-pin', {}],
+    ['pages/Notifications.vue', '.day-pin .x', {}],
+    ['pages/Markets.vue', '.star-btn.on', {}],
+    ['pages/Markets.vue', '.row:hover .quick-order', { 'border-color': 'color-mix(in oklch, var(--accent) 35%, var(--border))' }],
+    ['pages/Chart.vue', '.btn-watch.on .watch-glyph', {}],
+    ['components/CmdK.vue', '.grp-row.active .grp-icon', {}],
+  ];
+
+  for (const [file, selector, keep] of REPRESENTATIVE) {
+    it(`${file} ${selector}:文字 var(--accent-text)${Object.keys(keep).length ? ',非文字宣告維持 accent' : ''}`, () => {
+      const rules = rulesIn(file, selector).filter(r => r.decls.color !== undefined);
+      expect(rules.length, `${file} ${selector} 必須有宣告 color 的規則`).toBeGreaterThan(0);
+      for (const r of rules) {
+        expect(r.decls.color, `${file} ${selector}`).toBe('var(--accent-text)');
+        for (const [prop, value] of Object.entries(keep)) expect(r.decls[prop], `${file} ${selector} ${prop}`).toBe(value);
+      }
+    });
+  }
+
+  it('accent 底(var(--accent) 背景)的規則仍配 --on-accent,不誤改成 --accent-text', () => {
+    const offenders = vueRules
+      .filter(r => backgroundOf(r) === 'var(--accent)' && r.decls.color === 'var(--accent-text)')
+      .map(r => `${r.file} ${r.selector}`);
+    expect(offenders).toEqual([]);
   });
 });

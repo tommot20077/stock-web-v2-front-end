@@ -158,6 +158,28 @@ describe('Markets ★(API mode)', () => {
     expect(document.activeElement).toBe(star('AAPL'));
   });
 
+  it('「觀察清單」tab 取消勾選使該列消失 → Esc 關閉後焦點落在行情表(04.2-review WR-08)', async () => {
+    const fetchImpl = watchlistFetch([watchlistDto('wl-1', '我的自選', ['AAPL', 'BTC'])]);
+    await mountApiMarkets(fetchImpl);
+    await clickTab(t('zh', 'watchlist'));
+    expect(visibleSymbols().sort()).toEqual(['AAPL', 'BTC']);
+
+    star('AAPL').click();
+    await flushAsync();
+    pickerCheckbox('wl-1').click();
+    await flushAsync();
+    expect(visibleSymbols()).toEqual(['BTC']);
+    expect(document.body.querySelector('[data-testid="watchlist-picker"]')).not.toBeNull();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushAsync();
+
+    const table = document.body.querySelector<HTMLElement>('[data-testid="markets-table"]');
+    expect(table, 'markets table').not.toBeNull();
+    expect(table!.tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(table);
+  });
+
   it('Markets.vue 不再 import mock portfolio store(judgment §3)', () => {
     expect(marketsSource).not.toContain('stores/mockPortfolio');
     expect(marketsSource).toContain('getRuntimeApiClients');

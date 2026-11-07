@@ -1253,6 +1253,14 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
     expect(text).not.toContain(t('en', 'portfolioStaleAfterTrade'));
   });
 
+  for (const cause of ['dividend', 'shareAdjustment'] as const) {
+    it(`${cause} → portfolioStaleAfterCashEntry(比照 Positions;04.2-review IN-06)`, async () => {
+      const text = await staleTextAfter(() => bumpPortfolioRevision(cause));
+      expect(text).toContain(t('en', 'portfolioStaleAfterCashEntry'));
+      expect(text).not.toContain(t('en', 'portfolioStaleAfterTrade'));
+    });
+  }
+
   it('基準幣 → portfolioStaleAfterBaseCurrency', async () => {
     const text = await staleTextAfter(() => bumpPortfolioRevision('baseCurrency'));
     expect(text).toContain(t('en', 'portfolioStaleAfterBaseCurrency'));

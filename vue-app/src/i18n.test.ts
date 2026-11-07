@@ -734,6 +734,99 @@ const QUICK_261106_FBS_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
   topMoversFxExcluded: ['base', 'n'],
 };
 
+// quick-261107-1j4(Yuan 2026-11-07 裁決):本 task 之後新增的鍵都列在這裡。
+const QUICK_261107_1J4_KEYS = [
+  // 3B:現金發生時間 / 成交時間 1900-01-01 下限與三種文案
+  'cashErrOccurredAtTooEarly',
+  'tradeErrExecutedAtRequired',
+  'tradeErrExecutedAtTooEarly',
+  // 3B:股利入帳時間 / 股數調整除權日三種文案
+  'holdingEventErrPaidAtRequired',
+  'holdingEventErrPaidAtTooEarly',
+  'holdingEventErrEffectiveDateRequired',
+  'holdingEventErrEffectiveDateTooEarly',
+  // 04.2 WR-09:除權日以標的市場日期計的提示與時區名稱
+  'holdingEventMarketDate',
+  'marketZoneNewYork',
+  'marketZoneTaipei',
+  'marketZoneTokyo',
+  'marketZoneBerlin',
+  'marketZoneUtc',
+];
+const QUICK_261107_1J4_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
+  holdingEventMarketDate: ['zone'],
+};
+
+describe('i18n quick-261107-1j4 copy', () => {
+  it('provides every quick-261107-1j4 key in both languages, listed once', () => {
+    expect(new Set(QUICK_261107_1J4_KEYS).size).toBe(QUICK_261107_1J4_KEYS.length);
+    for (const key of QUICK_261107_1J4_KEYS) {
+      expect(I18N.zh[key], `zh.${key}`).toBeTruthy();
+      expect(I18N.en[key], `en.${key}`).toBeTruthy();
+    }
+  });
+
+  it('keeps the same placeholders in zh and en', () => {
+    for (const key of QUICK_261107_1J4_KEYS) {
+      const expected = QUICK_261107_1J4_PLACEHOLDERS_BY_KEY[key] ?? [];
+      expect(placeholdersOf(I18N.zh[key] ?? ''), `zh.${key}`).toEqual(expected);
+      expect(placeholdersOf(I18N.en[key] ?? ''), `en.${key}`).toEqual(expected);
+    }
+  });
+
+  it('keeps forbidden ledger / order vocabulary out of every quick-261107-1j4 string', () => {
+    for (const key of QUICK_261107_1J4_KEYS) {
+      const zh = I18N.zh[key] ?? '';
+      const en = (I18N.en[key] ?? '').toLowerCase();
+      for (const term of [...PHASE42_FORBIDDEN_ZH, ...FORBIDDEN_ZH_TERMS]) {
+        expect(zh.includes(term), `zh.${key} 含禁止用語「${term}」:${zh}`).toBe(false);
+      }
+      for (const term of PHASE42_FORBIDDEN_EN) {
+        expect(en.includes(term), `en.${key} contains forbidden term "${term}": ${en}`).toBe(false);
+      }
+      for (const term of FORBIDDEN_EN_TERMS) {
+        expect(new RegExp(`\\b${term}\\b`).test(en), `en.${key} contains forbidden term "${term}": ${en}`).toBe(false);
+      }
+    }
+  });
+
+  it('states the 1900-01-01 floor verbatim on the too-early copy', () => {
+    expect(I18N.zh.cashErrOccurredAtTooEarly).toBe('發生時間不可早於 1900-01-01。');
+    expect(I18N.en.cashErrOccurredAtTooEarly).toBe('Occurred at cannot be earlier than 1900-01-01.');
+    expect(I18N.zh.tradeErrExecutedAtRequired).toBe('請填寫成交時間。');
+    expect(I18N.en.tradeErrExecutedAtRequired).toBe('Executed at is required.');
+    expect(I18N.zh.tradeErrExecutedAtTooEarly).toBe('成交時間不可早於 1900-01-01。');
+    expect(I18N.en.tradeErrExecutedAtTooEarly).toBe('Executed at cannot be earlier than 1900-01-01.');
+  });
+
+  it('gives paid-at / ex-date their own required and too-early copy (B1)', () => {
+    expect(I18N.zh.holdingEventErrPaidAtRequired).toBe('請填寫入帳時間。');
+    expect(I18N.en.holdingEventErrPaidAtRequired).toBe('Paid at is required.');
+    expect(I18N.zh.holdingEventErrPaidAtTooEarly).toBe('入帳時間不可早於 1900-01-01。');
+    expect(I18N.en.holdingEventErrPaidAtTooEarly).toBe('Paid at cannot be earlier than 1900-01-01.');
+    expect(I18N.zh.holdingEventErrEffectiveDateRequired).toBe('請填寫除權日。');
+    expect(I18N.en.holdingEventErrEffectiveDateRequired).toBe('Ex-date is required.');
+    expect(I18N.zh.holdingEventErrEffectiveDateTooEarly).toBe('除權日不可早於 1900-01-01。');
+    expect(I18N.en.holdingEventErrEffectiveDateTooEarly).toBe('The ex-date cannot be earlier than 1900-01-01.');
+  });
+
+  it('drops the order type / time-in-force keys in both languages (B3)', () => {
+    for (const key of ['orderType', 'market', 'limit', 'tif', 'day', 'gtc']) {
+      expect(key in I18N.zh, `zh.${key} 應已刪除`).toBe(false);
+      expect(key in I18N.en, `en.${key} should be removed`).toBe(false);
+    }
+  });
+
+  it('fills the market date hint with the zone label in both languages (WR-09)', () => {
+    expect(tf('zh', 'holdingEventMarketDate', { zone: t('zh', 'marketZoneNewYork') })).toBe('以美東日期計');
+    expect(tf('en', 'holdingEventMarketDate', { zone: t('en', 'marketZoneNewYork') })).toBe('Uses the US Eastern date');
+    expect([I18N.zh.marketZoneTaipei, I18N.zh.marketZoneTokyo, I18N.zh.marketZoneBerlin, I18N.zh.marketZoneUtc])
+      .toEqual(['台北', '東京', '中歐', 'UTC']);
+    expect([I18N.en.marketZoneTaipei, I18N.en.marketZoneTokyo, I18N.en.marketZoneBerlin, I18N.en.marketZoneUtc])
+      .toEqual(['Taipei', 'Tokyo', 'Central European', 'UTC']);
+  });
+});
+
 describe('i18n quick-261106-fbs copy', () => {
   it('provides every quick-261106-fbs key in both languages, listed once', () => {
     expect(new Set(QUICK_261106_FBS_KEYS).size).toBe(QUICK_261106_FBS_KEYS.length);

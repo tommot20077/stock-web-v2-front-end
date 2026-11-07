@@ -372,6 +372,26 @@ describe('CashEntryDialog — 前端自檢(UI-SPEC §3 欄位契約)', () => {
     expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('en', 'cashErrOccurredAtRequired'));
   });
 
+  // quick-261107-1j4(裁決 3B):1900-01-01 下限(與後端 fields.occurredAt 同一個 instant)。
+  it('occurredAtBeforeFloorDisablesSubmitWithTooEarlyCopy', async () => {
+    await mountDialog();
+    await fillValid();
+
+    await setValue(requireTestid('cash-occurred-at') as HTMLInputElement, '1800-01-01T00:00');
+
+    expect(submitButton().disabled).toBe(true);
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAtTooEarly'));
+  });
+
+  it('occurredAtBeforeFloorUsesTooEarlyCopyInEnglishToo', async () => {
+    await mountDialog({ lang: 'en' });
+    await fillValid();
+
+    await setValue(requireTestid('cash-occurred-at') as HTMLInputElement, '1800-01-01T00:00');
+
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('en', 'cashErrOccurredAtTooEarly'));
+  });
+
   it('serverOccurredAtFieldErrorKeepsTheNotInFutureCopy', async () => {
     stubUuids();
     await mountDialog({
