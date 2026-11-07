@@ -38,8 +38,21 @@ describe('marketDayRuleOf — 鏡像 TradingDay.of', () => {
     expect(marketDayRuleOf(null, undefined)).toEqual({ zone: 'UTC', startOffsetHours: 0 });
   });
 
-  it('fallback 規則為紐約、換日 0(支援市場中最晚換日,未知標的的預設值不會被後端拒絕)', () => {
-    expect(FALLBACK_MARKET_DAY_RULE).toEqual({ zone: 'America/New_York', startOffsetHours: 0 });
+  it('fallback 規則為 UTC、換日 0(E2 補充:鏡像 TradingDay.of 對未知市場的 UTC fallback,不再用紐約)', () => {
+    expect(FALLBACK_MARKET_DAY_RULE).toEqual({ zone: 'UTC', startOffsetHours: 0 });
+    expect(FALLBACK_MARKET_DAY_RULE).toEqual(marketDayRuleOf(null, null));
+  });
+
+  it('market 比對與後端相同:trim + 大寫,每個別名都對到同一規則', () => {
+    expect(marketDayRuleOf('STOCK', ' tw ')).toEqual({ zone: 'Asia/Taipei', startOffsetHours: 0 });
+    expect(marketDayRuleOf('STOCK', 'tpex')).toEqual({ zone: 'Asia/Taipei', startOffsetHours: 0 });
+    expect(marketDayRuleOf('STOCK', 'tse')).toEqual({ zone: 'Asia/Tokyo', startOffsetHours: 0 });
+    expect(marketDayRuleOf('BOND', ' de')).toEqual({ zone: 'Europe/Berlin', startOffsetHours: 0 });
+    expect(marketDayRuleOf('STOCK', 'Xetra')).toEqual({ zone: 'Europe/Berlin', startOffsetHours: 0 });
+    expect(marketDayRuleOf('STOCK', 'amex')).toEqual({ zone: 'America/New_York', startOffsetHours: 0 });
+    // 後端 switch 的 market 值 'CRYPTO' / 'FX' 不是別名:非 CRYPTO / FX 資產帶這兩個 market → UTC。
+    expect(marketDayRuleOf('STOCK', 'CRYPTO')).toEqual({ zone: 'UTC', startOffsetHours: 0 });
+    expect(marketDayRuleOf('STOCK', '')).toEqual({ zone: 'UTC', startOffsetHours: 0 });
   });
 });
 
@@ -71,8 +84,9 @@ describe('marketToday — 該時區當地時鐘減換日偏移後的日期', () 
     expect(marketToday(marketDayRuleOf('STOCK', 'US'), Date.parse('2026-07-01T04:30:00Z'))).toBe('2026-07-01');
   });
 
-  it('fallback 規則與美股同日', () => {
-    expect(marketToday(FALLBACK_MARKET_DAY_RULE, now)).toBe('2026-11-04');
+  it('fallback 規則取 UTC 日期(此刻紐約仍是 11-04,UTC 已是 11-05)', () => {
+    expect(marketToday(FALLBACK_MARKET_DAY_RULE, now)).toBe('2026-11-05');
+    expect(marketZoneLabelKey(FALLBACK_MARKET_DAY_RULE)).toBe('marketZoneUtc');
   });
 });
 

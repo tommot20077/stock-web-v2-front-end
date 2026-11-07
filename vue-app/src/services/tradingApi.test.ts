@@ -281,6 +281,17 @@ describe('tradingApi mock adapter', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('E2:新建 mock 持倉帶入 data.ts 反查的 assetType / market(對話框從持倉開啟時的市場來源)', async () => {
+    const portfolio = useMockPortfolioStore();
+    const api = createMockTradingApi();
+
+    await api.createTrade({ ...TRADE_REQUEST, symbol: 'TSLA', price: 178.22 }, 'key-tsla');
+    await api.createTrade({ ...TRADE_REQUEST, symbol: 'SOL', quantity: 1, price: 150 }, 'key-sol');
+
+    expect(portfolio.positions.find(p => p.sym === 'TSLA')).toMatchObject({ assetType: 'STOCK', market: 'US' });
+    expect(portfolio.positions.find(p => p.sym === 'SOL')).toMatchObject({ assetType: 'CRYPTO', market: 'CRYPTO' });
+  });
+
   it('throws the same ApiClientError shape as API mode when the store rejects an oversell', async () => {
     // OrderTicket 的錯誤處理因此在兩個 mode 只有一條路徑,少一條「只在某 mode 才測得到」的分支。
     const portfolio = useMockPortfolioStore();

@@ -321,6 +321,25 @@ describe('portfolioApi mock adapter reads', () => {
     });
   });
 
+  it('E2:mock 種子持倉的 HoldingDto 帶 assetType 與 market(與 mock market adapter 同值域)', async () => {
+    const holdings = await createMockPortfolioApi().listHoldings();
+    const bySymbol = new Map(holdings.map(h => [h.symbol, h]));
+
+    expect(bySymbol.get('AAPL')).toMatchObject({ assetType: 'STOCK', market: 'US' });
+    expect(bySymbol.get('2330.TW')).toMatchObject({ assetType: 'STOCK', market: 'TW' });
+    expect(bySymbol.get('BTC')).toMatchObject({ assetType: 'CRYPTO', market: 'CRYPTO' });
+    for (const holding of holdings) {
+      expect(holding.market, holding.symbol).toEqual(expect.any(String));
+    }
+  });
+
+  it('E2:沒有 assetType / market 的自訂 mock 持倉 → market null(對話框退回 UTC)', async () => {
+    useMockPortfolioStore().positions = [{ sym: 'AAA', name: 'Alpha', qty: 1, avg: 1, price: 2, sector: 'Tech' }];
+    const [holding] = await createMockPortfolioApi().listHoldings();
+    expect(holding.market).toBeNull();
+    expect(holding.assetType).toBe('STOCK');
+  });
+
   it('maps store trades to TradeDto shape with a stable id and ISO executedAt', async () => {
     const api = createMockPortfolioApi();
     useMockPortfolioStore().trades = customTrades();

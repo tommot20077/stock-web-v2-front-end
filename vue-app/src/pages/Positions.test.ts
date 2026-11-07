@@ -8,7 +8,7 @@ import { fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
 import { t, tf } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   bumpPortfolioRevision,
@@ -1560,6 +1560,52 @@ describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-
     expect(onOrder).not.toHaveBeenCalled();
     expect(requireTestid('holding-event-symbol-locked').textContent).toContain(firstSymbol);
     expect(requireTestid('holding-event-mode-cash-dividend').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('E2(API):對話框直接用該列 HoldingDto 的 market / assetType 算市場日期,不額外打 /assets', async () => {
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ totalMarketValue: 3, holdingCount: 2 })),
+      holdings: () => success([
+        holding({ symbol: 'TWA', marketValueInBase: 2, market: 'TW' }),
+        holding({ symbol: 'NUL', marketValueInBase: 1, market: null }),
+      ]),
+    });
+    await mountApiWithOrderSpy(fetchMock);
+
+    const buttonFor = (symbol: string) => holdingEventButtons()[rowSymbols().indexOf(symbol)];
+    await clickAndFlush(buttonFor('TWA'));
+    // 市場日期提示只在除權日欄位出現(配股 / 拆合股模式)。
+    await clickAndFlush(requireTestid('holding-event-mode-stock-dividend'));
+    expect(requireTestid('holding-event-market-date').textContent?.trim())
+      .toBe(tf('en', 'holdingEventMarketDate', { zone: t('en', 'marketZoneTaipei') }));
+    click(requireTestid('holding-event-close'));
+    await flushAsync();
+
+    await clickAndFlush(buttonFor('NUL'));
+    await clickAndFlush(requireTestid('holding-event-mode-split'));
+    expect(requireTestid('holding-event-market-date').textContent?.trim(), 'market null → UTC')
+      .toBe(tf('en', 'holdingEventMarketDate', { zone: t('en', 'marketZoneUtc') }));
+    expect(callsMatching(fetchMock, '/assets'), '從持倉開啟不得再查 /assets').toHaveLength(0);
+  });
+
+  it('E2(mock):mock 持倉種子帶 market,對話框依列的市場顯示提示且不呼叫 market.searchAssets', async () => {
+    resetRuntimeApiClientsForTests();
+    const searchAssets = vi.spyOn(getRuntimeApiClients().market, 'searchAssets');
+    mountWithPinia(Positions, { lang: 'en', onOrder: vi.fn() });
+    await flushAsync();
+
+    const cases: Array<[string, string]> = [['2330.TW', 'marketZoneTaipei'], ['AAPL', 'marketZoneNewYork'], ['BTC', 'marketZoneUtc']];
+    for (const [symbol, zoneKey] of cases) {
+      const index = rowSymbols().indexOf(symbol);
+      expect(index, `mock 列 ${symbol}`).toBeGreaterThanOrEqual(0);
+      await clickAndFlush(holdingEventButtons()[index]);
+      await clickAndFlush(requireTestid('holding-event-mode-stock-dividend'));
+      expect(requireTestid('holding-event-market-date').textContent?.trim(), symbol)
+        .toBe(tf('en', 'holdingEventMarketDate', { zone: t('en', zoneKey) }));
+      click(requireTestid('holding-event-close'));
+      await flushAsync();
+    }
+    expect(searchAssets).not.toHaveBeenCalled();
   });
 
   it('動作鈕樣式:12px / 600、min-height 36px、padding 8px 12px;動作格靠右、不換行、右內距 16px', () => {
