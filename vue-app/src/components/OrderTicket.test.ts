@@ -219,11 +219,14 @@ describe('OrderTicket 骨架契約 — 三步驟與欄位(U-01 / D-02 / D-03 / D
     });
   }
 
-  it('API mode 不渲染交易後現金(D-04:隱藏,不留空版位);mock mode 保留', async () => {
+  // 兩個獨立測試:testSetup.ts 的 mock 預設是 beforeEach 的 stubEnv,測試中途 cleanupMounted()
+  // (unstubAllEnvs)會把它一起清掉,`VITE_DATA_MODE=api npm test` 下第二次掛載就不再是 mock。
+  it('API mode 不渲染交易後現金(D-04:隱藏,不留空版位)', async () => {
     await mountTicket({ mode: 'api' });
     expect(bodyText()).not.toContain(t('en', 'cashAfter'));
+  });
 
-    cleanupMounted();
+  it('mock mode 保留交易後現金(D-04)', async () => {
     await mountTicket();
     expect(bodyText()).toContain(t('en', 'cashAfter'));
   });
