@@ -493,3 +493,75 @@ describe('A1 現金 / 股利對話框主要按鈕 36px(T2.9)', () => {
     expect(source).toMatch(/@media \(max-width: 399px\) \{[\s\S]*?\.btn-submit \{ min-width: 160px; \}/);
   });
 });
+
+/*
+ * quick-261107-1j4 E3(Yuan 3A 裁決延伸):Part 2 只改了 th.s / tab-count,其餘以 var(--accent) 當**文字色**的地方
+ * (連結 / 強調字、hover 文字、膠囊文字、狀態 ★ / ✕ / 圖示字形)一律改為 var(--accent-text);
+ * 背景、邊框、外框、SVG fill / stroke 與圖表容器(color 只驅動 currentColor 線條)維持 var(--accent)。
+ */
+describe('E3 其餘 accent 文字用法改用 --accent-text(quick-261107-1j4)', () => {
+  it('style 區塊沒有任何以 var(--accent) 當文字 color 的宣告', () => {
+    const offenders = vueRules
+      .filter(r => r.decls.color === 'var(--accent)')
+      .map(r => `${r.file} ${r.selector}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('模板內的靜態 color:var(--accent) 只剩圖表容器(currentColor 驅動 SVG 線條 / 長條,非文字)', () => {
+    const ALLOWED: Record<string, { count: number; why: string }> = {
+      'pages/Positions.vue': { count: 1, why: '權益曲線 LineChart 容器;容器內的 .sm-pill 自帶白字紫底' },
+      'pages/Markets.vue': { count: 1, why: '債券殖利率 Bars 容器;Bars 的標籤文字固定 fill var(--fg-dim)' },
+      'pages/Overview.vue': { count: 1, why: '權益曲線 LineChart 容器' },
+    };
+    const counts: Record<string, number> = {};
+    for (const [file, source] of Object.entries(vueSources)) {
+      const n = (templateAndScriptOf(source).match(/(^|[^-\w])color:\s*var\(--accent\)/g) ?? []).length;
+      if (n > 0) counts[file.replace(/^\.\//, '')] = n;
+    }
+    const expected: Record<string, number> = {};
+    for (const [file, entry] of Object.entries(ALLOWED)) expected[file] = entry.count;
+    expect(counts).toEqual(expected);
+  });
+
+  /** 代表性用法:[檔案, 選擇器, 該規則同時應保留的 accent 非文字宣告(屬性 → 值)]。 */
+  const REPRESENTATIVE: ReadonlyArray<[string, string, Record<string, string>]> = [
+    ['components/settings/SettingsBrokers.vue', '.chip.sandbox', { background: 'color-mix(in oklch, var(--accent) 14%, transparent)' }],
+    ['components/settings/SettingsDataSources.vue', '.chip.sandbox', { background: 'color-mix(in oklch, var(--accent) 14%, transparent)' }],
+    ['pages/Settings.vue', '.soon', { background: 'color-mix(in oklch, var(--accent) 18%, transparent)' }],
+    ['pages/Settings.vue', '.btn-ghost:hover:not(:disabled)', { 'border-color': 'var(--accent)' }],
+    ['components/settings/SettingsAiAccess.vue', '.btn-ghost:hover:not(:disabled)', { 'border-color': 'var(--accent)' }],
+    ['components/settings/SettingsAiAccess.vue', '.call-tool code', {}],
+    ['components/StrategyEditor.vue', '.api-list code', { background: 'var(--surface)' }],
+    ['pages/Backtest.vue', '.preview-badge', { background: 'color-mix(in oklch, var(--accent) 10%, transparent)' }],
+    ['pages/Backtest.vue', '.btn-ghost.active', { 'border-color': 'var(--accent)' }],
+    ['pages/Ops.vue', '.run-status', { background: 'color-mix(in oklch, var(--accent) 8%, transparent)' }],
+    ['pages/Alerts.vue', '.al-target', {}],
+    ['pages/Alerts.vue', '.ch-toggle.on', { 'border-color': 'var(--accent)' }],
+    ['pages/Analytics.vue', '.tab.on', { 'border-bottom-color': 'var(--accent)' }],
+    ['pages/Analytics.vue', '.slider-row .num.edited', {}],
+    ['pages/Notifications.vue', '.day-pin', {}],
+    ['pages/Notifications.vue', '.day-pin .x', {}],
+    ['pages/Markets.vue', '.star-btn.on', {}],
+    ['pages/Markets.vue', '.row:hover .quick-order', { 'border-color': 'color-mix(in oklch, var(--accent) 35%, var(--border))' }],
+    ['pages/Chart.vue', '.btn-watch.on .watch-glyph', {}],
+    ['components/CmdK.vue', '.grp-row.active .grp-icon', {}],
+  ];
+
+  for (const [file, selector, keep] of REPRESENTATIVE) {
+    it(`${file} ${selector}:文字 var(--accent-text)${Object.keys(keep).length ? ',非文字宣告維持 accent' : ''}`, () => {
+      const rules = rulesIn(file, selector).filter(r => r.decls.color !== undefined);
+      expect(rules.length, `${file} ${selector} 必須有宣告 color 的規則`).toBeGreaterThan(0);
+      for (const r of rules) {
+        expect(r.decls.color, `${file} ${selector}`).toBe('var(--accent-text)');
+        for (const [prop, value] of Object.entries(keep)) expect(r.decls[prop], `${file} ${selector} ${prop}`).toBe(value);
+      }
+    });
+  }
+
+  it('accent 底(var(--accent) 背景)的規則仍配 --on-accent,不誤改成 --accent-text', () => {
+    const offenders = vueRules
+      .filter(r => backgroundOf(r) === 'var(--accent)' && r.decls.color === 'var(--accent-text)')
+      .map(r => `${r.file} ${r.selector}`);
+    expect(offenders).toEqual([]);
+  });
+});

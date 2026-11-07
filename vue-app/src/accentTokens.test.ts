@@ -71,3 +71,32 @@ describe('A2 accent preset 與 --accent-text(T2.9)', () => {
     expect(tweaksPanelSource).not.toMatch(/'#3b82f6'/);
   });
 });
+
+/*
+ * quick-261107-1j4 E3(Yuan 3A:accent 當文字一律 --accent-text):其餘文字用法遷移後,--accent-text 也坐在
+ * 比 18% 更淡的 accent 膠囊上,以及 Notifications `.day-pin` 的靛色淡底。逐一量測,避免「18% 過了就假設其他都過」。
+ */
+const E3_CAPSULES: ReadonlyArray<{ where: string; tint: 'accent' | string; alpha: number }> = [
+  { where: 'Ops .run-status / Backtest .btn-ghost.active(accent 8%)', tint: 'accent', alpha: 0.08 },
+  { where: 'Backtest .preview-badge(accent 10%)', tint: 'accent', alpha: 0.10 },
+  { where: 'Alerts .ch-toggle.on(accent 12% 混 surface)', tint: 'accent', alpha: 0.12 },
+  { where: 'Settings* .chip.sandbox(accent 14%)', tint: 'accent', alpha: 0.14 },
+  { where: 'Notifications .day-pin(rgba(99,102,241,0.1))', tint: '#6366f1', alpha: 0.10 },
+];
+
+describe('E3 --accent-text 在遷移後的膠囊底色上(quick-261107-1j4)', () => {
+  for (const preset of ACCENT_PRESETS) {
+    for (const theme of ['light', 'dark'] as const) {
+      it(`${preset.accent} ${theme}:--accent-text 對 E3 各膠囊底 ≥ 4.5`, () => {
+        const text = theme === 'light' ? preset.textLight : preset.textDark;
+        for (const capsule of E3_CAPSULES) {
+          for (const [name, surface] of Object.entries(surfaces[theme])) {
+            const tint = capsule.tint === 'accent' ? preset.accent : capsule.tint;
+            const ratio = contrastRatio(text, composite(tint, capsule.alpha, surface));
+            expect(ratio, `${text} 在 ${capsule.where} on ${name} 只有 ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA_TEXT);
+          }
+        }
+      });
+    }
+  }
+});
