@@ -433,13 +433,13 @@ describe('A3 --success / --on-success(T2.9)', () => {
 
   for (const [file, selector, expected] of SUCCESS_RULES) {
     it(`${file} ${selector} 使用 --success`, () => {
+      // 同一選擇器可能另有只寫 animation 的規則(例如 reduced-motion 區塊),只看有宣告該屬性的規則。
       const rules = rulesIn(file, selector);
-      expect(rules.length, `${file} ${selector}`).toBeGreaterThan(0);
-      for (const r of rules) {
-        for (const [prop, value] of Object.entries(expected)) {
-          const actual = prop === 'background' ? backgroundOf(r) : r.decls[prop];
-          expect(actual, `${file} ${selector} ${prop}`).toBe(value);
-        }
+      for (const [prop, value] of Object.entries(expected)) {
+        const valueOf = (r: CssRule) => (prop === 'background' ? backgroundOf(r) : r.decls[prop]);
+        const declaring = rules.filter(r => valueOf(r) !== undefined);
+        expect(declaring.length, `${file} ${selector} 必須宣告 ${prop}`).toBeGreaterThan(0);
+        for (const r of declaring) expect(valueOf(r), `${file} ${selector} ${prop}`).toBe(value);
       }
     });
   }

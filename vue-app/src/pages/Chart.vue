@@ -485,8 +485,8 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .px-chg { font-size: 13px; font-weight: 500; }
 .px-chg.up { color: var(--up-text); }
 .px-chg.dn { color: var(--dn); }
-.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: rgba(22,163,74,0.12); color: var(--up-text); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
-.live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--up); animation: pulse 1.6s infinite; }
+.live-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: color-mix(in oklch, var(--success) 12%, transparent); color: var(--success); border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; }
+.live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .top-actions { display: flex; gap: 8px; }
 

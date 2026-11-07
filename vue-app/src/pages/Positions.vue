@@ -1163,7 +1163,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; cursor: pointer; user-select: none; transition: color .15s; }
 thead th:first-child { padding-left: 16px; }
 thead th:hover { color: var(--fg); }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); cursor: pointer; transition: background .15s; }
 tbody tr:hover { background: var(--surface2); }

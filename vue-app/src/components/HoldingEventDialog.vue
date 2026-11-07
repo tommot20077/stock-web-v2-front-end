@@ -1775,7 +1775,7 @@ textarea.inp { resize: vertical; }
 
 .result { padding: 48px 32px; text-align: center; }
 .check {
-  width: 48px; height: 48px; border-radius: 50%; background: var(--up); color: #fff;
+  width: 48px; height: 48px; border-radius: 50%; background: var(--success); color: var(--on-success);
   font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
   margin-bottom: 16px;
   animation: pop .45s cubic-bezier(.2,1.4,.4,1);
@@ -1793,13 +1793,14 @@ textarea.inp { resize: vertical; }
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; min-height: 36px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
   white-space: nowrap;
 }
 /*
   標籤切換(`記錄現金股利` ↔ `記錄中…`)不得讓按鈕縮放而造成版位跳動,
-  所以由三模式中最寬的標籤(en `Record stock dividend`,13px/600 約 150px + 48px 水平內距)決定下限。
+  所以由三模式中最寬的標籤(en `Record stock dividend`,13px/600 約 150px + 32px 水平內距 ≈ 182px)決定下限;
+  quick-261107-1j4 A1 把主按鈕改為與 OrderTicket 同規格(36px、內距 8px 16px),208px 下限保留不變。
 */
 .btn-submit { min-width: 208px; }
 .btn-done { margin-left: auto; }
@@ -1820,7 +1821,6 @@ textarea.inp { resize: vertical; }
 @media (max-width: 399px) {
   .ft { flex-direction: column-reverse; gap: 8px; padding-left: 16px; padding-right: 16px; }
   .ft .btn-accent, .ft .btn-ghost { width: 100%; min-width: 0; }
-  .btn-accent { padding-left: 16px; padding-right: 16px; }
   .btn-done { margin-left: 0; }
 }
 

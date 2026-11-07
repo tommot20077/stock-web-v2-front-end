@@ -459,7 +459,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tab:hover { color: var(--fg); }
 .tab.active { border-bottom-color: var(--accent); color: var(--fg); font-weight: 600; }
 .tab-count { background: var(--surface2); color: var(--fg-mute); border-radius: 10px; padding: 1px 6px; font-size: 10px; font-weight: 500; }
-.tab.active .tab-count { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent); }
+.tab.active .tab-count { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent-text); }
 
 .live {
   flex: none; white-space: nowrap;
@@ -468,12 +468,12 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   border-radius: 99px; font-size: 11px; font-weight: 600; letter-spacing: .6px;
   color: var(--fg-mute); cursor: pointer; margin-bottom: 8px;
 }
-.live.on { color: var(--up-text); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
+.live.on { color: var(--success); border-color: color-mix(in oklch, var(--success) 35%, var(--border)); }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
-.live.on .live-dot { background: var(--up); animation: pulse 1.4s ease-in-out infinite; }
+.live.on .live-dot { background: var(--success); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--up) 50%, transparent); }
-  50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--up) 0%, transparent); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 50%, transparent); }
+  50% { opacity: .6; box-shadow: 0 0 0 4px color-mix(in oklch, var(--success) 0%, transparent); }
 }
 
 .wl-load-error {
@@ -509,7 +509,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; cursor: pointer; user-select: none; transition: color .15s; }
 thead th:hover { color: var(--fg); }
 thead th:first-child { padding-left: 16px; cursor: default; }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 
 tbody tr.row { border-top: 1px solid var(--border); cursor: pointer; transition: background .15s; }

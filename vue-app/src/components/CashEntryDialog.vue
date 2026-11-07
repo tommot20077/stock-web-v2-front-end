@@ -815,7 +815,7 @@ textarea.inp { resize: vertical; }
 
 .result { padding: 48px 32px; text-align: center; }
 .check {
-  width: 48px; height: 48px; border-radius: 50%; background: var(--up); color: #fff;
+  width: 48px; height: 48px; border-radius: 50%; background: var(--success); color: var(--on-success);
   font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
   margin-bottom: 16px;
   animation: pop .45s cubic-bezier(.2,1.4,.4,1);
@@ -833,13 +833,14 @@ textarea.inp { resize: vertical; }
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; min-height: 36px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
   white-space: nowrap;
 }
 /*
   標籤切換(`記錄出金` ↔ `記錄中…`、`Record withdrawal` ↔ `Recording…`)不得讓按鈕縮放而造成版位跳動,
-  所以由最寬的標籤(en `Record withdrawal`,13px/600 約 125px + 48px 水平內距)決定下限。
+  所以由最寬的標籤(en `Record withdrawal`,13px/600 約 125px + 32px 水平內距 ≈ 157px)決定下限;
+  quick-261107-1j4 A1 把主按鈕改為與 OrderTicket 同規格(36px、內距 8px 16px),176px 下限保留不變。
 */
 .btn-submit { min-width: 176px; }
 .btn-done { margin-left: auto; }
@@ -853,10 +854,10 @@ textarea.inp { resize: vertical; }
 .btn-ghost:hover:not(:disabled) { background: var(--surface); }
 .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
 
-/* < 400px:面板 92vw 約 294px,footer 內距與主按鈕內距降為 16px,否則最長標籤會溢出 */
+/* < 400px:面板 92vw 約 294px,footer 內距降為 16px、主按鈕下限降為 160px,否則最長標籤會溢出
+   (主按鈕內距已是 16px,不需再覆寫) */
 @media (max-width: 399px) {
   .ft { padding-left: 16px; padding-right: 16px; }
-  .btn-accent { padding-left: 16px; padding-right: 16px; }
   .btn-submit { min-width: 160px; }
 }
 

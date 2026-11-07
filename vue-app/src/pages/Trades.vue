@@ -1027,7 +1027,7 @@ thead tr {
 thead th { padding: 10px 0; font-weight: 500; }
 thead th.sortable { cursor: pointer; user-select: none; transition: color .15s; }
 thead th.sortable:hover { color: var(--fg); }
-thead th.s { color: var(--accent); }
+thead th.s { color: var(--accent-text); }
 .sort-a { display: inline-block; margin-left: 4px; font-size: 10px; }
 tbody tr { border-top: 1px solid var(--border); transition: background .4s; }
 tbody td { padding: 11px 0; }

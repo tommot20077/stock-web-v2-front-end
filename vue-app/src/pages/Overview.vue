@@ -1094,7 +1094,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .wl-chg.na { color: var(--fg-dim); }
 /* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
 .row-live { display: inline-flex; align-items: center; margin-right: 4px; vertical-align: middle; }
-.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--up); }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 99px; background: var(--success); }
 .wl-more-row { display: flex; justify-content: flex-end; border-top: 1px solid var(--border); }
 .wl-state { padding: 16px 0; font-size: 13px; color: var(--fg-dim); }
 .wl-error { padding: 16px 0; font-size: 13px; }

@@ -7,18 +7,28 @@
     (#15803d 白字 5.02:1、#dc2626 白字 4.83:1);深色 --dn #ef4444 白字只有 3.76:1,不可直接當按鈕底。
   - 紅漲綠跌偏好(useTweaks 的 upGreen=false)由 data-up-color="red" 對調,區塊必須寫在深色區塊之後
     (同特異度時後者勝)。
+  quick-261107-1j4 2d(Yuan 2026-11-07 3A 裁決;量測見 contrastTokens.test.ts / accentTokens.test.ts):
+  - --accent-text:accent 當**文字**用的安全版(--accent 本身只當底色 / 邊框 / 圖形)。此處是預設 accent
+    #ff6600 的淺 / 深值;選了其他 preset 時由 useTweaks 以 inline 覆寫(對照表在 accentTokens.ts)。
+  - --success / --on-success:成功 / OK / live / 健康 / 已連線 這類**狀態**語意的固定綠,與漲跌色 --up 分離,
+    紅漲綠跌區塊不得覆寫。深色下白字對 #22c55e 只有約 2.3:1,所以另立 --on-success(比照 --on-accent)。
+    淺 #166534:surface ≥ 6.4、15% 膠囊 ≥ 5.1、白色圖示 7.1;深 #22c55e:surface ≥ 7.3、膠囊 ≥ 5.6、
+    #15171c 圖示 7.9。
+  - --fg-mute 加深:淺 #6b6b73(surface ≥ 4.76)、深 #8f8c84(≥ 4.96)。
 */
 :root {
   --bg: #fafaf9; --surface: #ffffff; --surface2: #f4f3f0;
-  --fg: #15171c; --fg-dim: #52525b; --fg-mute: #a1a1aa;
-  --border: #e7e5e0; --accent: #ff6600; --on-accent: #15171c;
+  --fg: #15171c; --fg-dim: #52525b; --fg-mute: #6b6b73;
+  --border: #e7e5e0; --accent: #ff6600; --on-accent: #15171c; --accent-text: #a64300;
+  --success: #166534; --on-success: #ffffff;
   --up: #16a34a; --up-text: #15803d; --dn: #dc2626; --neg: var(--dn); --radius: 12px;
   --btn-up-bg: #15803d; --btn-dn-bg: #dc2626;
 }
 :root[data-theme="dark"] {
   --bg: #0c0d10; --surface: #15171c; --surface2: #1c1e25;
-  --fg: #e7e5e0; --fg-dim: #a8a59c; --fg-mute: #62605a;
-  --border: #262830;
+  --fg: #e7e5e0; --fg-dim: #a8a59c; --fg-mute: #8f8c84;
+  --border: #262830; --accent-text: #ff6d0b;
+  --success: #22c55e; --on-success: #15171c;
   --up-text: #16a34a; --dn: #ef4444;
 }
 :root[data-up-color="red"] {

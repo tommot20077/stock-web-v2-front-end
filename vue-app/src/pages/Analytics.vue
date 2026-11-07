@@ -322,7 +322,7 @@
               <div class="mono" style="font-weight:700;font-size:14px">{{ h.sym }}</div>
               <div class="hint">{{ h.name }}</div>
               <div class="dot-row">
-                <span class="dot" :style="{ background: h.daysHeld > 365 ? 'var(--up)' : '#f59e0b' }" />
+                <span class="dot" :style="{ background: h.daysHeld > 365 ? 'var(--success)' : '#f59e0b' }" />
                 <span class="hint">{{ h.daysHeld }} {{ lang === 'zh' ? '天' : 'days' }} · {{ h.daysHeld > 365 ? (lang === 'zh' ? '長期' : 'long-term') : (lang === 'zh' ? '短期' : 'short-term') }}</span>
               </div>
             </div>

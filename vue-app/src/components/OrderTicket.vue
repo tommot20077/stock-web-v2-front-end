@@ -1547,7 +1547,7 @@ function handleSubmitFailure(error: unknown) {
 /* Result */
 .result { padding: 48px 32px; text-align: center; }
 .check {
-  width: 48px; height: 48px; border-radius: 50%; background: var(--up); color: #fff;
+  width: 48px; height: 48px; border-radius: 50%; background: var(--success); color: var(--on-success);
   font-size: 20px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
   margin-bottom: 16px;
   animation: pop .45s cubic-bezier(.2,1.4,.4,1);

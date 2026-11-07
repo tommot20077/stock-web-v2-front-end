@@ -40,7 +40,7 @@
           <div class="key-r">
             <button class="btn-ghost" :disabled="k.testing" @click="testKey(k)">
               <span v-if="k.testing">{{ t(lang, 'testing') }}</span>
-              <span v-else-if="k.lastTest === 'ok'" style="color:var(--up-text)">✓ {{ t(lang, 'connected') }}</span>
+              <span v-else-if="k.lastTest === 'ok'" style="color:var(--success)">✓ {{ t(lang, 'connected') }}</span>
               <span v-else-if="k.lastTest === 'fail'" style="color:var(--dn)">! {{ lang === 'zh' ? '失敗' : 'Failed' }}</span>
               <span v-else>{{ t(lang, 'testConnection') }}</span>
             </button>
@@ -168,7 +168,7 @@ defineProps<{
   white-space: nowrap;
 }
 .chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
-.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
+.chip.live { background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
 .chip.trade { background: color-mix(in oklch, #8B5CF6 18%, transparent); color: #8B5CF6; }
 .micro {
   background: transparent; border: 0; padding: 1px 6px; border-radius: 4px;

@@ -100,7 +100,7 @@ const timedParts = computed<[string, string]>(() => {
   flex: none; display: inline-block; width: 6px; height: 6px; border-radius: 99px;
 }
 .live-dot.hollow { border: 1px solid var(--fg-dim); }
-.live-dot.solid { background: var(--up); animation: livePulse 2s ease-in-out infinite; }
+.live-dot.solid { background: var(--success); animation: livePulse 2s ease-in-out infinite; }
 @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .btn-ghost-sm {
