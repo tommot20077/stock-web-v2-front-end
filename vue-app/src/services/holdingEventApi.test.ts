@@ -4,7 +4,7 @@ import {
   createHoldingEventApi,
   createHttpHoldingEventApi,
   createMockHoldingEventApi,
-  listMockHoldingEventsForTests,
+  listMockHoldingEvents,
   resetMockHoldingEventsForTests,
   type CreateDividendRequest,
   type CreateShareAdjustmentRequest,
@@ -305,7 +305,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     // mock Trade 沒有「總額」欄位,總額 = qty × px;寫入後必須等於實領金額。
     expect(store.trades[0].qty * store.trades[0].px).toBe(120);
     expect(dto).toMatchObject({ amount: 120, withholdingTax: 30, paidAt: '2026-10-30T09:00:00+08:00', note: 'Q3' });
-    const events = listMockHoldingEventsForTests();
+    const events = listMockHoldingEvents();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       id: dto.id,
@@ -336,7 +336,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
     expect(second.id).toBe(first.id);
     expect(store.trades).toHaveLength(before + 1);
-    expect(listMockHoldingEventsForTests()).toHaveLength(1);
+    expect(listMockHoldingEvents()).toHaveLength(1);
   });
 
   it('rejects the same key with a different amount as DIVIDEND_IDEMPOTENCY_KEY_REUSED', async () => {
@@ -346,7 +346,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     const error = await thrownBy(api.createDividend({ ...DIVIDEND_REQUEST, amount: 121 }, 'k-1'));
 
     expect(error).toMatchObject({ name: 'ApiClientError', status: 409, code: 'DIVIDEND_IDEMPOTENCY_KEY_REUSED' });
-    expect(listMockHoldingEventsForTests()).toHaveLength(1);
+    expect(listMockHoldingEvents()).toHaveLength(1);
   });
 
   it('rejects amount <= 0 with VALIDATION_FAILED fields.amount', async () => {
@@ -354,7 +354,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
     expect(error).toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
     expect(error.fields).toHaveProperty('amount');
-    expect(listMockHoldingEventsForTests()).toHaveLength(0);
+    expect(listMockHoldingEvents()).toHaveLength(0);
   });
 
   it('rejects an unknown symbol with ASSET_NOT_FOUND fields.symbol', async () => {
@@ -375,7 +375,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
     expect(reversal.reversalOfId).toBe(original.id);
     expect(reversal.reversed).toBe(false);
-    const events = listMockHoldingEventsForTests();
+    const events = listMockHoldingEvents();
     const stored = events.find(event => event.id === original.id)!;
     expect(stored.reversed).toBe(true);
     expect(stored.reversible).toBe(false);
@@ -443,7 +443,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
       reversed: false,
     });
     expect(Object.keys(dto).sort()).toEqual(Object.keys(SPLIT_DTO).sort());
-    expect(listMockHoldingEventsForTests()[0]).toMatchObject({
+    expect(listMockHoldingEvents()[0]).toMatchObject({
       kind: 'STOCK_DIVIDEND',
       quantity: 50,
       effectiveDate: '2026-01-10',
@@ -480,7 +480,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     ));
 
     expect(error).toMatchObject({ status: 409, code: 'TRADE_INSUFFICIENT_HOLDING' });
-    expect(listMockHoldingEventsForTests()).toHaveLength(0);
+    expect(listMockHoldingEvents()).toHaveLength(0);
   });
 
   it('rejects an effectiveDate later than today with VALIDATION_FAILED fields.effectiveDate', async () => {
@@ -537,7 +537,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
       'k-3',
     ));
     expect(notLatest).toMatchObject({ status: 409, code: 'SHARE_ADJUSTMENT_NOT_REVERSIBLE' });
-    expect(listMockHoldingEventsForTests().map(event => [event.id, event.reversible])).toEqual([
+    expect(listMockHoldingEvents().map(event => [event.id, event.reversible])).toEqual([
       [first.id, false],
       [second.id, true],
     ]);
@@ -551,7 +551,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     // 沖銷撤銷已記錄的 ΔQ、總成本不變。
     expect(aaplPosition()?.qty).toBe(1050);
     expect(aaplPosition()?.avg).toBe(95.23809524);
-    const events = listMockHoldingEventsForTests();
+    const events = listMockHoldingEvents();
     expect(events.find(event => event.id === second.id)).toMatchObject({ reversed: true, reversible: false });
     expect(events.find(event => event.id === first.id)).toMatchObject({ reversed: false, reversible: true });
     expect(events.find(event => event.id === reversal.id)).toMatchObject({
@@ -589,11 +589,11 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
 
     dividend.amount = 999;
     adjustment.quantityDelta = 999;
-    const listed = listMockHoldingEventsForTests();
+    const listed = listMockHoldingEvents();
     listed[0].amount = 999;
     listed.pop();
 
-    const fresh = listMockHoldingEventsForTests();
+    const fresh = listMockHoldingEvents();
     expect(fresh).toHaveLength(2);
     expect(fresh[0].amount).toBe(120);
     expect(fresh[1].quantity).toBe(3000);
@@ -606,7 +606,7 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
 
     resetMockHoldingEventsForTests();
 
-    expect(listMockHoldingEventsForTests()).toEqual([]);
+    expect(listMockHoldingEvents()).toEqual([]);
     const second = await api.createDividend({ ...DIVIDEND_REQUEST, amount: 121 }, 'k-1');
     expect(second.id).not.toBe(first.id);
   });

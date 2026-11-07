@@ -1,5 +1,5 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
-import { isMockHoldingEventTradeRow, listMockHoldingEventsForTests } from './holdingEventApi';
+import { isMockHoldingEventTradeRow, listMockHoldingEvents } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type {
   AllocationSliceDto,
@@ -303,7 +303,7 @@ export function createMockPortfolioApi(): PortfolioApi {
       return useMockPortfolioStore().lastFill;
     },
     get holdingEvents() {
-      return listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+      return listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
     },
     isHoldingEventTrade(trade) {
       return isMockHoldingEventTradeRow(trade);
@@ -339,7 +339,7 @@ export function createMockPortfolioApi(): PortfolioApi {
         .map((trade, index) => ({ trade, index }))
         .filter(({ trade }) => !isMockHoldingEventTradeRow(trade))
         .map(({ trade, index }) => activityFromTrade(trade, index));
-      const fromEvents = listMockHoldingEventsForTests().map(event => ({ ...event, price: null, fee: null }));
+      const fromEvents = listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
       const matched = applyActivityParams([...fromTrades, ...fromEvents], params);
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;
