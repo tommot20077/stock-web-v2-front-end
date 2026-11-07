@@ -48,7 +48,8 @@
     </div>
 
     <div class="card">
-      <table>
+      <!-- tabindex="-1":只供選擇器在觸發列消失時回填焦點(WR-08),不進 Tab 順序 -->
+      <table ref="tableEl" tabindex="-1" data-testid="markets-table">
         <thead>
           <tr>
             <th style="width:36px"></th>
@@ -151,6 +152,7 @@
       :lists="lists"
       :loading="listsLoading"
       :load-error="listsError"
+      :fallback-focus="tableEl"
       @close="closePicker"
       @changed="onListChanged"
       @created="onListCreated"
@@ -219,6 +221,11 @@ function onListCreated(created: WatchlistDto) {
 
 const pickerSymbol = ref<string | null>(null);
 const pickerAnchor = ref<HTMLElement | null>(null);
+/**
+ * 04.2-review WR-08:「觀察清單」tab 與 ★ chip 下,取消勾選會讓觸發列(含星號)卸載;
+ * 選擇器關閉時改把焦點還給行情表本身(同一張表、使用者剛操作的位置附近,一直都在)。
+ */
+const tableEl = ref<HTMLTableElement | null>(null);
 
 function togglePicker(sym: string, event: MouseEvent) {
   if (pickerSymbol.value === sym) {
@@ -502,6 +509,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .ttl { font-size: 14px; font-weight: 600; }
 table { width: 100%; font-size: 13px; }
+/* 選擇器回填焦點(WR-08)時鍵盤使用者看得到落點;內縮避免被卡片圓角裁掉 */
+table:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 thead tr {
   background: var(--surface2); color: var(--fg-dim);
   font-size: 11px; text-align: left; text-transform: uppercase; letter-spacing: 0.4px;
