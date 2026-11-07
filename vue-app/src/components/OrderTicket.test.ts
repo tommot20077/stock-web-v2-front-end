@@ -1928,3 +1928,47 @@ describe('OrderTicket 送出路徑 — D-16 未知 fields key(F-3)', () => {
     expect(bodyText()).not.toContain('BackendMessageMustNotReachTheDom');
   });
 });
+
+// =====================================================================================
+// quick-261107-1j4(Yuan 2026-11-07 裁決 3B / T2.4):成交時間 1900-01-01 下限與三種文案。
+// 後端 `POST /api/v1/trades` 對早於 1900-01-01T00:00:00Z 的 executedAt 回
+// 400 `fields.executedAt`;前端自檢以同一個 instant 比較,並分「空白 / 過早 / 未來」三種文案。
+// =====================================================================================
+
+describe('OrderTicket 成交時間自檢 — 空白 / 過早 / 未來(quick-261107-1j4)', () => {
+  for (const mode of ['mock', 'api'] as const) {
+    it(`${mode} mode:清空 → 請填寫;1800 年 → 不可早於 1900-01-01;未來 → 既有文案`, async () => {
+      await mountTicket({ mode });
+      const input = requireInput('ticket-executed-at');
+
+      await setInput(input, '');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAtRequired'));
+      expect(advanceButton().disabled, '空白時不得前進到確認步驟').toBe(true);
+
+      await setInput(input, '1800-01-01T00:00');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAtTooEarly'));
+      expect(advanceButton().disabled, '過早時不得前進到確認步驟').toBe(true);
+
+      await setInput(input, '2999-01-01T00:00');
+      expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+      expect(advanceButton().disabled, '未來時不得前進到確認步驟').toBe(true);
+    });
+  }
+
+  it('後端 400 fields.executedAt 且目前輸入合法 → 欄位節點顯示既有文案,value 不入 DOM', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeFailure('VALIDATION_FAILED', {
+        status: 400,
+        fields: { executedAt: 'must not be before 1900-01-01' },
+      }),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    const node = requireTestid('ticket-field-error-executedAt');
+    expect(node.textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+    expect(requireInput('ticket-executed-at').getAttribute('aria-invalid')).toBe('true');
+    expect(bodyText()).not.toContain('must not be before 1900-01-01');
+  });
+});
