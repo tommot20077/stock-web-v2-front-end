@@ -810,6 +810,13 @@ describe('i18n quick-261107-1j4 copy', () => {
     expect(I18N.en.holdingEventErrEffectiveDateTooEarly).toBe('The ex-date cannot be earlier than 1900-01-01.');
   });
 
+  it('drops the order type / time-in-force keys in both languages (B3)', () => {
+    for (const key of ['orderType', 'market', 'limit', 'tif', 'day', 'gtc']) {
+      expect(key in I18N.zh, `zh.${key} 應已刪除`).toBe(false);
+      expect(key in I18N.en, `en.${key} should be removed`).toBe(false);
+    }
+  });
+
   it('fills the market date hint with the zone label in both languages (WR-09)', () => {
     expect(tf('zh', 'holdingEventMarketDate', { zone: t('zh', 'marketZoneNewYork') })).toBe('以美東日期計');
     expect(tf('en', 'holdingEventMarketDate', { zone: t('en', 'marketZoneNewYork') })).toBe('Uses the US Eastern date');

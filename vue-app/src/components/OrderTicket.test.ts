@@ -198,22 +198,41 @@ describe('OrderTicket 骨架契約 — 三步驟與欄位(U-01 / D-02 / D-03 / D
     expect(dots.children).toHaveLength(3);
   });
 
-  it('API mode 不渲染訂單類型 / TIF / 交易後現金(D-04:隱藏,不留空版位)', async () => {
-    await mountTicket({ mode: 'api' });
+  // quick-261107-1j4(Yuan 2026-11-07 裁決 3B):訂單類型(市價 / 限價)與有效時間(當日 / 長效)是委託單概念,
+  // 手動紀錄已成交交易用不到 —— 兩個模式都移除,review 畫面也不再有那一列。
+  for (const mode of ['mock', 'api'] as const) {
+    it(`${mode} mode 沒有訂單類型 / 有效時間控件,review 畫面也沒有那一列(quick-261107-1j4 B3)`, async () => {
+      await mountTicket({ mode });
 
+      for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
+        expect(buttonTexts(), `${mode} mode 不得出現 ${label} 控件`).not.toContain(label);
+      }
+      expect(document.getElementById('trade-ord-type-mkt'), '訂單類型的 label 目標').toBeNull();
+      expect(document.getElementById('trade-tif-day'), '有效時間的 label 目標').toBeNull();
+
+      await clickDeep(requireTestid('ticket-review-advance'));
+      const grid = document.body.querySelector<HTMLElement>('.rev-grid');
+      expect(grid, `${mode} mode 應進到 review`).toBeTruthy();
+      const labels = [...grid!.querySelectorAll('span')].map(span => span.textContent?.trim());
+      expect(labels, 'review 不得有訂單類型列').not.toContain('Type');
+      expect(grid!.textContent).not.toMatch(/\b(Market|Limit|DAY|GTC)\b/);
+    });
+  }
+
+  it('API mode 不渲染交易後現金(D-04:隱藏,不留空版位);mock mode 保留', async () => {
+    await mountTicket({ mode: 'api' });
     expect(bodyText()).not.toContain(t('en', 'cashAfter'));
-    for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
-      expect(buttonTexts(), `API mode 不得出現 ${label} 控件`).not.toContain(label);
-    }
+
+    cleanupMounted();
+    await mountTicket();
+    expect(bodyText()).toContain(t('en', 'cashAfter'));
   });
 
-  it('mock mode 仍保留訂單類型 / TIF / 交易後現金(D-04:mock 四樣全部保留)', async () => {
-    await mountTicket();
-
-    expect(bodyText()).toContain(t('en', 'cashAfter'));
-    for (const label of ['Market', 'Limit', 'Day', 'GTC']) {
-      expect(buttonTexts(), `mock mode 應保留 ${label} 控件`).toContain(label);
-    }
+  it('原始碼不再有 ordType / tif 狀態(quick-261107-1j4 B3)', () => {
+    expect(orderTicketSource).not.toMatch(/\bordType\b/);
+    expect(orderTicketSource).not.toMatch(/\btif\b/);
+    expect(orderTicketSource).not.toContain('trade-ord-type');
+    expect(orderTicketSource).not.toContain('trade-tif');
   });
 
   it('兩個 mode 的畫面都沒有委託單生命週期語意(judgment §1 / D-09)', async () => {
