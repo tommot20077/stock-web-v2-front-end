@@ -33,6 +33,7 @@ interface MountOptions {
   loadError?: ApiClientError | null;
   symbol?: string;
   fetchImpl?: WatchlistFetch;
+  fallbackFocus?: HTMLElement | null;
 }
 
 interface Mounted {
@@ -42,6 +43,8 @@ interface Mounted {
   changed: WatchlistDto[];
   created: WatchlistDto[];
   lists: () => WatchlistDto[] | null;
+  setLists: (next: WatchlistDto[]) => void;
+  setSymbol: (next: string) => void;
 }
 
 /** 宿主:持有清單狀態,收 changed / created 後以回應 DTO 更新(與 Markets 頁同責任分工)。 */
@@ -62,14 +65,16 @@ async function mountPicker(options: MountOptions = {}): Promise<Mounted> {
   const created: WatchlistDto[] = [];
   const lists = ref<WatchlistDto[] | null>(options.lists === undefined ? [] : options.lists);
   const open = ref(true);
+  const symbol = ref(options.symbol ?? 'AAPL');
 
   const Host = defineComponent({
     setup() {
       return () => h(WatchlistPicker, {
         open: open.value,
         lang: 'zh',
-        symbol: options.symbol ?? 'AAPL',
+        symbol: symbol.value,
         anchor,
+        fallbackFocus: options.fallbackFocus ?? null,
         lists: lists.value,
         loading: options.loading ?? false,
         loadError: options.loadError ?? null,
@@ -89,7 +94,16 @@ async function mountPicker(options: MountOptions = {}): Promise<Mounted> {
 
   mountWithPinia(Host);
   await flushAsync();
-  return { fetchImpl, anchor, events, changed, created, lists: () => lists.value };
+  return {
+    fetchImpl,
+    anchor,
+    events,
+    changed,
+    created,
+    lists: () => lists.value,
+    setLists: next => { lists.value = next; },
+    setSymbol: next => { symbol.value = next; },
+  };
 }
 
 function picker(): HTMLElement | null {
@@ -498,5 +512,85 @@ describe('WatchlistPicker:建立並加入(U-13)', () => {
     expect(byTestId('watchlist-picker-name-error')?.textContent).toContain(t('zh', 'watchlistErrDuplicateName'));
     expect(callsTo(mounted.fetchImpl, 'POST', '/items')).toHaveLength(0);
     expect(mounted.created).toHaveLength(0);
+  });
+});
+
+/** jsdom 不排版:以觸發鈕的假 rect 驗證定位;脫離 DOM 的節點與瀏覽器一樣回全 0。 */
+function stubAnchorRect(anchor: HTMLElement) {
+  anchor.getBoundingClientRect = () => (anchor.isConnected
+    ? ({ top: 200, bottom: 232, left: 300, right: 340, width: 40, height: 32, x: 300, y: 200, toJSON: () => ({}) } as DOMRect)
+    : ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect));
+}
+
+function panelPosition(): { top: string; left: string } {
+  const panel = picker();
+  expect(panel, 'picker panel').not.toBeNull();
+  return { top: panel!.style.getPropertyValue('--wp-top'), left: panel!.style.getPropertyValue('--wp-left') };
+}
+
+describe('WatchlistPicker:觸發鈕被移出 DOM(04.2-review WR-08)', () => {
+  it('觸發鈕脫離 DOM 後重新定位 → 保留上次位置,不跳到左上角 16 / 16', async () => {
+    const mounted = await mountPicker({ lists: [watchlistDto('wl-1', '我的自選', ['AAPL'])] });
+    stubAnchorRect(mounted.anchor);
+    window.dispatchEvent(new Event('resize'));
+    await flushAsync();
+    expect(panelPosition()).toEqual({ top: '240px', left: '340px' });
+
+    mounted.anchor.remove();
+    mounted.setLists([watchlistDto('wl-1', '我的自選', [])]);
+    await flushAsync();
+    window.dispatchEvent(new Event('resize'));
+    await flushAsync();
+
+    expect(panelPosition()).toEqual({ top: '240px', left: '340px' });
+  });
+
+  it('觸發鈕脫離 DOM 後按 Esc → 焦點落在頁面提供的 fallbackFocus(不掉到 body)', async () => {
+    const fallback = document.createElement('div');
+    fallback.tabIndex = -1;
+    document.body.appendChild(fallback);
+    const mounted = await mountPicker({ lists: [MY_LIST], fallbackFocus: fallback });
+
+    mounted.anchor.remove();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushAsync();
+
+    expect(mounted.events).toContain('close');
+    expect(document.activeElement).toBe(fallback);
+  });
+
+  it('觸發鈕仍在 DOM 時,即使有 fallbackFocus,✕ 關閉仍把焦點還給觸發鈕', async () => {
+    const fallback = document.createElement('div');
+    fallback.tabIndex = -1;
+    document.body.appendChild(fallback);
+    const mounted = await mountPicker({ lists: [MY_LIST], fallbackFocus: fallback });
+
+    byTestId<HTMLButtonElement>('watchlist-picker-close')!.click();
+    await flushAsync();
+
+    expect(document.activeElement).toBe(mounted.anchor);
+  });
+});
+
+describe('WatchlistPicker:建立並加入期間換代號(04.2-review WR-10)', () => {
+  it('create 請求進行中 props.symbol 改變 → addItem 仍收到送出當下的代號', async () => {
+    const pending = deferred<Response>();
+    const fetchImpl = watchlistFetch([MY_LIST], { create: () => pending.promise });
+    const mounted = await mountPicker({ lists: [MY_LIST], fetchImpl });
+
+    clickTestId('watchlist-picker-new');
+    await flushAsync();
+    await setInput(byTestId<HTMLInputElement>('watchlist-picker-new-name')!, '半導體');
+    clickTestId('watchlist-picker-new-submit');
+    await flushAsync();
+
+    mounted.setSymbol('TSLA');
+    await flushAsync();
+    pending.resolve(apiSuccess(watchlistDto('wl-new', '半導體', [])));
+    await flushAsync();
+
+    const adds = callsTo(mounted.fetchImpl, 'POST', '/watchlists/wl-new/items');
+    expect(adds).toHaveLength(1);
+    expect(JSON.parse(String(adds[0][1]?.body))).toEqual({ symbol: 'AAPL' });
   });
 });
