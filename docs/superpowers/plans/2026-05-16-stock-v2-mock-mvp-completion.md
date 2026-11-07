@@ -1,5 +1,7 @@
 # Stock V2 Mock MVP Completion Implementation Plan
 
+> 📜 **歷史文件(2026-05-16),不隨程式維護。** 內容反映當時的 mock MVP 規劃;現況以 `vue-app/` 程式碼、`AGENTS.md` 與後端 `ai-docs/` 契約為準。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the current stock-v2 Vue prototype into a coherent mock MVP where visible controls update local state, preview features are clearly labeled, and cross-page mock data stays consistent.

@@ -30,5 +30,8 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, 'e2e/**'],
     pool: 'threads',
     fileParallelism: false,
+    // quick-261106-fbs:vitest 預設把 .css 匯入(含 `?raw`)換成空字串;contrastTokens.test.ts 要讀全域 token
+    // 原始碼,所以只對 src/styles.css 開啟 CSS 處理(其他 CSS 維持預設,不影響既有測試)。
+    css: { include: [/\/src\/styles\.css/] },
   },
 });

@@ -234,6 +234,7 @@ import SettingRow from '../components/SettingRow.vue';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
+import { baseCurrencyErrorKey } from '../baseCurrencyErrorKey';
 import { bumpPortfolioRevision } from '../services/portfolioRevision';
 import SettingsAiAccess from '../components/settings/SettingsAiAccess.vue';
 import SettingsBrokers from '../components/settings/SettingsBrokers.vue';
@@ -351,20 +352,6 @@ function diagnosticsOf(error: unknown): { code: string; traceId: string | null }
   return { code: 'NETWORK_ERROR', traceId: null };
 }
 
-/** 儲存失敗的文案分派(UI-SPEC 基準幣表)。401 回傳 null:交給全域 SessionBanner,這裡不重複顯示。 */
-function saveErrorKey(error: unknown): string | null {
-  if (!(error instanceof ApiClientError)) return 'baseCurrencyErrNetwork';
-  if (error.status === 401) return null;
-  if (error.code === 'VALIDATION_FAILED' && error.fields && 'baseCurrency' in error.fields) {
-    return 'baseCurrencyErrUnsupported';
-  }
-  if (error.code === 'AUTH_CSRF_TOKEN_INVALID' || error.code === 'AUTH_CSRF_TOKEN_MISSING') {
-    return 'baseCurrencyErrCsrf';
-  }
-  if (error.status === 403) return 'baseCurrencyErrForbidden';
-  return 'baseCurrencyErrUnknown';
-}
-
 async function loadBaseCurrency() {
   ccyPhase.value = 'loading';
   ccyError.value = null;
@@ -395,7 +382,8 @@ async function onBaseCurrencyChange(event: Event) {
   } catch (error) {
     // 失敗一律回到已儲存值;PATCH 冪等,再選一次即重試,所以不放重試鈕。
     ccySelected.value = ccySaved.value;
-    const messageKey = saveErrorKey(error);
+    // 文案分派與 Overview 共用(baseCurrencyErrorKey);401 回 null,交給全域 SessionBanner。
+    const messageKey = baseCurrencyErrorKey(error);
     ccyError.value = messageKey ? { messageKey, ...diagnosticsOf(error) } : null;
     ccyPhase.value = 'saveError';
   }
@@ -454,7 +442,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .btn-ghost:disabled:hover { border-color: var(--border); color: var(--fg-mute); }
 .btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 7px 14px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 14px;
   border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }

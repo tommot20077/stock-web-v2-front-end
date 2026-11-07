@@ -11,13 +11,15 @@
     </div>
 
     <div class="tabs">
-      <button
-        v-for="k in tabs"
-        :key="k"
-        :class="['tab', { active: tab === k }]"
-        @click="tab = k; sortKey = ''"
-      >{{ t(lang, k) }} <span class="tab-count">{{ tabCount(k) }}</span></button>
-      <div style="flex:1" />
+      <!-- < 640px:tabs 在列內水平捲動,LIVE 鈕固定在右側不被壓縮(quick-261106-fbs A3) -->
+      <div class="tab-scroll">
+        <button
+          v-for="k in tabs"
+          :key="k"
+          :class="['tab', { active: tab === k }]"
+          @click="tab = k; sortKey = ''"
+        >{{ t(lang, k) }} <span class="tab-count">{{ tabCount(k) }}</span></button>
+      </div>
       <button class="live" :class="{ on: liveOn }" @click="liveOn = !liveOn">
         <span class="live-dot" />
         {{ liveOn ? 'LIVE' : 'PAUSED' }}
@@ -106,7 +108,7 @@
             <td
               class="num"
               style="text-align:right"
-              :style="{ color: changeOf(row) >= 0 ? 'var(--up)' : 'var(--dn)' }"
+              :style="{ color: changeOf(row) >= 0 ? 'var(--up-text)' : 'var(--dn)' }"
             >
               {{ changeText(row) }}
             </td>
@@ -416,29 +418,42 @@ onUnmounted(() => {
 
 <style scoped>
 .page { padding: 22px; }
-.row-between { display: flex; justify-content: space-between; align-items: center; }
+/* 頁首:窄螢幕時搜尋框換到標題下一列,不撐寬 .main(quick-261106-fbs A3) */
+.row-between { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; }
 h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 
-.search-wrap { position: relative; }
+/* 寬度由外層決定:最多 280px(focus 時 320px),但不超過容器寬;input 填滿外層 */
+.search-wrap { position: relative; flex: 0 1 280px; min-width: 0; max-width: 100%; transition: flex-basis .2s; }
+.search-wrap:focus-within { flex-basis: 320px; }
 .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--fg-mute); font-size: 14px; pointer-events: none; }
 .search-x { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-mute); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
 .search-x:hover { background: var(--surface2); color: var(--fg); }
 .search {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 8px 14px 8px 32px; font-size: 13px; outline: none; width: 280px;
-  color: var(--fg); transition: border .15s, width .2s;
+  padding: 8px 14px 8px 32px; font-size: 13px; outline: none; width: 100%;
+  color: var(--fg); transition: border .15s;
 }
-.search:focus { border-color: var(--accent); width: 320px; }
+.search:focus { border-color: var(--accent); }
 
 .tabs {
-  display: flex; gap: 4px; margin-bottom: 14px; align-items: center;
+  display: flex; gap: 8px; margin-bottom: 14px; align-items: center;
   border-bottom: 1px solid var(--border);
 }
+/*
+  tabs 自己的捲動容器(比照 Watchlist.vue 的 tabs):flex 1 + min-width 0 讓它可縮到比內容窄,
+  超出時在列內水平捲動而不撐寬 .main。底線壓在 .tabs 的下框線上:-1px 改由捲動容器負責,
+  tab 本身不再用負 margin(否則會在捲動容器內溢出 1px、多出垂直捲軸)。
+*/
+.tab-scroll {
+  display: flex; gap: 4px; flex: 1 1 auto; min-width: 0;
+  overflow-x: auto; overflow-y: hidden; margin-bottom: -1px;
+}
 .tab {
+  flex: none; white-space: nowrap;
   padding: 10px 14px; background: transparent; border: 0;
   border-bottom: 2px solid transparent;
   color: var(--fg-dim); font-size: 13px; font-weight: 500;
-  margin-bottom: -1px; cursor: pointer; transition: color .15s;
+  cursor: pointer; transition: color .15s;
   display: flex; align-items: center; gap: 6px;
 }
 .tab:hover { color: var(--fg); }
@@ -447,12 +462,13 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tab.active .tab-count { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent); }
 
 .live {
+  flex: none; white-space: nowrap;
   display: flex; align-items: center; gap: 6px;
   padding: 6px 12px; background: transparent; border: 1px solid var(--border);
   border-radius: 99px; font-size: 11px; font-weight: 600; letter-spacing: .6px;
   color: var(--fg-mute); cursor: pointer; margin-bottom: 8px;
 }
-.live.on { color: var(--up); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
+.live.on { color: var(--up-text); border-color: color-mix(in oklch, var(--up) 35%, var(--border)); }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-mute); }
 .live.on .live-dot { background: var(--up); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse {
@@ -473,7 +489,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
   color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .wl-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.filters { display: flex; gap: 8px; margin-bottom: 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .chip {
   padding: 5px 12px; background: var(--surface); color: var(--fg-dim);
   border: 1px solid var(--border); border-radius: 99px;
@@ -526,7 +542,7 @@ tbody td { padding: 11px 0; }
   display: inline-flex; align-items: center; justify-content: center;
   transition: all .15s; padding: 0;
 }
-.quick-order:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.quick-order:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .row:hover .quick-order { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
 .order-unavailable {
   display: inline-flex;
@@ -537,7 +553,7 @@ tbody td { padding: 11px 0; }
   color: var(--fg-mute);
   font-size: 13px;
 }
-.tick-up { color: var(--up); animation: flash-up .6s ease-out; }
+.tick-up { color: var(--up-text); animation: flash-up .6s ease-out; }
 .tick-dn { color: var(--dn); animation: flash-dn .6s ease-out; }
 @keyframes flash-up {
   0% { background: color-mix(in oklch, var(--up) 22%, transparent); }

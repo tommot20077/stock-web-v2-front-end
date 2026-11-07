@@ -67,7 +67,7 @@
         <div class="key-r">
           <button class="btn-ghost" :disabled="k.testing" @click="testKey(k)">
             <span v-if="k.testing">{{ t(lang, 'testing') }}</span>
-            <span v-else-if="k.lastTest === 'ok'" style="color:var(--up)">✓ {{ t(lang, 'connected') }}</span>
+            <span v-else-if="k.lastTest === 'ok'" style="color:var(--up-text)">✓ {{ t(lang, 'connected') }}</span>
             <span v-else-if="k.lastTest === 'fail'" style="color:var(--dn)">! {{ lang === 'zh' ? '失敗' : 'Failed' }}</span>
             <span v-else>{{ t(lang, 'testConnection') }}</span>
           </button>
@@ -106,7 +106,7 @@ defineProps<{
 }
 .banner-icon {
   flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700;
   display: flex; align-items: center; justify-content: center; font-style: italic;
   font-family: Georgia, serif;
 }
@@ -133,11 +133,11 @@ defineProps<{
   font-weight: 500; letter-spacing: .2px;
   white-space: nowrap;
 }
-.chip.livefeed { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.chip.livefeed { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .chip.cached { background: var(--surface); color: var(--fg-mute); }
 .chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
 .chip.readonly { background: var(--surface); color: var(--fg-dim); }
-.chip.ok { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.chip.ok { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .chip.warn { background: color-mix(in oklch, var(--dn) 14%, transparent); color: var(--dn); }
 .chip.mute { color: var(--fg-mute); }
 .sw { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }

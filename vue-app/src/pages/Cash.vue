@@ -32,11 +32,11 @@
             <!-- U-07:只看各幣別,不看折算後總額;數值不變紅(U-06) -->
             <div v-if="negativeCodes.length" class="hint" data-testid="cash-page-negative">
               <span aria-hidden="true">⚠</span>
-              {{ tf(lang, 'cashNegativeHint', { codes: joinCodes(negativeCodes) }) }}
+              {{ tf(lang, 'cashNegativeHint', { codes: joinCurrencyCodes(negativeCodes, lang) }) }}
             </div>
             <div v-if="fxExcludedCodes.length" class="hint" data-testid="cash-page-fx-excluded">
               <span aria-hidden="true">⚠</span>
-              {{ tf(lang, 'cashFxExcludedHint', { codes: joinCodes(fxExcludedCodes), base: summary.baseCurrency }) }}
+              {{ tf(lang, 'cashFxExcludedHint', { codes: joinCurrencyCodes(fxExcludedCodes, lang), base: summary.baseCurrency }) }}
             </div>
           </template>
         </div>
@@ -227,12 +227,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CashEntryDialog from '../components/CashEntryDialog.vue';
 import { t, tf } from '../i18n';
-import { fmtMoney, fmtMoneyAmount, minorUnits } from '../moneyFormat';
+import { fmtMoney, minorUnits } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, PortfolioSummaryDto } from '../services/apiTypes';
 import type { CashEntryDto, CashEntryType } from '../services/cashApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
+import {
+  cashBalanceListText,
+  defaultCashEntryCurrency,
+  joinCurrencyCodes,
+  negativeCashCurrencies,
+  orderCashBalances,
+  unconvertedCashCurrencies,
+} from '../cashBalanceView';
 import {
   clearLastCreatedCashEntry,
   lastCreatedCashEntryId,
@@ -405,32 +412,16 @@ function reloadSummary() {
   void loadSummary();
 }
 
+// 排序 / 篩選 / 串接與 Overview 共用 cashBalanceView(04.1 IN-02);這裡只包一層 computed。
 /** 非零幣別,依 TWD / USD / EUR / JPY 固定順序(UI-SPEC §1);未知幣別排在後面。 */
-const orderedBalances = computed(() => {
-  const order = (code: string) => {
-    const at = (BASE_CURRENCY_OPTIONS as readonly string[]).indexOf(code);
-    return at === -1 ? BASE_CURRENCY_OPTIONS.length : at;
-  };
-  return (summary.value?.cashBalances ?? [])
-    .filter(balance => balance.amount !== 0)
-    .sort((a, b) => order(a.currency) - order(b.currency));
-});
+const orderedBalances = computed(() => orderCashBalances(summary.value?.cashBalances));
 
-const balanceListText = computed(() => orderedBalances.value
-  .map(balance => `${balance.currency} ${fmtMoneyAmount(balance.amount, balance.currency)}`)
-  .join(' · '));
+const balanceListText = computed(() => cashBalanceListText(orderedBalances.value));
 
 /** U-07:只看各幣別,不看折算後總額 —— 總額可能為正而 USD 為負。 */
-const negativeCodes = computed(() => orderedBalances.value.filter(b => b.amount < 0).map(b => b.currency));
+const negativeCodes = computed(() => negativeCashCurrencies(orderedBalances.value));
 
-const fxExcludedCodes = computed(() => {
-  const unconverted = summary.value?.unconvertedCurrencies ?? [];
-  return orderedBalances.value.filter(b => unconverted.includes(b.currency)).map(b => b.currency);
-});
-
-function joinCodes(codes: string[]): string {
-  return codes.join(props.lang === 'zh' ? '、' : ', ');
-}
+const fxExcludedCodes = computed(() => unconvertedCashCurrencies(orderedBalances.value, summary.value?.unconvertedCurrencies));
 
 // =============== 入金 / 出金 / 沖銷對話框 ===============
 const dialogOpen = ref(false);
@@ -447,12 +438,9 @@ let recordedWhileOpen = false;
 
 /** 幣別預設規則(§1):入金 → 第一個餘額為負的幣別,否則基準幣;出金 → 基準幣;mock mode → TWD。 */
 function defaultCurrency(kind: CashEntryType): string {
+  // mock / 無 summary 的 TWD 規則屬本頁,留在這裡;其餘與 Overview 共用 defaultCashEntryCurrency。
   if (live || !summary.value) return 'TWD';
-  if (kind === 'DEPOSIT') {
-    const negative = orderedBalances.value.find(balance => balance.amount < 0);
-    if (negative) return negative.currency;
-  }
-  return summary.value.baseCurrency;
+  return defaultCashEntryCurrency(kind, orderedBalances.value, summary.value.baseCurrency);
 }
 
 function beginDialog(event: Event, fromRow: boolean) {

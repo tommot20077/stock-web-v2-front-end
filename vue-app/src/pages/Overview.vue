@@ -128,11 +128,11 @@
             <!-- U-07:只看各幣別,不看折算後總額;數值不變紅(U-06) -->
             <div v-if="negativeCodes.length" class="kpi-hint" data-testid="overview-kpi-cash-negative">
               <span aria-hidden="true">⚠</span>
-              {{ tf(lang, 'cashNegativeHint', { codes: joinCodes(negativeCodes) }) }}
+              {{ tf(lang, 'cashNegativeHint', { codes: joinCurrencyCodes(negativeCodes, lang) }) }}
             </div>
             <div v-if="fxExcludedCodes.length && summary" class="kpi-hint" data-testid="overview-kpi-cash-fx-excluded">
               <span aria-hidden="true">⚠</span>
-              {{ tf(lang, 'cashFxExcludedHint', { codes: joinCodes(fxExcludedCodes), base: summary.baseCurrency }) }}
+              {{ tf(lang, 'cashFxExcludedHint', { codes: joinCurrencyCodes(fxExcludedCodes, lang), base: summary.baseCurrency }) }}
             </div>
           </template>
           <div class="kpi-actions">
@@ -397,12 +397,13 @@
           <div style="font-weight:500">{{ s.sym }}</div>
           <div style="font-size:11px;color:var(--fg-dim)">{{ s.name }}</div>
         </div>
+        <!-- 走勢圖容器:color 只驅動 SVG currentColor 的線條(非文字),維持圖表色 --up -->
         <div style="width:70px;height:24px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">
           <LineChart :data="genSeries(20, s.price, 0.02, s.sym.charCodeAt(0))" />
         </div>
         <div style="text-align:right;min-width:90px">
           <div class="num" style="font-weight:500">{{ fmtNum(s.price) }}</div>
-          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: s.chgPct >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(s.chgPct) }}</div>
         </div>
       </div>
     </div>
@@ -449,6 +450,15 @@ import type { AssetDto, PortfolioSummaryDto, TradeDto } from '../services/apiTyp
 import type { WatchlistDto } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
+import { baseCurrencyErrorKey } from '../baseCurrencyErrorKey';
+import {
+  cashBalanceListText,
+  defaultCashEntryCurrency,
+  joinCurrencyCodes,
+  negativeCashCurrencies,
+  orderCashBalances,
+  unconvertedCashCurrencies,
+} from '../cashBalanceView';
 import type { CashEntryType } from '../services/cashApi';
 import { bumpPortfolioRevision, portfolioRevision, portfolioRevisionCause } from '../services/portfolioRevision';
 import LineChart from '../components/LineChart.vue';
@@ -515,12 +525,21 @@ async function loadSummary() {
   }
 }
 
+/**
+ * 近期交易同樣以遞增序號守門(quick-261106-fbs,04.1 IN-03):首次載入、重試與成交後重讀可能交疊,
+ * 較舊請求晚回來時一律丟棄,不覆蓋較新的結果(與 summarySeq 同模式)。
+ */
+let tradesSeq = 0;
+
 async function loadRecentTrades() {
+  const seq = ++tradesSeq;
   tradesState.value = { status: 'loading' };
   try {
     const page = await api.listTrades({ page: 0, size: 5 });
+    if (seq !== tradesSeq) return;
     tradesState.value = { status: 'loaded', data: page.items };
   } catch (error) {
+    if (seq !== tradesSeq) return;
     tradesState.value = { status: 'error', error: describeError(error) };
   }
 }
@@ -578,15 +597,18 @@ async function refreshRecentTrades() {
     await loadRecentTrades();
     return;
   }
+  const seq = ++tradesSeq;
   tradesRefreshing.value = true;
   tradesRefreshError.value = null;
   try {
     const result = await api.listTrades({ page: 0, size: 5 });
+    if (seq !== tradesSeq) return;
     tradesState.value = { status: 'loaded', data: result.items };
   } catch (error) {
+    if (seq !== tradesSeq) return;
     tradesRefreshError.value = describeError(error);
   } finally {
-    tradesRefreshing.value = false;
+    if (seq === tradesSeq) tradesRefreshing.value = false;
   }
 }
 
@@ -629,20 +651,6 @@ const selectedCurrency = computed(
 );
 const currencyBusy = computed(() => currencyPhase.value !== 'idle');
 
-/** 儲存失敗的文案分派(同 Settings / UI-SPEC 基準幣表)。401 回傳 null:交給全域 SessionBanner,這裡不重複顯示。 */
-function currencyErrorKey(error: unknown): string | null {
-  if (!(error instanceof ApiClientError)) return 'baseCurrencyErrNetwork';
-  if (error.status === 401) return null;
-  if (error.code === 'VALIDATION_FAILED' && error.fields && 'baseCurrency' in error.fields) {
-    return 'baseCurrencyErrUnsupported';
-  }
-  if (error.code === 'AUTH_CSRF_TOKEN_INVALID' || error.code === 'AUTH_CSRF_TOKEN_MISSING') {
-    return 'baseCurrencyErrCsrf';
-  }
-  if (error.status === 403) return 'baseCurrencyErrForbidden';
-  return 'baseCurrencyErrUnknown';
-}
-
 async function selectBaseCurrency(code: string) {
   // 點已選中者:這是「已是此值」,不發請求;進行中的切換也不重入。
   if (currencyBusy.value || code === selectedCurrency.value) return;
@@ -660,7 +668,8 @@ async function selectBaseCurrency(code: string) {
     // 失敗一律回到原值;PATCH 冪等,再點一次即重試,所以不放重試鈕。
     pendingCurrency.value = null;
     currencyPhase.value = 'idle';
-    const messageKey = currencyErrorKey(error);
+    // 文案分派與 Settings 共用(baseCurrencyErrorKey);401 回 null,交給全域 SessionBanner。
+    const messageKey = baseCurrencyErrorKey(error);
     const diagnostics = error instanceof ApiClientError
       ? { code: error.code, traceId: error.requestId }
       : { code: 'NETWORK_ERROR', traceId: null };
@@ -669,32 +678,16 @@ async function selectBaseCurrency(code: string) {
 }
 
 // =============== 可用現金卡(D-07 / D-08 / D-11)===============
+// 排序 / 篩選 / 串接與現金頁共用 cashBalanceView(04.1 IN-02);這裡只包一層 computed。
 /** 非零幣別,依 TWD / USD / EUR / JPY 固定順序;未知幣別排在後面。 */
-const orderedBalances = computed(() => {
-  const order = (code: string) => {
-    const at = (BASE_CURRENCY_OPTIONS as readonly string[]).indexOf(code);
-    return at === -1 ? BASE_CURRENCY_OPTIONS.length : at;
-  };
-  return (summary.value?.cashBalances ?? [])
-    .filter(balance => balance.amount !== 0)
-    .sort((a, b) => order(a.currency) - order(b.currency));
-});
+const orderedBalances = computed(() => orderCashBalances(summary.value?.cashBalances));
 
-const balanceListText = computed(() => orderedBalances.value
-  .map(balance => `${balance.currency} ${fmtMoneyAmount(balance.amount, balance.currency)}`)
-  .join(' · '));
+const balanceListText = computed(() => cashBalanceListText(orderedBalances.value));
 
 /** U-07:只看各幣別,不看折算後總額 —— 總額可能為正而 USD 為負。 */
-const negativeCodes = computed(() => orderedBalances.value.filter(b => b.amount < 0).map(b => b.currency));
+const negativeCodes = computed(() => negativeCashCurrencies(orderedBalances.value));
 
-const fxExcludedCodes = computed(() => {
-  const unconverted = summary.value?.unconvertedCurrencies ?? [];
-  return orderedBalances.value.filter(b => unconverted.includes(b.currency)).map(b => b.currency);
-});
-
-function joinCodes(codes: string[]): string {
-  return codes.join(props.lang === 'zh' ? '、' : ', ');
-}
+const fxExcludedCodes = computed(() => unconvertedCashCurrencies(orderedBalances.value, summary.value?.unconvertedCurrencies));
 
 // =============== 入金 / 出金對話框(D-11)===============
 const cashDialogOpen = ref(false);
@@ -706,12 +699,7 @@ let cashOpenerEl: HTMLElement | null = null;
 
 /** 幣別預設規則:入金 → 第一個餘額為負的幣別,沒有則基準幣;出金 → 基準幣。 */
 function defaultCashCurrency(kind: CashEntryType): string {
-  const base = summary.value?.baseCurrency ?? 'TWD';
-  if (kind === 'DEPOSIT') {
-    const negative = orderedBalances.value.find(balance => balance.amount < 0);
-    if (negative) return negative.currency;
-  }
-  return base;
+  return defaultCashEntryCurrency(kind, orderedBalances.value, summary.value?.baseCurrency ?? 'TWD');
 }
 
 function openCashDialog(kind: CashEntryType, event: Event) {
@@ -758,7 +746,8 @@ interface KpiCard {
 }
 
 function toneColor(tone: KpiTone): string {
-  return tone === 'up' ? 'var(--up)' : tone === 'dn' ? 'var(--dn)' : 'var(--fg-dim)';
+  // KPI 副標是文字:上漲用 --up-text(quick-261106-fbs A2),--up 只留給圖表 / 圓點。
+  return tone === 'up' ? 'var(--up-text)' : tone === 'dn' ? 'var(--dn)' : 'var(--fg-dim)';
 }
 
 /** 依已格式化文字的正負號決定色調:四捨五入後為零的值不上色、不加箭頭。 */
@@ -1100,7 +1089,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .wl-quote { text-align: right; white-space: nowrap; }
 .wl-price { font-size: 13px; font-weight: 600; line-height: 1.45; }
 .wl-chg { font-size: 12px; font-weight: 400; line-height: 1.35; }
-.wl-chg.up { color: var(--up); }
+.wl-chg.up { color: var(--up-text); }
 .wl-chg.dn { color: var(--dn); }
 .wl-chg.na { color: var(--fg-dim); }
 /* 即時列標記:6px 實心圓點(圖形尺寸,Exception 2)+ sr-only「即時」 */
@@ -1137,7 +1126,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .news-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--fg-dim); margin-bottom: 3px; }
 .news-bullet { width: 3px; height: 3px; background: var(--fg-mute); border-radius: 50%; }
 .news-tag { margin-left: auto; padding: 1px 8px; background: var(--surface2); border-radius: 99px; font-size: 10px; font-weight: 500; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; }
 .link { background: transparent; border: 0; color: var(--fg-dim); font-size: 12px; }
 table { width: 100%; }
 thead th {
@@ -1157,7 +1146,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
   font-size: 11px; font-weight: 500;
   background: var(--surface2); color: var(--fg-dim);
 }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 /* 區塊級狀態(D-11/D-12):診斷樣式沿用 SessionBanner 的 code/traceId 呈現慣例 */
 .block-state { padding: 14px 0; font-size: 13px; color: var(--fg-dim); }

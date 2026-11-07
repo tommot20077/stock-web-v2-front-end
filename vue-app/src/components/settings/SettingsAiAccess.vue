@@ -97,7 +97,7 @@ defineProps<{
 }
 .banner-icon {
   flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700;
   display: flex; align-items: center; justify-content: center; font-style: italic;
   font-family: Georgia, serif;
 }
@@ -120,9 +120,9 @@ defineProps<{
   font-weight: 500; letter-spacing: .2px;
   white-space: nowrap;
 }
-.chip.ok { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.chip.ok { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .chip.warn { background: color-mix(in oklch, var(--dn) 14%, transparent); color: var(--dn); }
-.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .chip.disabled { color: var(--fg-mute); }
 .micro {
   background: transparent; border: 0; padding: 1px 6px; border-radius: 4px;
@@ -163,7 +163,7 @@ defineProps<{
   background: var(--surface); color: var(--fg-dim);
   margin-top: 1px;
 }
-.mcp-tag.read { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.mcp-tag.read { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .mcp-tag.write { background: color-mix(in oklch, #8B5CF6 18%, transparent); color: #8B5CF6; }
 .mcp-tag.admin { background: color-mix(in oklch, var(--dn) 14%, transparent); color: var(--dn); }
 .mcp-url {

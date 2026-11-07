@@ -49,7 +49,7 @@
             <span v-else>
               {{ scrubDays }} {{ lang === 'zh' ? '天前' : 'days ago' }}
               <span style="color:var(--fg-mute);margin:0 6px">·</span>
-              <span :style="{ color: scrubDelta >= 0 ? 'var(--up)' : 'var(--dn)' }">
+              <span :style="{ color: scrubDelta >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
                 {{ lang === 'zh' ? '相對今日' : 'vs today' }} {{ scrubDelta >= 0 ? '+' : '' }}${{ fmtNum(Math.abs(scrubDelta), 0) }}
                 ({{ fmtPct(safePct(scrubDelta, totalCost)) }})
               </span>
@@ -141,8 +141,8 @@
         :aria-busy="summaryRefreshing"
       >
         <div class="stat-l">{{ s.l }}</div>
-        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
-        <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up)' : 'var(--dn)' }">{{ s.delta }}</div>
+        <div class="stat-v num" :style="{ color: s.up == null ? 'var(--fg)' : s.up ? 'var(--up-text)' : 'var(--dn)' }">{{ s.v }}<span v-if="s.ccy" class="stat-ccy">{{ s.ccy }}</span></div>
+        <div v-if="s.delta" class="stat-d num" :style="{ color: s.up ? 'var(--up-text)' : 'var(--dn)' }">{{ s.delta }}</div>
         <!-- 04.2-21(DIV-02):總損益卡的股利收入附加列;API mode 且股利收入或預扣稅不為 0 才渲染 -->
         <div v-if="s.note" class="stat-note" data-testid="positions-stat-dividend-income">{{ s.note }}</div>
       </div>
@@ -154,11 +154,11 @@
         <div>
           <div class="ttl">{{ t(lang, 'assetTrend') }}</div>
           <div class="sub" style="margin-top:2px">
-            <span :style="{ color: pnlAbs >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <span :style="{ color: pnlAbs >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               {{ pnlAbs >= 0 ? '+' : '' }}${{ fmtNum(Math.abs(pnlAbs), 0) }}
             </span>
             <span style="color:var(--fg-dim)">·</span>
-            <span :style="{ color: pnlAbs >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(safePct(pnlAbs, totalCost)) }}</span>
+            <span :style="{ color: pnlAbs >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(safePct(pnlAbs, totalCost)) }}</span>
             <span style="color:var(--fg-mute);margin-left:8px;font-size:11px">{{ rangeLabel }}</span>
           </div>
         </div>
@@ -173,8 +173,11 @@
       </div>
     </div>
 
-    <!-- Top movers:API mode 由後端 unrealizedPnl 排序推導(D-16 例外:可真實推導者不隱藏) -->
-    <div v-if="live || movers.length" class="card" :style="{ gridColumn: live ? 'span 4' : 'span 12', padding: '20px' }">
+    <!--
+      Top movers:API mode 以後端基準幣 unrealizedPnlInBase 的絕對值排序(D-16 例外:可真實推導者不隱藏;
+      quick-261106-fbs:不再以原幣 unrealizedPnl 跨幣別比大小)。缺匯率(null)的持倉不進榜,以提示列出檔數。
+    -->
+    <div v-if="live || movers.length || moversFxExcluded > 0" class="card" :style="{ gridColumn: live ? 'span 4' : 'span 12', padding: '20px' }">
       <div class="ttl" style="margin-bottom:14px">{{ t(lang, 'topMovers') }}</div>
       <div v-for="m in movers" :key="m.sym" class="mover">
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
@@ -185,11 +188,14 @@
           </div>
         </div>
         <div style="text-align:right">
-          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
-            {{ m.pnl >= 0 ? '+' : '-' }}${{ fmtNum(Math.abs(m.pnl), 0) }}
+          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
+            {{ fmtSignedMoney(m.pnl, m.ccy, 0) }}
           </div>
-          <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
         </div>
+      </div>
+      <div v-if="moversFxExcluded > 0" data-testid="positions-movers-fx-excluded" class="movers-note">
+        {{ tf(lang, 'topMoversFxExcluded', { n: moversFxExcluded, base: moversBaseCurrency }) }}
       </div>
     </div>
 
@@ -223,7 +229,7 @@
           </div>
           <div class="row-between" style="font-size:12px;color:var(--fg-dim);margin-top:4px">
             <span>{{ s.weightText }}</span>
-            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up)' : 'var(--dn)' }">{{ s.pnlText }}</span>
+            <span class="sec-pnl" :style="{ color: s.pnlUp ? 'var(--up-text)' : 'var(--dn)' }">{{ s.pnlText }}</span>
           </div>
         </div>
       </div>
@@ -327,12 +333,12 @@
             <td class="num" style="text-align:right;color:var(--fg-dim)">${{ fmtNum(p.avg) }}</td>
             <td class="num" style="text-align:right">
               ${{ fmtNum(effPrice(p)) }}
-              <div v-if="scrubDays > 0" class="scrub-cmp" :style="{ color: p.price > effPrice(p) ? 'var(--up)' : 'var(--dn)' }">
+              <div v-if="scrubDays > 0" class="scrub-cmp" :style="{ color: p.price > effPrice(p) ? 'var(--up-text)' : 'var(--dn)' }">
                 {{ lang === 'zh' ? '今' : 'now' }} ${{ fmtNum(p.price) }}
               </div>
             </td>
             <td class="num" style="text-align:right;font-weight:500">${{ fmtNum(p.qty * effPrice(p), 0) }}</td>
-            <td class="num" style="text-align:right" :style="{ color: effPnl(p) >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <td class="num" style="text-align:right" :style="{ color: effPnl(p) >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               <div>{{ effPnl(p) >= 0 ? '+' : '-' }}${{ fmtNum(Math.abs(effPnl(p)), 0) }}</div>
               <div style="font-size:11px">{{ fmtPct(effPnlPct(p)) }}</div>
             </td>
@@ -386,7 +392,7 @@
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
             <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
-            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--dn)' }">
+            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
               <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
               <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
             </td>
@@ -829,20 +835,36 @@ function dividendIncomeNote(s: PortfolioSummaryDto): string {
 const statCards = computed(() => (live ? mockStats.value : apiStats.value));
 
 // Top movers (P&L abs) — top 4
+// mock 宇宙單一幣別:金額代碼取 MOCK_POSITION_CURRENCY(與對話框一致),不再寫死 `$`。
 const mockTopMovers = computed(() => {
   return [...mockPositions.value]
-    .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p) }))
+    .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p), ccy: MOCK_POSITION_CURRENCY }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
     .slice(0, 4);
 });
 
-// D-16 例外:可由後端 unrealizedPnl / roi 真實推導,故不隱藏。
+/**
+ * D-16 例外:由後端 unrealizedPnlInBase / roi 真實推導,故不隱藏。
+ * quick-261106-fbs:以**基準幣**未實現損益排序 —— 原幣 unrealizedPnl 跨幣別直接比大小是錯的(同 04.1 D-05)。
+ * 前端不換匯(D-21):unrealizedPnlInBase 為 null(缺匯率)的持倉不進榜,檔數另以 moversFxExcluded 提示。
+ */
+function hasBasePnl(x: HoldingDto): x is HoldingDto & { unrealizedPnlInBase: number } {
+  return x.unrealizedPnlInBase !== null && Number.isFinite(x.unrealizedPnlInBase);
+}
+
 const apiTopMovers = computed(() => {
-  return [...holdings.value]
-    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnl, pct: x.roi * 100 }))
+  return holdings.value
+    .filter(hasBasePnl)
+    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnlInBase, pct: x.roi * 100, ccy: x.baseCurrency }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
     .slice(0, 4);
 });
+
+/** 因缺匯率而未列入 Top movers 的持倉檔數(mock 單一幣別恆為 0)。 */
+const moversFxExcluded = computed(() => (live ? 0 : holdings.value.filter(x => !hasBasePnl(x)).length));
+
+/** 提示文案的基準幣代碼:summary 優先,summary 未載入時取持倉列(兩者同值,見 HoldingDto.baseCurrency)。 */
+const moversBaseCurrency = computed(() => summary.value?.baseCurrency ?? holdings.value[0]?.baseCurrency ?? '');
 
 const movers = computed(() => (live ? mockTopMovers.value : apiTopMovers.value));
 
@@ -911,8 +933,10 @@ const sectorRows = computed<SectorRow[]>(() => {
   if (!s) return [];
   const base = s.baseCurrency;
   // 後端已依 value 降冪、null 最後;這裡再做一次穩定分割,不把「未分類排最後」押在後端順序上。
-  const classified = s.sectorAllocation.filter(x => x.sector !== null);
-  const unclassified = s.sectorAllocation.filter(x => x.sector === null);
+  // 缺 sectorAllocation(舊後端 / 欄位遺失)視為沒有分組 → 空狀態,不讓整頁炸掉(04.1 IN-04)。
+  const allocation = s.sectorAllocation ?? [];
+  const classified = allocation.filter(x => x.sector !== null);
+  const unclassified = allocation.filter(x => x.sector === null);
   return [...classified, ...unclassified].map((x, i) => {
     const uncategorized = x.sector === null;
     return {
@@ -1083,7 +1107,7 @@ const scrubMarkerPct = computed(() => {
 .page { padding: 22px; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 .row-between { display: flex; justify-content: space-between; align-items: flex-start; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .btn-accent:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .sub { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
@@ -1114,6 +1138,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 /* Top movers */
 .mover { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
 .mover + .mover { border-top: 1px solid var(--border); }
+.movers-note { font-size: 12px; color: var(--fg-dim); line-height: 1.5; }
+.mover + .movers-note { margin-top: 8px; }
 .mtag {
   width: 30px; height: 30px; border-radius: 7px; background: var(--surface2);
   font-size: 10px; font-weight: 700; color: var(--fg-dim);
@@ -1156,7 +1182,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
   border-radius: 99px; background: var(--surface2); color: var(--fg-dim);
 }
 .currency-note { padding: 8px 16px; font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--fg-dim); }
-.day-up { color: var(--up); }
+.day-up { color: var(--up-text); }
 .day-dn { color: var(--dn); }
 .day-na { color: var(--fg-dim); }
 /* 04.2-21(D-11):動作欄在最右;動作鈕中性(不是 accent),12px / 600、36px 觸控目標 */

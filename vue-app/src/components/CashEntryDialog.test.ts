@@ -346,6 +346,47 @@ describe('CashEntryDialog — 前端自檢(UI-SPEC §3 欄位契約)', () => {
     expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAt'));
   });
 
+  // quick-261106-fbs(todo cash-occurred-at-empty-copy):清空發生時間用專屬「請填寫」文案,不再沿用「不可晚於現在」。
+  it('clearedOccurredAtShowsRequiredCopyAfterBlur', async () => {
+    await mountDialog();
+    await fillValid();
+
+    const input = requireTestid('cash-occurred-at') as HTMLInputElement;
+    await setValue(input, '');
+    input.dispatchEvent(new Event('blur'));
+    await nextTick();
+
+    expect(submitButton().disabled).toBe(true);
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAtRequired'));
+  });
+
+  it('clearedOccurredAtUsesRequiredCopyInEnglishToo', async () => {
+    await mountDialog({ lang: 'en' });
+    await fillValid();
+
+    const input = requireTestid('cash-occurred-at') as HTMLInputElement;
+    await setValue(input, '');
+    input.dispatchEvent(new Event('blur'));
+    await nextTick();
+
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('en', 'cashErrOccurredAtRequired'));
+  });
+
+  it('serverOccurredAtFieldErrorKeepsTheNotInFutureCopy', async () => {
+    stubUuids();
+    await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => entryFailure('VALIDATION_FAILED', { fields: { occurredAt: FIELD_VALUE_CANARY } }),
+      }),
+    });
+    await fillValid();
+
+    await submit();
+
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAt'));
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+
   it('localFieldErrorIsLinkedToItsInput', async () => {
     await mountDialog();
     await typeAmount('0');

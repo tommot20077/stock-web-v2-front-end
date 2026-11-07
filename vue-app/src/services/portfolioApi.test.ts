@@ -313,6 +313,8 @@ describe('portfolioApi mock adapter reads', () => {
       sector: 'Tech',
       baseCurrency: 'USD',
       marketValueInBase: 1000,
+      // quick-261106-fbs:mock 單一幣別,基準幣未實現損益 = 原幣 unrealizedPnl(與 marketValueInBase 同做法)
+      unrealizedPnlInBase: 200,
       previousClose: null,
       dayPricePnl: null,
       dayPricePnlRatio: null,

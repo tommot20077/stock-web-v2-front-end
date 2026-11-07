@@ -40,7 +40,7 @@
           <div class="key-r">
             <button class="btn-ghost" :disabled="k.testing" @click="testKey(k)">
               <span v-if="k.testing">{{ t(lang, 'testing') }}</span>
-              <span v-else-if="k.lastTest === 'ok'" style="color:var(--up)">✓ {{ t(lang, 'connected') }}</span>
+              <span v-else-if="k.lastTest === 'ok'" style="color:var(--up-text)">✓ {{ t(lang, 'connected') }}</span>
               <span v-else-if="k.lastTest === 'fail'" style="color:var(--dn)">! {{ lang === 'zh' ? '失敗' : 'Failed' }}</span>
               <span v-else>{{ t(lang, 'testConnection') }}</span>
             </button>
@@ -126,7 +126,7 @@ defineProps<{
 }
 .banner-icon {
   flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700;
   display: flex; align-items: center; justify-content: center; font-style: italic;
   font-family: Georgia, serif;
 }
@@ -134,7 +134,8 @@ defineProps<{
   background: color-mix(in oklch, var(--dn) 7%, transparent);
   border-color: color-mix(in oklch, var(--dn) 22%, transparent);
 }
-.banner.warn-banner .banner-icon { background: var(--dn); }
+/* 警示圖示:沿用按鈕底色 token + 白字,不繼承 .banner-icon 的 --on-accent 深色字(quick-261106-fbs A2)。 */
+.banner.warn-banner .banner-icon { background: var(--btn-dn-bg); color: #fff; }
 .sec-h { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--fg-dim); margin-bottom: 12px; }
 .sec-row { display: flex; align-items: center; justify-content: space-between; }
 .empty { text-align: center; padding: 36px 20px; border: 1px dashed var(--border); border-radius: 10px; }
@@ -167,7 +168,7 @@ defineProps<{
   white-space: nowrap;
 }
 .chip.sandbox { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
-.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up); }
+.chip.live { background: color-mix(in oklch, var(--up) 15%, transparent); color: var(--up-text); }
 .chip.trade { background: color-mix(in oklch, #8B5CF6 18%, transparent); color: #8B5CF6; }
 .micro {
   background: transparent; border: 0; padding: 1px 6px; border-radius: 4px;

@@ -53,6 +53,7 @@ const TRUTH_HOLDING: HoldingDto = {
   sector: 'Tech',
   baseCurrency: 'TWD',
   marketValueInBase: 999,
+  unrealizedPnlInBase: 555,
   previousClose: 90,
   dayPricePnl: 100,
   dayPricePnlRatio: 0.0111,
@@ -106,6 +107,7 @@ function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
     sector: 'Tech',
     baseCurrency: 'TWD',
     marketValueInBase: 1,
+    unrealizedPnlInBase: 0,
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
@@ -455,19 +457,68 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(document.body.querySelector('.tm-slider')).toBeNull();
   });
 
-  it('Top movers 依後端 unrealizedPnl 絕對值排序取前 4(D-16 例外:真實推導)', async () => {
+  /*
+   * quick-261106-fbs(todo top-movers-base-currency):排行改以後端基準幣 unrealizedPnlInBase 的絕對值排序。
+   * 舊:以原幣 unrealizedPnl 排序(多幣別持倉直接比大小,與 04.1 D-05 同類錯誤)。
+   * fixture 刻意讓原幣 unrealizedPnl 的排序與基準幣排序不同,回到原幣排序就會紅。
+   */
+  it('Top movers 依後端 unrealizedPnlInBase 絕對值排序取前 4,不看原幣 unrealizedPnl', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'ZA', unrealizedPnl: 10 }),
-        holding({ symbol: 'ZB', unrealizedPnl: -900 }),
-        holding({ symbol: 'ZC', unrealizedPnl: 300 }),
-        holding({ symbol: 'ZD', unrealizedPnl: -50 }),
-        holding({ symbol: 'ZE', unrealizedPnl: 7 }),
+        holding({ symbol: 'ZA', unrealizedPnl: 99999, unrealizedPnlInBase: 10 }),
+        holding({ symbol: 'ZB', unrealizedPnl: 1, unrealizedPnlInBase: -900 }),
+        holding({ symbol: 'ZC', unrealizedPnl: 2, unrealizedPnlInBase: 300 }),
+        holding({ symbol: 'ZD', unrealizedPnl: 3, unrealizedPnlInBase: -50 }),
+        holding({ symbol: 'ZE', unrealizedPnl: -88888, unrealizedPnlInBase: 7 }),
       ],
       summaryWith({ totalMarketValue: 5, holdingCount: 5 }),
     );
 
     expect(moverSymbols()).toEqual(['ZB', 'ZC', 'ZD', 'ZA']);
+  });
+
+  it('T2.1 缺基準幣值的持倉不進榜、金額為「數字 + 基準幣 ISO」、顯示「N 檔未列入」提示', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'UP', currency: 'USD', unrealizedPnl: -3, unrealizedPnlInBase: 500, roi: 0.1 }),
+        holding({ symbol: 'DN', currency: 'USD', unrealizedPnl: 4, unrealizedPnlInBase: -1200, roi: -0.2 }),
+        holding({ symbol: 'NOFX', currency: 'EUR', unrealizedPnl: 999999, unrealizedPnlInBase: null, marketValueInBase: null }),
+      ],
+      summaryWith({ totalMarketValue: 5, holdingCount: 3, fxExcludedCount: 1, unconvertedCurrencies: ['EUR'] }),
+    );
+
+    expect(moverSymbols()).toEqual(['DN', 'UP']);
+    const movers = [...document.body.querySelectorAll<HTMLElement>('.mover')];
+    expect(movers[0].textContent).toContain(fmtSignedMoney(-1200, 'TWD', 0));
+    expect(movers[1].textContent).toContain(fmtSignedMoney(500, 'TWD', 0));
+    for (const m of movers) expect(m.textContent).not.toContain('$');
+    expect(requireTestid('positions-movers-fx-excluded').textContent?.trim())
+      .toBe(tf('en', 'topMoversFxExcluded', { n: 1, base: 'TWD' }));
+  });
+
+  it('T2.1 全部持倉都缺基準幣值時卡片仍顯示,只有提示、沒有排行列', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'NA', currency: 'EUR', unrealizedPnlInBase: null, marketValueInBase: null }),
+        holding({ symbol: 'NB', currency: 'JPY', unrealizedPnlInBase: null, marketValueInBase: null }),
+      ],
+      summaryWith({ totalMarketValue: 0, holdingCount: 2, fxExcludedCount: 2, unconvertedCurrencies: ['EUR', 'JPY'] }),
+    );
+
+    expect(document.body.textContent).toContain(t('en', 'topMovers'));
+    expect(document.body.querySelectorAll('.mover')).toHaveLength(0);
+    expect(requireTestid('positions-movers-fx-excluded').textContent?.trim())
+      .toBe(tf('en', 'topMoversFxExcluded', { n: 2, base: 'TWD' }));
+  });
+
+  it('沒有被排除的持倉時不顯示「未列入」提示', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'ZA', unrealizedPnlInBase: 10 })],
+      summaryWith({ totalMarketValue: 1, holdingCount: 1 }),
+    );
+
+    expect(moverSymbols()).toEqual(['ZA']);
+    expect(testid('positions-movers-fx-excluded')).toBeNull();
   });
 
   it('點 P&L 表頭以後端 unrealizedPnl 排序,再點一次反轉(client-side 排序保留)', async () => {
@@ -665,6 +716,18 @@ describe('Positions — mock mode 回歸鎖定', () => {
     expect(body).toContain(t('en', 'maxDd'));
     // 1M 預設 range 的寫死值
     expect(body).toContain('1.68');
+  });
+
+  it('T2.2 Top movers 金額以 mock 持倉幣別 USD 呈現,不再寫死 $', async () => {
+    await mountMock();
+
+    const movers = [...document.body.querySelectorAll<HTMLElement>('.mover')];
+    expect(movers.length).toBeGreaterThan(0);
+    for (const m of movers) {
+      expect(m.textContent).not.toContain('$');
+      expect(m.textContent).toContain('\u00a0USD');
+    }
+    expect(testid('positions-movers-fx-excluded')).toBeNull();
   });
 
   it('表格渲染 mock 持倉、weight bar 正常,排序仍可切換', async () => {
@@ -1262,6 +1325,16 @@ function sectorCells(): HTMLElement[] {
 const NBSP = '\u00a0';
 
 describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
+  // quick-261106-fbs 2e(04.1 IN-04 / T2.8):summary 缺 sectorAllocation(舊後端 / 欄位遺失)時頁面不炸,產業卡為空狀態。
+  it('T2.8 summary 缺 sectorAllocation 時頁面不炸、產業卡顯示空狀態', async () => {
+    const legacy = summaryWith({ totalMarketValue: 1, holdingCount: 1 }) as Partial<PortfolioSummaryDto>;
+    delete legacy.sectorAllocation;
+    await mountApiWith([holding({ symbol: 'ZZA' })], legacy as PortfolioSummaryDto);
+
+    expect(rows()).toHaveLength(1);
+    expect(requireTestid('positions-sector-empty').textContent).toContain(t('en', 'noHoldings'));
+  });
+
   const SECTOR_SUMMARY = summaryWith({
     totalMarketValue: 100000,
     holdingCount: 4,
@@ -1318,7 +1391,7 @@ describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
 
     const pnlOf = (name: string) =>
       sectorCells().find(c => c.textContent?.includes(name))!.querySelector<HTMLElement>('.sec-pnl')!;
-    expect(pnlOf('Semiconductors-API').getAttribute('style')).toContain('var(--up)');
+    expect(pnlOf('Semiconductors-API').getAttribute('style')).toContain('var(--up-text)');
     expect(pnlOf(t('en', 'sectorUncategorized')).getAttribute('style')).toContain('var(--dn)');
     expect(pnlOf(t('en', 'sectorUncategorized')).textContent).toContain(`-500${NBSP}TWD`);
   });

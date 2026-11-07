@@ -40,8 +40,11 @@ watch(() => ({ ...state }), (v) => {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); } catch {}
   document.documentElement.dataset.theme = v.theme;
   document.documentElement.style.setProperty('--accent', v.accent);
-  document.documentElement.style.setProperty('--up', v.upGreen ? '#16a34a' : '#dc2626');
-  document.documentElement.style.setProperty('--dn', v.upGreen ? '#dc2626' : '#16a34a');
+  // quick-261106-fbs:漲跌色改由 styles.css 的 :root[data-up-color="red"] 區塊對調。
+  // 不再寫 inline --up / --dn:inline 優先權高於任何選擇器,會讓深色主題的 --dn 與 --up-text 等 token 失效。
+  document.documentElement.dataset.upColor = v.upGreen ? 'green' : 'red';
+  document.documentElement.style.removeProperty('--up');
+  document.documentElement.style.removeProperty('--dn');
 }, { immediate: true, deep: true });
 
 export function useTweaks() {

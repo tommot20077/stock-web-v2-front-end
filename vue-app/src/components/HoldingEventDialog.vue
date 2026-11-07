@@ -1625,7 +1625,7 @@ textarea.inp { resize: vertical; }
 
 /* 沖銷原紀錄摘要卡:--surface2 底 + 1px 邊框 + 10px 圓角 + 16px 內距(在對話框內,不是卡片內嵌卡片) */
 .quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); margin-bottom: 4px; }
+.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-dim); margin-bottom: 4px; }
 .sum-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 400; padding: 4px 0; }
 .sum-row span { color: var(--fg-dim); }
 .sum-row b { font-weight: 600; text-align: right; }
@@ -1706,7 +1706,7 @@ textarea.inp { resize: vertical; }
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 24px; min-height: 44px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
   white-space: nowrap;
 }

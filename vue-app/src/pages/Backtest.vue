@@ -441,7 +441,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .cfg-grp { display: flex; flex-direction: column; gap: 4px; }
 .lab { font-size: 10px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: .4px; }
 .inp { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--fg); font-family: inherit; }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; align-self: flex-end; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; align-self: flex-end; }
 .btn-ghost {
   display: inline-flex; align-items: center; gap: 6px;
   background: transparent; border: 1px dashed var(--border);
@@ -498,11 +498,11 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tl tbody td { padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .tl tbody tr:last-child td { border-bottom: 0; }
 .pill { padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: 4px; letter-spacing: .3px; }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up); }
+.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
 .pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
 
 .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
-.up { color: var(--up); }
+.up { color: var(--up-text); }
 .dn { color: var(--dn); }
 .dim { color: var(--fg-dim); }
 </style>

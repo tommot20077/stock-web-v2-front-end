@@ -1006,6 +1006,7 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     sector: null,
     baseCurrency: 'TWD',
     marketValueInBase: null,
+    unrealizedPnlInBase: null,
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,

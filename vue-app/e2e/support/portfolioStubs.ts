@@ -140,6 +140,7 @@ function holding(
     sector: 'Technology',
     baseCurrency: 'TWD',
     marketValueInBase: 179842345.68,
+    unrealizedPnlInBase: -2345678.12,
     previousClose: 1440.12,
     dayPricePnl: 2056789.01,
     dayPricePnlRatio: 0.0116,
@@ -149,9 +150,9 @@ function holding(
 
 const HOLDINGS: HoldingDto[] = [
   holding(1, { symbol: '2330.TW', assetName: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)', currency: 'TWD' }),
-  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', marketValueInBase: 5800000000 }),
-  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', marketValueInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
-  holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', marketValueInBase: null }),
+  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', marketValueInBase: 5800000000, unrealizedPnlInBase: -76043912.31 }),
+  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
+  holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', marketValueInBase: null, unrealizedPnlInBase: null }),
   holding(5, { symbol: 'BTC-USD', assetName: 'Bitcoin', currency: 'USD', assetType: 'CRYPTO', sector: null }),
   holding(6, { symbol: '2317.TW', assetName: 'Hon Hai Precision Industry', currency: 'TWD', sector: null }),
 ];
@@ -358,6 +359,11 @@ export interface MockPortfolioApiOptions {
   ticketGate?: Promise<void>;
   /** 覆寫 GET /watchlists 的回應(預設 20 個清單的 WATCHLISTS)。 */
   watchlists?: WatchlistDto[];
+  /**
+   * 開啟 GET /assets(OrderTicket 的標的搜尋):以 query 比對 WATCHLIST_ITEMS 的 symbol / name(不分大小寫)。
+   * 預設不開(維持 503),避免改變既有版面測試的頁面狀態。
+   */
+  assetSearch?: boolean;
 }
 
 function envelope<T>(data: T): { success: true; data: T; error: null; meta: { traceId: string } } {
@@ -468,6 +474,12 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
     if ((path === '/api/v1/portfolio/dividends' || path === '/api/v1/portfolio/share-adjustments') && method === 'POST') {
       await options.holdingEventPostGate;
       await unavailable(route);
+      return;
+    }
+    if (options.assetSearch && path === '/api/v1/assets' && method === 'GET') {
+      const needle = (url.searchParams.get('query') ?? '').trim().toLowerCase();
+      const matched = WATCHLIST_ITEMS.filter((a) => a.symbol.toLowerCase().includes(needle) || a.name.toLowerCase().includes(needle));
+      await route.fulfill({ json: envelope(paginate(matched, url, 10)) });
       return;
     }
     if (path === '/api/v1/trades' && method === 'GET') {

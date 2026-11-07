@@ -1022,7 +1022,7 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
 .col-name { color: var(--fg-dim); overflow-wrap: anywhere; }
 .col-price, .col-change, .col-vol { white-space: nowrap; }
 .col-vol { color: var(--fg-dim); }
-.up { color: var(--up); }
+.up { color: var(--up-text); }
 .dn { color: var(--dn); }
 .na { color: var(--fg-dim); }
 .ccy-tag {

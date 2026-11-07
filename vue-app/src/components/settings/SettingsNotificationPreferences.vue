@@ -118,7 +118,7 @@ const orderEventPrefs: PrefToggle[] = [
 }
 .inp:focus { outline: 0; border-color: var(--accent); }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 7px 14px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 14px;
   border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }

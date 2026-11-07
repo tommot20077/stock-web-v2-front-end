@@ -6,7 +6,6 @@ import {
   WATCHLIST_ITEMS,
   WATCHLISTS,
   expectNoHorizontalScroll,
-  measureOverflow,
   mockPortfolioApi,
 } from '../support/portfolioStubs';
 
@@ -768,10 +767,8 @@ for (const width of [320, 375, 768, 1280, 1440]) {
 
 /**
  * L12:Markets 開啟 WatchlistPicker(20 個清單、30 字名稱)—— 面板完整在視窗內(< 480px 為底部面板,左右下各 16px);
- * 清單名稱換行不溢出面板;整頁不水平捲動。
- * 例外(deferred,非本 phase 範圍):Markets 頁首搜尋框(固定 280px)與 tabs / LIVE 列是 scaffold(a214f1b)既有骨架,
- * < 640px 本來就撐寬 .main(UI-SPEC「既有、本 phase 不碰的頁面骨架」)。此處 < 640px 改量「開啟選擇器不增加 .main 的捲動寬」
- * + documentElement 不捲;>= 640px 仍量 documentElement 與 .main 皆不捲。
+ * 清單名稱換行不溢出面板。所有寬度(含 320 / 375px)在開啟選擇器**之前與之後**都斷言 documentElement 與 .main
+ * 皆不水平捲動:頁首搜尋框不超過容器寬、可換行,tabs 列在列內水平捲動、LIVE 鈕不被壓縮(quick-261106-fbs A3)。
  */
 for (const width of [320, 375, 768, 1280]) {
   for (const lang of LANGS) {
@@ -784,7 +781,8 @@ for (const width of [320, 375, 768, 1280]) {
 
       const star = page.locator('[data-testid="markets-star"][data-symbol="AAPL"]');
       await expect(star).toBeVisible();
-      const before = await measureOverflow(page);
+      // 開啟選擇器之前:Markets 頁首 / tabs / LIVE 列本身不得撐寬 .main
+      await expectNoHorizontalScroll(page);
       await star.click();
       const picker = page.getByTestId('watchlist-picker');
       await expect(picker).toBeVisible();
@@ -793,24 +791,8 @@ for (const width of [320, 375, 768, 1280]) {
       await expect(page.getByTestId('watchlist-picker-limit')).toBeVisible();
       await waitForFiniteAnimations(page);
 
-      let clientWidth: number;
-      if (width >= 640) {
-        clientWidth = await expectNoHorizontalScroll(page);
-      } else {
-        const after = await measureOverflow(page);
-        clientWidth = after.docClient;
-        expect(after.docScroll, `頁面寬 ${after.docScroll}px 超出視窗 ${after.docClient}px`).toBeLessThanOrEqual(after.docClient);
-        expect(
-          after.mainScroll,
-          `開啟選擇器後 main 捲動寬 ${after.mainScroll}px 大於開啟前 ${before.mainScroll}px(選擇器自己撐寬了 main)`,
-        ).toBeLessThanOrEqual(Math.max(before.mainScroll, after.mainClient));
-        if (before.mainScroll > before.mainClient) {
-          test.info().annotations.push({
-            type: 'deferred',
-            description: `Markets 既有頁首 / tabs 在 ${width}px 撐寬 main:${before.mainScroll}px > ${before.mainClient}px(非選擇器造成)`,
-          });
-        }
-      }
+      // 開啟選擇器之後:同樣不得水平捲動(選擇器自己也不得撐寬 main)
+      const clientWidth = await expectNoHorizontalScroll(page);
       const panel = await boxOf(page, 'watchlist-picker');
       expectInsideViewport(panel, clientWidth, '選擇器面板');
       expect(panel.top, `面板上緣 ${panel.top}px 在視窗外`).toBeGreaterThanOrEqual(-0.5);
@@ -1116,6 +1098,65 @@ for (const width of [320, 375, 768, 1280, 1440]) {
       const noteText = await page.getByTestId('cash-page-dividend-note').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
       expect(noteText.scrollWidth, '股利說明文字溢出').toBeLessThanOrEqual(noteText.clientWidth);
       if (width >= 768) await expect(page.getByTestId('cash-entries-row')).toHaveCount(10);
+    });
+  }
+}
+
+/**
+ * L17(quick-261106-fbs 2c-addendum):OrderTicket footer 在 320 / 375px(zh / en)——
+ * 「審核交易」與「記錄交易」兩步的 footer 兩顆按鈕同一列、同高(.btn-accent 36px 與 .btn-ghost 一致)、
+ * 都在面板與視窗內;記錄交易鈕文字單行且不小於 136px 下限;整頁不水平捲動。
+ */
+async function expectTicketFooterSingleRow(page: Page, ghostSelector: string, accentSelector: string, what: string): Promise<void> {
+  const m = await page.evaluate(([ghostSel, accentSel]) => {
+    const ticket = document.querySelector('.ticket') as HTMLElement;
+    const ghost = ticket.querySelector(ghostSel) as HTMLElement;
+    const accent = ticket.querySelector(accentSel) as HTMLElement;
+    const rect = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, height: r.height, width: r.width };
+    };
+    const range = document.createRange();
+    range.selectNodeContents(accent);
+    const accentLines = new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size;
+    return { panel: rect(ticket), ghost: rect(ghost), accent: rect(accent), accentLines };
+  }, [ghostSelector, accentSelector]);
+  expect(Math.abs(m.ghost.top - m.accent.top), `${what}:兩顆按鈕不在同一列(top ${m.ghost.top} / ${m.accent.top})`).toBeLessThanOrEqual(1);
+  expect(Math.abs(m.ghost.height - m.accent.height), `${what}:按鈕高度不同(${m.ghost.height} / ${m.accent.height})`).toBeLessThanOrEqual(1);
+  expect(m.accent.height, `${what}:主按鈕高 ${m.accent.height}px 應為 36px`).toBeLessThanOrEqual(36.5);
+  expect(m.accentLines, `${what}:主按鈕文字應為單行`).toBe(1);
+  for (const [name, box] of [['ghost', m.ghost], ['accent', m.accent]] as const) {
+    expect(box.left, `${what} ${name} 左緣超出面板`).toBeGreaterThanOrEqual(m.panel.left - 0.5);
+    expect(box.right, `${what} ${name} 右緣超出面板`).toBeLessThanOrEqual(m.panel.right + 0.5);
+  }
+}
+
+for (const width of [320, 375]) {
+  for (const lang of LANGS) {
+    test(`L17 ${width}px ${lang}:OrderTicket footer 兩步按鈕同列同高 36px、記錄交易鈕單行且 ≥ 136px @smoke`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await useLang(page, lang);
+      await mockPortfolioApi(page, { assetSearch: true });
+      await openPage(page, 'markets');
+
+      await page.locator('tr.row', { has: page.locator('[data-testid="markets-star"][data-symbol="AAPL"]') })
+        .locator('.quick-order').click();
+      await expect(page.getByTestId('ticket-symbol-input')).toHaveValue('AAPL');
+      await page.getByTestId('ticket-qty').fill('1');
+      const price = page.getByTestId('ticket-price');
+      if (!(await price.inputValue())) await price.fill('218.4');
+      await waitForFiniteAnimations(page);
+
+      await expectNoHorizontalScroll(page);
+      await expectTicketFooterSingleRow(page, '.ft .btn-ghost', '[data-testid="ticket-review-advance"]', '審核交易步驟');
+
+      await page.getByTestId('ticket-review-advance').click();
+      const submit = page.getByTestId('ticket-submit');
+      await expect(submit).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await expectTicketFooterSingleRow(page, '[data-testid="ticket-back-to-edit"]', '[data-testid="ticket-submit"]', '記錄交易步驟');
+      const submitWidth = (await submit.boundingBox())!.width;
+      expect(submitWidth, `記錄交易鈕寬 ${submitWidth}px 小於 136px 下限`).toBeGreaterThanOrEqual(135.5);
     });
   }
 }

@@ -9,7 +9,7 @@
     <div class="card stat health">
       <span class="hdot" />
       <div class="l">All services</div>
-      <div class="v" style="color:var(--up)">Healthy</div>
+      <div class="v" style="color:var(--up-text)">Healthy</div>
     </div>
 
     <div class="card" style="grid-column: span 7; padding: 20px">
@@ -153,7 +153,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .fill { height: 100%; }
 .health { display: flex; flex-direction: column; justify-content: center; align-items: center; }
 .hdot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); margin-bottom: 6px; }
-.health .v { color: var(--up); font-size: 13px; }
+.health .v { color: var(--up-text); font-size: 13px; }
 .ttl { font-size: 14px; font-weight: 600; }
 .run-status {
   margin-bottom: 12px; border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border));
@@ -173,5 +173,5 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: 380px; padding: 22px; }
 .m-ttl { font-size: 15px; font-weight: 600; }
 .btn-ghost { background: var(--surface2); border: 0; padding: 9px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--fg); }
-.btn-accent { background: var(--accent); color: #fff; border: 0; padding: 9px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+.btn-accent { background: var(--accent); color: var(--on-accent); border: 0; padding: 9px; border-radius: 6px; font-size: 13px; font-weight: 500; }
 </style>

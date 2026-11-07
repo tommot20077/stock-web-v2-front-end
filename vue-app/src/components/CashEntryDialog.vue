@@ -513,8 +513,12 @@ function localFieldInvalid(field: string): boolean {
 function fieldErrorText(field: string): string {
   const key = FIELD_ERROR_COPY[field];
   if (!key) return '';
-  if (serverFieldKeys.value.includes(field) || localFieldInvalid(field)) return t(props.lang, key);
-  return '';
+  if (serverFieldKeys.value.includes(field)) return t(props.lang, key);
+  if (!localFieldInvalid(field)) return '';
+  // quick-261106-fbs:發生時間被清空是「未填」,不是「晚於現在」—— 給專屬文案;
+  // 本地未來時間與後端 fields.occurredAt 仍走 FIELD_ERROR_COPY 的 cashErrOccurredAt。
+  if (field === 'occurredAt' && !occurredAt.value) return t(props.lang, 'cashErrOccurredAtRequired');
+  return t(props.lang, key);
 }
 
 /** 多個 id 以空白分隔;沒有任何關聯節點時回 undefined(不渲染空屬性)。 */
@@ -733,7 +737,7 @@ textarea.inp { resize: vertical; }
 
 /* 沖銷原紀錄摘要卡:OrderTicket .quote-card 的形狀(此卡在對話框內,不在頁面卡片內) */
 .quote-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-mute); margin-bottom: 4px; }
+.quote-lab { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--fg-dim); margin-bottom: 4px; }
 .sum-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 400; padding: 4px 0; }
 .sum-row span { color: var(--fg-dim); }
 .sum-row b { font-weight: 600; text-align: right; }
@@ -813,7 +817,7 @@ textarea.inp { resize: vertical; }
   padding: 16px 24px; border-top: 1px solid var(--border); background: var(--surface2);
 }
 .btn-accent {
-  background: var(--accent); color: #fff; border: 0; padding: 8px 24px; min-height: 44px;
+  background: var(--accent); color: var(--on-accent); border: 0; padding: 8px 24px; min-height: 44px;
   border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
   white-space: nowrap;
 }
