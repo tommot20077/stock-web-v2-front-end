@@ -91,6 +91,19 @@ describe('LiveQuoteStatus — 六態(UI-SPEC §9)', () => {
     expect(document.body.querySelector('[data-testid="live-quote-time"]')?.textContent).toBe('11-03 14:05');
   });
 
+  // quick-261107-1j4(04.2 IN-09):「是不是今天」跟著 reactive 時鐘走,過午夜不需任何 prop 變動就改帶 MM-DD。
+  it('degraded:時鐘走過午夜後,昨天的更新時間改顯示 MM-DD HH:mm(IN-09)', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date(2026, 10, 4, 23, 59, 30));
+    await mountStatus('degraded', new Date(2026, 10, 4, 23, 59, 0).getTime());
+    const time = () => document.body.querySelector('[data-testid="live-quote-time"]')?.textContent;
+    expect(time()).toBe('23:59');
+
+    vi.advanceTimersByTime(60_000);
+    await flushAsync(1);
+    expect(time()).toBe('11-04 23:59');
+  });
+
   it('degraded:從未收到資料(updatedAt null)→ 時間顯示 —,不渲染 NaN', async () => {
     await mountStatus('degraded', null);
     expect(document.body.querySelector('[data-testid="live-quote-time"]')?.textContent).toBe('—');

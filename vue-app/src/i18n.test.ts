@@ -740,8 +740,22 @@ const QUICK_261107_1J4_KEYS = [
   'cashErrOccurredAtTooEarly',
   'tradeErrExecutedAtRequired',
   'tradeErrExecutedAtTooEarly',
+  // 3B:股利入帳時間 / 股數調整除權日三種文案
+  'holdingEventErrPaidAtRequired',
+  'holdingEventErrPaidAtTooEarly',
+  'holdingEventErrEffectiveDateRequired',
+  'holdingEventErrEffectiveDateTooEarly',
+  // 04.2 WR-09:除權日以標的市場日期計的提示與時區名稱
+  'holdingEventMarketDate',
+  'marketZoneNewYork',
+  'marketZoneTaipei',
+  'marketZoneTokyo',
+  'marketZoneBerlin',
+  'marketZoneUtc',
 ];
-const QUICK_261107_1J4_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {};
+const QUICK_261107_1J4_PLACEHOLDERS_BY_KEY: Record<string, string[]> = {
+  holdingEventMarketDate: ['zone'],
+};
 
 describe('i18n quick-261107-1j4 copy', () => {
   it('provides every quick-261107-1j4 key in both languages, listed once', () => {
@@ -783,6 +797,26 @@ describe('i18n quick-261107-1j4 copy', () => {
     expect(I18N.en.tradeErrExecutedAtRequired).toBe('Executed at is required.');
     expect(I18N.zh.tradeErrExecutedAtTooEarly).toBe('成交時間不可早於 1900-01-01。');
     expect(I18N.en.tradeErrExecutedAtTooEarly).toBe('Executed at cannot be earlier than 1900-01-01.');
+  });
+
+  it('gives paid-at / ex-date their own required and too-early copy (B1)', () => {
+    expect(I18N.zh.holdingEventErrPaidAtRequired).toBe('請填寫入帳時間。');
+    expect(I18N.en.holdingEventErrPaidAtRequired).toBe('Paid at is required.');
+    expect(I18N.zh.holdingEventErrPaidAtTooEarly).toBe('入帳時間不可早於 1900-01-01。');
+    expect(I18N.en.holdingEventErrPaidAtTooEarly).toBe('Paid at cannot be earlier than 1900-01-01.');
+    expect(I18N.zh.holdingEventErrEffectiveDateRequired).toBe('請填寫除權日。');
+    expect(I18N.en.holdingEventErrEffectiveDateRequired).toBe('Ex-date is required.');
+    expect(I18N.zh.holdingEventErrEffectiveDateTooEarly).toBe('除權日不可早於 1900-01-01。');
+    expect(I18N.en.holdingEventErrEffectiveDateTooEarly).toBe('The ex-date cannot be earlier than 1900-01-01.');
+  });
+
+  it('fills the market date hint with the zone label in both languages (WR-09)', () => {
+    expect(tf('zh', 'holdingEventMarketDate', { zone: t('zh', 'marketZoneNewYork') })).toBe('以美東日期計');
+    expect(tf('en', 'holdingEventMarketDate', { zone: t('en', 'marketZoneNewYork') })).toBe('Uses the US Eastern date');
+    expect([I18N.zh.marketZoneTaipei, I18N.zh.marketZoneTokyo, I18N.zh.marketZoneBerlin, I18N.zh.marketZoneUtc])
+      .toEqual(['台北', '東京', '中歐', 'UTC']);
+    expect([I18N.en.marketZoneTaipei, I18N.en.marketZoneTokyo, I18N.en.marketZoneBerlin, I18N.en.marketZoneUtc])
+      .toEqual(['Taipei', 'Tokyo', 'Central European', 'UTC']);
   });
 });
 

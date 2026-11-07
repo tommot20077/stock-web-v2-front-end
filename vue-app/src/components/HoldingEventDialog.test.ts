@@ -363,11 +363,6 @@ function adjustmentCalls(fetchImpl: FetchDouble) {
   return callsTo(fetchImpl, '/portfolio/share-adjustments');
 }
 
-/** 本機日期 `YYYY-MM-DD`(與元件的 `max` 同一個來源:本機時區)。 */
-function localDate(offsetDays = 0): string {
-  return toLocalInputValue(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000)).slice(0, 10);
-}
-
 const HOLDING_1000 = { totalQuantity: 1000, currency: 'USD', name: 'Apple Inc.' };
 
 describe('HoldingEventDialog — 模式切換', () => {
@@ -411,6 +406,7 @@ describe('HoldingEventDialog — 模式切換', () => {
 
 describe('HoldingEventDialog — 配股(D-05)', () => {
   it('recordsStockDividendWithSharesAndExDate', async () => {
+    useWr09Clock();
     const dto = adjustmentDto({ quantityDelta: 50, note: 'from-backend' });
     const { fetchImpl, onRecorded } = await mountDialog({
       fetchImpl: adjustmentFetch(dto),
@@ -439,7 +435,8 @@ describe('HoldingEventDialog — 配股(D-05)', () => {
       quantity: 50,
       ratioNew: null,
       ratioOld: null,
-      effectiveDate: localDate(),
+      // quick-261107-1j4 WR-09:預設為標的市場的今天(查詢未路由 → fallback 紐約 = 2026-11-04)。
+      effectiveDate: '2026-11-04',
       note: null,
       reversalOfId: null,
     });
@@ -475,19 +472,24 @@ describe('HoldingEventDialog — 配股(D-05)', () => {
   });
 
   it('exDateIsADateInputCappedAtTodayAndSentVerbatim', async () => {
+    // quick-261107-1j4 WR-09:「今天」是標的市場的今天(AAPL = 紐約);假時鐘固定,不依賴執行環境時區。
+    useWr09Clock();
     const { fetchImpl } = await mountDialog({
-      fetchImpl: adjustmentFetch(adjustmentDto()),
+      fetchImpl: holdingEventFetch({
+        adjustments: () => okResponse(adjustmentDto()),
+        assets: () => assetPage([AAPL_ASSET]),
+      }),
       props: { initialMode: 'stockDividend' },
     });
     await typeInto('holding-event-shares', '5');
 
     const date = requireTestid('holding-event-effective-date') as HTMLInputElement;
     expect(date.type).toBe('date');
-    expect(date.max).toBe(localDate());
-    expect(date.value, '預設今天').toBe(localDate());
+    expect(date.max).toBe('2026-11-04');
+    expect(date.value, '預設標的市場的今天').toBe('2026-11-04');
     expect(bodyText()).toContain(t('zh', 'holdingEventEffectiveDateHint'));
 
-    await setValue(date, localDate(1));
+    await setValue(date, '2026-11-05');
     expect(submitButton().disabled).toBe(true);
     expect(fieldError('effectiveDate')).toBe(t('zh', 'holdingEventErrEffectiveDate'));
 
@@ -557,6 +559,7 @@ describe('HoldingEventDialog — 拆股 / 合股(D-08)', () => {
   it('recordsSplitAndTitlesResultFromBackendRatio', async () => {
     // 回應刻意與輸入不同(輸入 4 : 1,後端回 1 : 10):result 只能依後端值判斷拆 / 合(D-02)。
     const dto = adjustmentDto({ type: 'SPLIT', quantityDelta: -900, ratioNew: 1, ratioOld: 10 });
+    useWr09Clock();
     const { fetchImpl } = await mountDialog({
       fetchImpl: adjustmentFetch(dto),
       props: { initialMode: 'split' },
@@ -571,7 +574,8 @@ describe('HoldingEventDialog — 拆股 / 合股(D-08)', () => {
       quantity: null,
       ratioNew: 4,
       ratioOld: 1,
-      effectiveDate: localDate(),
+      // quick-261107-1j4 WR-09:預設為標的市場的今天(查詢未路由 → fallback 紐約 = 2026-11-04)。
+      effectiveDate: '2026-11-04',
       note: null,
       reversalOfId: null,
     });
@@ -1744,5 +1748,217 @@ describe('HoldingEventDialog — 沖銷模式(D-13)', () => {
   it('mapsReversalCodesInTheCopyTable', () => {
     expect(holdingEventDialogSource).toMatch(/emit\('reversalConflict'/);
     expect(holdingEventDialogSource).toMatch(/holdingEventErrReversalNoHolding/);
+  });
+});
+
+// =====================================================================================
+// quick-261107-1j4(Yuan 2026-11-07 裁決 3B / 4):
+//   B1 —— 入帳時間與除權日錯誤分「空白 / 早於 1900-01-01 / 晚於上限」三種文案;
+//   WR-09 —— 除權日預設值與 max 用標的市場的今天(鏡像後端 TradingDay.of),欄位旁提示市場日期;
+//   IN-09 —— 時間相依的合法性隨 reactive 時鐘更新,不需編輯欄位。
+// 時間一律以假時鐘固定,不依賴執行環境時區。
+// =====================================================================================
+
+/** 2026-11-05T01:00Z:紐約仍是 11-04(EST),台北 / UTC 已是 11-05。 */
+const WR09_NOW = Date.parse('2026-11-05T01:00:00Z');
+
+function useWr09Clock() {
+  vi.useFakeTimers();
+  vi.setSystemTime(WR09_NOW);
+}
+
+function effectiveDateInput(): HTMLInputElement {
+  return requireTestid('holding-event-effective-date') as HTMLInputElement;
+}
+
+function marketDateHint(): string {
+  return requireTestid('holding-event-market-date').textContent?.trim() ?? '';
+}
+
+function marketHintFor(lang: Lang, zoneKey: string): string {
+  return tf(lang, 'holdingEventMarketDate', { zone: t(lang, zoneKey) });
+}
+
+const TSMC_ASSET = assetDto('2330', { name: 'TSMC', market: 'TW', currency: 'TWD' });
+const BTC_ASSET = assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'BINANCE', currency: 'USDT' });
+
+describe('HoldingEventDialog — 入帳時間 / 除權日三種文案(quick-261107-1j4 B1)', () => {
+  it('paidAt:清空 → 請填寫;早於 1900-01-01 → 不可早於;未來 → 既有文案', async () => {
+    await mountDialog();
+    await typeInto('holding-event-amount', '100');
+    const input = requireTestid('holding-event-paid-at') as HTMLInputElement;
+
+    await setValue(input, '');
+    input.dispatchEvent(new Event('blur'));
+    await nextTick();
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('paidAt')).toBe(t('zh', 'holdingEventErrPaidAtRequired'));
+
+    await setValue(input, '1800-01-01T00:00');
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('paidAt')).toBe(t('zh', 'holdingEventErrPaidAtTooEarly'));
+
+    await setValue(input, toLocalInputValue(new Date(Date.now() + 2 * 60 * 60 * 1000)));
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('paidAt')).toBe(t('zh', 'holdingEventErrPaidAt'));
+  });
+
+  it('effectiveDate:清空 → 請填寫;1899-12-31 → 不可早於;晚於市場今天 → 既有文案', async () => {
+    useWr09Clock();
+    await mountDialog({ lang: 'en', props: { initialMode: 'stockDividend' } });
+    await typeInto('holding-event-shares', '5');
+    const input = effectiveDateInput();
+
+    await setValue(input, '');
+    input.dispatchEvent(new Event('blur'));
+    await nextTick();
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('effectiveDate')).toBe(t('en', 'holdingEventErrEffectiveDateRequired'));
+
+    await setValue(input, '1899-12-31');
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('effectiveDate')).toBe(t('en', 'holdingEventErrEffectiveDateTooEarly'));
+
+    // 查詢失敗 → fallback 紐約:市場今天 = 2026-11-04,11-05 晚於上限。
+    await setValue(input, '2026-11-05');
+    expect(submitButton().disabled).toBe(true);
+    expect(fieldError('effectiveDate')).toBe(t('en', 'holdingEventErrEffectiveDate'));
+
+    await setValue(input, '1900-01-01');
+    expect(fieldError('effectiveDate')).toBeUndefined();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('後端 fields.paidAt 且目前輸入合法 → 既有文案(值不入 DOM)', async () => {
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        dividends: () => failure('VALIDATION_FAILED', { fields: { paidAt: FIELD_VALUE_CANARY } }),
+      }),
+    });
+    await fillValidDividend();
+    await submit();
+
+    expect(fieldError('paidAt')).toBe(t('zh', 'holdingEventErrPaidAt'));
+    expect(bodyText()).not.toContain(FIELD_VALUE_CANARY);
+  });
+});
+
+describe('HoldingEventDialog — 除權日用標的市場的今天(quick-261107-1j4 WR-09)', () => {
+  it('typeahead 選美股 → 預設與 max = 紐約日期 2026-11-04,提示「以美東日期計」', async () => {
+    useWr09Clock();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({ assets: () => assetPage([AAPL_ASSET]) }),
+      props: { ...FROM_TRADES, initialMode: 'stockDividend' },
+    });
+    await typeSymbol('AAPL');
+    await advance(250);
+
+    expect(effectiveDateInput().value).toBe('2026-11-04');
+    expect(effectiveDateInput().max).toBe('2026-11-04');
+    expect(marketDateHint()).toBe(marketHintFor('zh', 'marketZoneNewYork'));
+    expect(marketDateHint()).toContain(t('zh', 'marketZoneNewYork'));
+  });
+
+  it('typeahead 選台股 → 2026-11-05 + 台北;選加密 → 2026-11-05 + UTC', async () => {
+    useWr09Clock();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        assets: query => assetPage(query.toUpperCase() === 'BTC' ? [BTC_ASSET] : [TSMC_ASSET]),
+      }),
+      props: { ...FROM_TRADES, initialMode: 'split' },
+    });
+
+    await typeSymbol('2330');
+    await advance(250);
+    expect(effectiveDateInput().value).toBe('2026-11-05');
+    expect(effectiveDateInput().max).toBe('2026-11-05');
+    expect(marketDateHint()).toBe(marketHintFor('zh', 'marketZoneTaipei'));
+
+    await typeSymbol('BTC');
+    await advance(250);
+    expect(effectiveDateInput().value).toBe('2026-11-05');
+    expect(marketDateHint()).toBe(marketHintFor('zh', 'marketZoneUtc'));
+  });
+
+  it('從持倉開啟:恰好查一次標的,回美股 → 2026-11-04', async () => {
+    useWr09Clock();
+    const fetchImpl = holdingEventFetch({ assets: () => assetPage([assetDto('AAPLX'), AAPL_ASSET]) });
+    await mountDialog({ fetchImpl, props: { initialMode: 'stockDividend' } });
+
+    expect(assetQueries(fetchImpl), '從持倉開啟只以鎖定代號查一次').toEqual(['AAPL']);
+    expect(effectiveDateInput().value).toBe('2026-11-04');
+    expect(effectiveDateInput().max).toBe('2026-11-04');
+    expect(marketDateHint()).toBe(marketHintFor('zh', 'marketZoneNewYork'));
+  });
+
+  it('從持倉開啟查詢失敗 → fallback 紐約日期與美東提示,不另顯示錯誤', async () => {
+    useWr09Clock();
+    await mountDialog({
+      lang: 'en',
+      fetchImpl: holdingEventFetch({ assets: () => failure('INTERNAL_ERROR', { status: 500 }) }),
+      props: { initialMode: 'stockDividend' },
+    });
+
+    expect(effectiveDateInput().value).toBe('2026-11-04');
+    expect(marketDateHint()).toBe(marketHintFor('en', 'marketZoneNewYork'));
+    expect(testid('holding-event-error')).toBeNull();
+  });
+
+  it('市場日期提示納入除權日欄位的 aria-describedby', async () => {
+    useWr09Clock();
+    await mountDialog({ props: { initialMode: 'stockDividend' } });
+
+    const hint = requireTestid('holding-event-market-date');
+    expect(hint.id).toBeTruthy();
+    expect((effectiveDateInput().getAttribute('aria-describedby') ?? '').split(/\s+/)).toContain(hint.id);
+  });
+
+  it('從持倉開啟台股:查詢回來後未動過的預設值更新為台北日期;動過的不覆寫', async () => {
+    useWr09Clock();
+    const lookup = deferred<Response>();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({ assets: () => lookup.promise }),
+      props: { symbol: '2330', holding: { totalQuantity: 1000, currency: 'TWD', name: 'TSMC' }, initialMode: 'stockDividend' },
+    });
+    expect(effectiveDateInput().value, '查詢中先用 fallback').toBe('2026-11-04');
+
+    lookup.resolve(assetPage([TSMC_ASSET]));
+    await flushAsync(16);
+    expect(effectiveDateInput().value, '未動過 → 跟隨台北日期').toBe('2026-11-05');
+    expect(effectiveDateInput().max).toBe('2026-11-05');
+    expect(marketDateHint()).toBe(marketHintFor('zh', 'marketZoneTaipei'));
+
+    cleanupMounted();
+    useWr09Clock();
+    const lookup2 = deferred<Response>();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({ assets: () => lookup2.promise }),
+      props: { symbol: '2330', holding: { totalQuantity: 1000, currency: 'TWD', name: 'TSMC' }, initialMode: 'stockDividend' },
+    });
+    await setValue(effectiveDateInput(), '2026-11-01');
+    effectiveDateInput().dispatchEvent(new Event('blur'));
+    lookup2.resolve(assetPage([TSMC_ASSET]));
+    await flushAsync(16);
+    expect(effectiveDateInput().value, '使用者動過的值不得被覆寫').toBe('2026-11-01');
+    expect(effectiveDateInput().max).toBe('2026-11-05');
+  });
+
+  it('不再有瀏覽器本地今天的 helper', () => {
+    expect(holdingEventDialogSource).not.toContain('todayLocalDate');
+    expect(holdingEventDialogSource).toContain('marketDayRuleOf');
+  });
+});
+
+describe('HoldingEventDialog — 合法性隨 reactive 時鐘更新(quick-261107-1j4 IN-09)', () => {
+  it('paidAt = now + 60s → 送出鈕 disabled;時鐘走過後自動 enabled,不需編輯欄位', async () => {
+    useWr09Clock();
+    await mountDialog();
+    await typeInto('holding-event-amount', '100');
+    await setValue(requireTestid('holding-event-paid-at') as HTMLInputElement, toLocalInputValue(new Date(WR09_NOW + 60_000)));
+    expect(submitButton().disabled).toBe(true);
+
+    await advance(61_000);
+    expect(submitButton().disabled).toBe(false);
+    expect(fieldError('paidAt')).toBeUndefined();
   });
 });
