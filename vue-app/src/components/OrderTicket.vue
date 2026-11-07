@@ -173,24 +173,6 @@
               data-testid="ticket-field-error-type"
             >{{ fieldErrorText('type') }}</p>
 
-            <!-- D-04:訂單類型後端沒有對應概念,只在 mock mode 渲染(不留空版位) -->
-            <template v-if="live">
-              <label class="lab" for="trade-ord-type-mkt">{{ t(lang, 'orderType') }}</label>
-              <div class="seg">
-                <button
-                  id="trade-ord-type-mkt"
-                  type="button"
-                  :class="['seg-btn', { active: ordType === 'MKT' }]"
-                  @click="ordType = 'MKT'"
-                >{{ t(lang, 'market') }}</button>
-                <button
-                  type="button"
-                  :class="['seg-btn', { active: ordType === 'LMT' }]"
-                  @click="ordType = 'LMT'"
-                >{{ t(lang, 'limit') }}</button>
-              </div>
-            </template>
-
             <div class="row2">
               <div>
                 <label class="lab" for="trade-qty">{{ t(lang, 'qty') }}</label>
@@ -334,24 +316,6 @@
               data-testid="ticket-field-error-note"
             >{{ fieldErrorText('note') }}</p>
 
-            <!-- D-04:TIF 後端沒有對應概念,只在 mock mode 渲染 -->
-            <template v-if="live">
-              <label class="lab" for="trade-tif-day">{{ t(lang, 'tif') }}</label>
-              <div class="seg">
-                <button
-                  id="trade-tif-day"
-                  type="button"
-                  :class="['seg-btn', { active: tif === 'DAY' }]"
-                  @click="tif = 'DAY'"
-                >{{ t(lang, 'day') }}</button>
-                <button
-                  type="button"
-                  :class="['seg-btn', { active: tif === 'GTC' }]"
-                  @click="tif = 'GTC'"
-                >{{ t(lang, 'gtc') }}</button>
-              </div>
-            </template>
-
             <div v-if="validationError" class="form-error" role="alert" data-testid="ticket-form-error">{{ validationError }}</div>
           </div>
 
@@ -463,10 +427,6 @@
             {{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qty }} {{ selected?.symbol }}
           </div>
           <div class="rev-grid">
-            <div v-if="live">
-              <span>{{ t(lang, 'orderType') }}</span>
-              <b>{{ ordType === 'MKT' ? t(lang, 'market') : t(lang, 'limit') }} · {{ tif }}</b>
-            </div>
             <div><span>{{ t(lang, 'price') }}</span><b class="num">{{ reviewMoney(px, selectedDp) }}</b></div>
             <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ qty }}</b></div>
             <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ reviewMoney(fee, selectedDp) }}</b></div>
@@ -665,10 +625,8 @@ const symOpen = ref(false);
 const selected = ref<AssetDto | null>(null);
 
 const side = ref<'BUY' | 'SELL'>('BUY');
-// D-04:ordType / tif 只在 mock mode 渲染;後端 CreateTradeRequest 沒有這兩個欄位,
-// 因此它們永遠不會進入 payload(judgment §1 明文點名的反例)。
-const ordType = ref<'MKT' | 'LMT'>('MKT');
-const tif = ref<'DAY' | 'GTC'>('DAY');
+// quick-261107-1j4(Yuan 2026-11-07 裁決 3B):訂單類型(市價 / 限價)與有效時間(當日 / 長效)是委託單概念,
+// 手動紀錄已成交交易用不到,mock 與 API 兩模式皆已移除(judgment §1;後端 CreateTradeRequest 也沒有這兩個欄位)。
 const qty = ref<number>(0);
 const px = ref<number>(0);
 const fee = ref<number>(0);
@@ -1181,8 +1139,6 @@ function resetTicket() {
   submitting.value = false;
   recorded.value = null;
   side.value = 'BUY';
-  ordType.value = 'MKT';
-  tif.value = 'DAY';
   fee.value = 0;
   note.value = '';
   orderError.value = '';
@@ -1425,7 +1381,7 @@ function handleSubmitFailure(error: unknown) {
   cursor: pointer; border-radius: 8px;
 }
 .x:hover { background: var(--surface2); color: var(--fg); }
-.x:focus-visible, .side-btn:focus-visible, .seg-btn:focus-visible,
+.x:focus-visible, .side-btn:focus-visible,
 .btn-accent:focus-visible, .btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .body { padding: 24px; }
@@ -1508,13 +1464,6 @@ function handleSubmitFailure(error: unknown) {
 }
 .side-btn.buy.active { background: rgba(22,163,74,0.12); color: var(--up-text); border-color: var(--up); }
 .side-btn.sell.active { background: rgba(220,38,38,0.10); color: var(--dn); border-color: var(--dn); }
-
-.seg { display: inline-flex; background: var(--surface2); border-radius: 8px; padding: 4px; gap: 4px; }
-.seg-btn {
-  flex: 1; padding: 8px 12px; min-height: 36px; background: transparent; border: 0; border-radius: 8px;
-  font-size: 12px; font-weight: 600; color: var(--fg-dim); cursor: pointer; transition: all .15s;
-}
-.seg-btn.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
