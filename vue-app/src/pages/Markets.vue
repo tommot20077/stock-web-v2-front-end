@@ -542,7 +542,7 @@ tbody td { padding: 11px 0; }
   border-radius: 8px;
   cursor: pointer;
 }
-.star-btn.on { color: var(--accent); }
+.star-btn.on { color: var(--accent-text); }
 .star-btn:hover { background: var(--surface2); }
 .star-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .quick-order {
@@ -552,7 +552,7 @@ tbody td { padding: 11px 0; }
   transition: all .15s; padding: 0;
 }
 .quick-order:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
-.row:hover .quick-order { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
+.row:hover .quick-order { color: var(--accent-text); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); }
 .order-unavailable {
   display: inline-flex;
   align-items: center;

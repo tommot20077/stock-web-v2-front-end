@@ -500,10 +500,10 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .day-pin {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 5px 8px 5px 12px; background: rgba(99,102,241,0.1);
-  color: var(--accent); border: 1px solid rgba(99,102,241,0.3);
+  color: var(--accent-text); border: 1px solid rgba(99,102,241,0.3);
   border-radius: 99px; font-size: 12px; font-weight: 500;
 }
-.day-pin .x { background: transparent; border: 0; color: var(--accent); cursor: pointer; padding: 0 2px; font-size: 13px; }
+.day-pin .x { background: transparent; border: 0; color: var(--accent-text); cursor: pointer; padding: 0 2px; font-size: 13px; }
 
 .notif-row { display: flex; gap: 14px; padding: 14px 16px; align-items: flex-start; }
 .notif-row .ic {

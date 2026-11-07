@@ -411,7 +411,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .ic { width: 18px; text-align: center; }
 .soon {
   margin-left: auto; font-size: 9px; padding: 1px 5px; border-radius: 3px;
-  background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent-text);
   text-transform: uppercase; letter-spacing: .4px; font-weight: 600;
 }
 
@@ -434,7 +434,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
   border-radius: 6px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }
-.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
 .btn-ghost:disabled {
   opacity: .48; cursor: not-allowed; color: var(--fg-mute);
   border-color: var(--border); background: color-mix(in oklch, var(--surface2) 70%, transparent);

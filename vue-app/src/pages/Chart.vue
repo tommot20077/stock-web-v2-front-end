@@ -498,7 +498,7 @@ function signedFmt(n: number | null | undefined, d = 2) {
 }
 .btn-watch:hover { background: var(--surface2); }
 .btn-watch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.btn-watch.on .watch-glyph { color: var(--accent); }
+.btn-watch.on .watch-glyph { color: var(--accent-text); }
 .btn-accent { color: #fff; border: 0; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 /* 買賣方向鈕:按鈕底色 token + 白字(quick-261106-fbs 2c-addendum),紅漲綠跌時隨 data-up-color 對調。 */
 .btn-accent.buy { background: var(--btn-up-bg); color: #fff; }

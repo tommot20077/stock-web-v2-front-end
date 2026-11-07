@@ -739,7 +739,7 @@ function fmtK(n: number) {
   transition: all 0.15s;
 }
 .tab:hover { color: var(--fg-dim) }
-.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600 }
+.tab.on { color: var(--accent-text); border-bottom-color: var(--accent); font-weight: 600 }
 .tab-icon { display: inline-flex; align-items: center; }
 
 .seg { display: inline-flex; background: var(--surface2); border-radius: 6px; padding: 2px; gap: 2px }
@@ -761,7 +761,7 @@ function fmtK(n: number) {
 /* Sliders */
 .sliders { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px }
 .slider-row .sym { font-size: 12px; font-weight: 600 }
-.slider-row .num.edited { color: var(--accent); font-weight: 600 }
+.slider-row .num.edited { color: var(--accent-text); font-weight: 600 }
 .slider-row .delta { font-size: 10.5px; opacity: 0.7; margin-left: 4px }
 .slider-row input[type="range"] {
   width: 100%; height: 4px; -webkit-appearance: none; appearance: none;

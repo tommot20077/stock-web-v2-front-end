@@ -664,7 +664,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey));
   transform: translateX(-50%);
 }
 .dist-vals { display: flex; gap: 12px; font-size: 11px; }
-.al-target { color: var(--accent); font-weight: 600; }
+.al-target { color: var(--accent-text); font-weight: 600; }
 
 .num { font-variant-numeric: tabular-nums; }
 
@@ -751,7 +751,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey));
 .ch-toggle:hover { color: var(--fg); }
 .ch-toggle.on {
   background: color-mix(in oklab, var(--accent) 12%, var(--surface));
-  border-color: var(--accent); color: var(--accent);
+  border-color: var(--accent); color: var(--accent-text);
 }
 .ch-icon { font-size: 14px; }
 

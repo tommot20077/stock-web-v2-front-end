@@ -158,7 +158,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .run-status {
   margin-bottom: 12px; border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border));
   background: color-mix(in oklch, var(--accent) 8%, transparent);
-  color: var(--accent); border-radius: 8px; padding: 8px 10px;
+  color: var(--accent-text); border-radius: 8px; padding: 8px 10px;
   font-size: 12px; font-weight: 600;
 }
 .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -174,7 +174,7 @@ onMounted(checkSyntax);
 .side-sec + .side-sec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .side-ttl { font-size: 10px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; font-weight: 600; }
 .api-list { display: grid; grid-template-columns: 1fr; gap: 6px; font-size: 11px; }
-.api-list code { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 11px; padding: 1px 5px; background: var(--surface); border-radius: 3px; display: inline-block; }
+.api-list code { font-family: 'JetBrains Mono', monospace; color: var(--accent-text); font-size: 11px; padding: 1px 5px; background: var(--surface); border-radius: 3px; display: inline-block; }
 .api-list span { color: var(--fg-dim); font-size: 10.5px; padding-left: 4px; }
 .dim-text span { color: var(--fg-dim); display: block; font-size: 10.5px; }
 </style>

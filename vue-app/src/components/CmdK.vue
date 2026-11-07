@@ -253,7 +253,7 @@ function onInputKey(e: KeyboardEvent) {
   font-size: 13px; color: var(--fg);
 }
 .grp-row.active { background: var(--surface2); }
-.grp-row.active .grp-icon { color: var(--accent); }
+.grp-row.active .grp-icon { color: var(--accent-text); }
 .grp-icon { width: 20px; color: var(--fg-mute); font-size: 12px; }
 .grp-label { flex: 1; font-weight: 500; }
 .grp-sub { color: var(--fg-dim); font-size: 11px; }

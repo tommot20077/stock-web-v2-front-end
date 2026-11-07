@@ -129,13 +129,13 @@ defineProps<{
   font-size: 10px; color: var(--fg-mute); cursor: pointer; font-family: inherit;
   text-transform: uppercase; letter-spacing: .3px;
 }
-.micro:hover { color: var(--accent); background: var(--surface); }
+.micro:hover { color: var(--accent-text); background: var(--surface); }
 .btn-ghost {
   background: var(--surface2); border: 1px solid var(--border); padding: 6px 12px;
   border-radius: 6px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit;
   transition: all .15s; white-space: nowrap;
 }
-.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
 .btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
 .sw { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }
 .sw input { opacity: 0; width: 0; height: 0; }
@@ -205,7 +205,7 @@ defineProps<{
 .call + .call { border-top: 1px solid var(--border); }
 .call-time { font-family: var(--mono, ui-monospace, monospace); color: var(--fg-mute); }
 .call-agent { color: var(--fg); font-weight: 500; }
-.call-tool code { font-family: var(--mono, ui-monospace, monospace); color: var(--accent); font-size: 11px; }
+.call-tool code { font-family: var(--mono, ui-monospace, monospace); color: var(--accent-text); font-size: 11px; }
 .call-args { font-family: var(--mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cli-card {
   padding: 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
