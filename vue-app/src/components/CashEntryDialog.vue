@@ -765,7 +765,7 @@ textarea.inp { resize: vertical; }
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
   margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
-  color: var(--dn); overflow-wrap: anywhere;
+  color: var(--danger); overflow-wrap: anywhere;
 }
 .submitting-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 
@@ -788,7 +788,7 @@ textarea.inp { resize: vertical; }
 
 .form-error {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(220,38,38,0.10); color: var(--dn);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   font-size: 12px; font-weight: 600;
 }
 /* 底部錯誤區:body 內、footer 之上,全寬 */

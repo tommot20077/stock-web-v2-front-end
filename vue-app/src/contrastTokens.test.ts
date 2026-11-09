@@ -202,9 +202,8 @@ describe('A2 買進 / 賣出鈕底色(2c-addendum)', () => {
     });
   }
 
-  it('以 --dn 當底色的危險按鈕 / 警示圖示同樣改用 --btn-dn-bg 白字(不再繼承 accent 的深色字)', () => {
+  it('以 --dn 當底色的警示圖示同樣改用 --btn-dn-bg 白字(不再繼承 accent 的深色字)', () => {
     for (const [file, selector] of [
-      ['components/AuthPanel.vue', '.auth-submit.danger'],
       ['components/settings/SettingsBrokers.vue', '.banner.warn-banner .banner-icon'],
     ]) {
       const rules = rulesFor(file, selector);
@@ -213,6 +212,15 @@ describe('A2 買進 / 賣出鈕底色(2c-addendum)', () => {
         expect(backgroundOf(r), `${file} ${selector}`).toBe('var(--btn-dn-bg)');
         expect(r.decls.color ?? '', `${file} ${selector}`).toMatch(WHITE);
       }
+    }
+  });
+
+  it('危險動作鈕 AuthPanel .auth-submit.danger 改用固定錯誤色 --danger / --on-danger(Phase 5 D-28,不隨紅漲綠跌對調)', () => {
+    const rules = rulesFor('components/AuthPanel.vue', '.auth-submit.danger');
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) {
+      expect(backgroundOf(r)).toBe('var(--danger)');
+      expect(r.decls.color).toBe('var(--on-danger)');
     }
   });
 
@@ -599,5 +607,42 @@ describe('--danger 固定錯誤色(D-28)', () => {
     const ops = templateAndScriptOf(vueSources['./pages/Ops.vue']);
     expect(ops).toMatch(/o\.status === 'success' \? 'var\(--success\)' : 'var\(--danger\)'/);
     expect(vueSources['./pages/Ops.vue']).not.toContain("'var(--dn)'");
+  });
+});
+
+/*
+ * Phase 5 D-28:selector 帶 error / danger / invalid / fail 的規則屬失敗 / 錯誤 / 破壞性語意,
+ * 不得引用會隨紅漲綠跌對調的漲跌色(--up / --dn,及由它們衍生或同樣被對調的 --neg / --btn-up-bg / --btn-dn-bg),
+ * 也不得寫死錯誤紅 rgba(220, 38, 38, …) 字面(改 color-mix(in oklch, var(--danger) N%, transparent))。
+ */
+describe('錯誤樣式不得使用漲跌色(D-28)', () => {
+  // retry / logout:錯誤區塊旁的重試鈕與登出鈕(破壞性動作),selector 不含上列字眼但同屬錯誤 / 破壞性語意。
+  const ERROR_SELECTOR = /error|danger|invalid|fail|retry|logout/i;
+  const SWAPPING_TOKEN = /var\(--(up|dn|neg|btn-up-bg|btn-dn-bg)\)/;
+  const ERROR_RED_LITERAL = /rgba\(\s*220\s*,\s*38\s*,\s*38\b/;
+
+  function errorStyleOffenders(rules: CssRule[]): string[] {
+    return rules
+      .filter(r => ERROR_SELECTOR.test(r.selector))
+      .flatMap(r =>
+        Object.entries(r.decls)
+          .filter(([, value]) => SWAPPING_TOKEN.test(value) || ERROR_RED_LITERAL.test(value))
+          .map(([prop, value]) => `${r.file} ${r.selector} → ${prop}: ${value}`),
+      );
+  }
+
+  it('守門自我驗證:假 CSS .x-error { color: var(--dn) } 回報 1 條違規,漲跌語意 selector 不誤報', () => {
+    expect(errorStyleOffenders(parseRules('fake.css', '.x-error { color: var(--dn) }'))).toHaveLength(1);
+    expect(errorStyleOffenders(parseRules('fake.css', '.x-error { background: rgba(220,38,38,0.10) }'))).toHaveLength(1);
+    expect(errorStyleOffenders(parseRules('fake.css', '.dn { color: var(--dn) } .x-error { color: var(--danger) }'))).toEqual([]);
+  });
+
+  it('掃描範圍涵蓋 .vue 與 styles.css', () => {
+    expect(Object.keys(vueSources).length).toBeGreaterThan(0);
+    expect(vueRules.some(r => ERROR_SELECTOR.test(r.selector))).toBe(true);
+  });
+
+  it('所有 .vue <style> 與 styles.css 的錯誤類規則不引用漲跌色、不寫死錯誤紅 rgba', () => {
+    expect(errorStyleOffenders([...vueRules, ...globalRules])).toEqual([]);
   });
 });

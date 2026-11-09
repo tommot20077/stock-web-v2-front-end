@@ -1106,7 +1106,7 @@ td.col-status { padding-right: 16px; white-space: nowrap; }
 .block-retry {
   margin-top: 8px; min-height: 32px; padding: 0 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--danger); font: inherit; font-size: 13px; font-weight: 600;
 }
 
 /* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */

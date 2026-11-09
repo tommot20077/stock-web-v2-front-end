@@ -192,15 +192,15 @@ p { margin: 4px 0 0; color: var(--fg-dim); }
 .auth-error {
   display: flex; flex-direction: column; gap: 4px;
   margin-top: 16px; padding: 10px 12px;
-  border: 1px solid color-mix(in oklch, var(--dn) 42%, var(--border));
+  border: 1px solid color-mix(in oklch, var(--danger) 42%, var(--border));
   border-radius: 6px;
-  background: color-mix(in oklch, var(--dn) 8%, var(--surface));
+  background: color-mix(in oklch, var(--danger) 8%, var(--surface));
   color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere;
 }
-.auth-error-code { font-weight: 600; color: var(--dn); }
+.auth-error-code { font-weight: 600; color: var(--danger); }
 .auth-field-errors {
   margin: 8px 0 0; padding: 0 0 0 18px;
-  color: var(--dn); font-size: 12px;
+  color: var(--danger); font-size: 12px;
 }
 .auth-form { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
 label { display: flex; flex-direction: column; gap: 8px; color: var(--fg-dim); font-size: 12px; }
@@ -219,8 +219,8 @@ input:focus {
   background: var(--accent); color: var(--on-accent);
   font: inherit; font-size: 13px; font-weight: 600;
 }
-/* 危險動作鈕:--dn 在深色主題白字不足 AA,改用按鈕底色 token + 白字(quick-261106-fbs A2)。 */
-.auth-submit.danger { background: var(--btn-dn-bg); color: #fff; }
+/* 危險動作鈕:固定錯誤紅 --danger + --on-danger(Phase 5 D-28;--btn-dn-bg 會隨紅漲綠跌對調成綠,深色 --danger 白字不足 AA 故用 --on-danger)。 */
+.auth-submit.danger { background: var(--danger); color: var(--on-danger); }
 .auth-submit:disabled, .seg-pill button:disabled, input:disabled {
   opacity: .62; cursor: not-allowed;
 }

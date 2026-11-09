@@ -460,8 +460,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 }
 .run-note strong { color: var(--fg); font-weight: 600; }
 .strategy-error {
-  margin-top: 8px; border: 1px solid rgba(220,38,38,0.35);
-  background: rgba(220,38,38,0.1); color: var(--dn);
+  margin-top: 8px; border: 1px solid color-mix(in oklch, var(--danger) 35%, transparent);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   border-radius: 8px; padding: 9px 11px; font-size: 12px;
 }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }

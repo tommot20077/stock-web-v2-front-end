@@ -757,9 +757,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKey));
 
 .form-error {
   margin-top: 14px; padding: 10px 12px;
-  border: 1px solid color-mix(in oklab, var(--neg) 34%, var(--border));
-  border-radius: 7px; color: var(--neg);
-  background: color-mix(in oklab, var(--neg) 8%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--danger) 34%, var(--border));
+  border-radius: 7px; color: var(--danger);
+  background: color-mix(in oklab, var(--danger) 8%, var(--surface));
   font-size: 12px; font-weight: 600;
 }
 

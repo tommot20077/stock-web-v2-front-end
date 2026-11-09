@@ -1046,12 +1046,12 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
   border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
   color: var(--fg); font: inherit; font-size: 13px;
 }
-.inp[aria-invalid='true'] { border-color: var(--dn); }
+.inp[aria-invalid='true'] { border-color: var(--danger); }
 .field-hint { margin: 4px 0 0; }
-.field-error { margin-top: 8px; font-size: 12px; font-weight: 600; line-height: 1.35; color: var(--dn); overflow-wrap: anywhere; }
+.field-error { margin-top: 8px; font-size: 12px; font-weight: 600; line-height: 1.35; color: var(--danger); overflow-wrap: anywhere; }
 .form-error {
   margin-bottom: 16px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(220, 38, 38, 0.10); color: var(--dn);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   font-size: 13px; font-weight: 600; line-height: 1.45;
 }
 
@@ -1065,8 +1065,8 @@ thead th:first-child, tbody td:first-child { padding-left: 0; }
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .btn-danger {
   min-height: 36px; padding: 8px 12px; border-radius: 8px;
-  background: var(--surface); border: 1px solid var(--dn);
-  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--danger);
+  color: var(--danger); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 

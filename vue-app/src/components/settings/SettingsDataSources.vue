@@ -186,5 +186,5 @@ defineProps<{
   opacity: .48; cursor: not-allowed; color: var(--fg-mute);
   border-color: var(--border); background: color-mix(in oklch, var(--surface2) 70%, transparent);
 }
-.btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
+.btn-ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
 </style>

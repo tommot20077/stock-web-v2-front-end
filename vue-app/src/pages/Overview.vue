@@ -1030,7 +1030,7 @@ const watchlist = computed(() => (live ? [...SYMBOLS.filter(s => s.star), ...CRY
 .ccy-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .ccy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ccy-error { flex-basis: 100%; font-size: 12px; line-height: 1.35; }
-.ccy-error-msg { font-weight: 600; color: var(--dn); }
+.ccy-error-msg { font-weight: 600; color: var(--danger); }
 .ccy-error .details {
   display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px;
   color: var(--fg-dim); font-weight: 400;
@@ -1163,7 +1163,7 @@ thead th + th, tbody td + td { padding-left: 12px; }
 .block-retry {
   margin-top: 8px; min-height: 32px; padding: 0 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--danger); font: inherit; font-size: 13px; font-weight: 600;
 }
 /* U-05 / U-06:重讀指示與 stale 提示。不新增卡片,只在既有版位內插入一條低調說明列 */
 .refresh-note { padding: 4px 0 8px; font-size: 12px; color: var(--fg-dim); }

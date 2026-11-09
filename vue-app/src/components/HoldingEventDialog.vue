@@ -1669,7 +1669,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   color: var(--fg-mute); font-size: 12px; font-weight: 400; line-height: 1.35;
 }
 .block-state { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
-.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--dn); }
+.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--danger); }
 .block-error .details {
   display: flex; flex-wrap: wrap; gap: 4px 8px;
   margin-top: 4px; color: var(--fg-dim); font-size: 12px;
@@ -1678,7 +1678,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 .block-retry {
   margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  color: var(--danger); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .block-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 骨架列固定 3 條,載入呈現不隨資料量變動 */
@@ -1727,7 +1727,7 @@ textarea.inp { resize: vertical; }
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
   margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
-  color: var(--dn); overflow-wrap: anywhere;
+  color: var(--danger); overflow-wrap: anywhere;
 }
 .submitting-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 
@@ -1743,7 +1743,7 @@ textarea.inp { resize: vertical; }
 
 .form-error {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(220,38,38,0.10); color: var(--dn);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   font-size: 12px; font-weight: 600;
 }
 /* 底部錯誤區:body 內、footer 之上,全寬 */

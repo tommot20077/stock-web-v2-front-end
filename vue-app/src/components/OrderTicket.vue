@@ -1430,7 +1430,7 @@ function handleSubmitFailure(error: unknown) {
 
 /* 區塊級狀態:形狀沿用 Positions.vue:856-873(Phase 3 D-11/D-12 的診斷呈現慣例) */
 .block-state { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--fg-dim); }
-.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--dn); }
+.block-error { padding: 12px 16px; font-size: 12px; font-weight: 400; color: var(--danger); }
 .block-error .details {
   display: flex; flex-wrap: wrap; gap: 4px 8px;
   margin-top: 4px; color: var(--fg-dim); font-size: 12px;
@@ -1439,7 +1439,7 @@ function handleSubmitFailure(error: unknown) {
 .block-retry {
   margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  color: var(--danger); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .block-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 骨架列固定筆數,載入呈現不隨資料量變動(Positions.vue:868-873) */
@@ -1501,13 +1501,13 @@ function handleSubmitFailure(error: unknown) {
 .sum-strong { font-weight: 600; }
 .form-error {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(220,38,38,0.10); color: var(--dn);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   font-size: 12px; font-weight: 600;
 }
 /* 欄位級錯誤:輸入框下方 12px --dn 文字(§7 版位表) */
 .field-error {
   margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
-  color: var(--dn); overflow-wrap: anywhere;
+  color: var(--danger); overflow-wrap: anywhere;
 }
 /* 底部錯誤區:ticket body 內、footer 之上,全寬(§Layout Contract) */
 .submit-error { margin: 0 24px 16px; }
