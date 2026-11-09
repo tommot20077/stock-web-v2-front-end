@@ -566,6 +566,9 @@ describe('HoldingEventDialog — 拆股 / 合股(D-08)', () => {
     await typeInto('holding-event-ratio-new', '4');
     await typeInto('holding-event-ratio-old', '1');
     await submit();
+    // 假時鐘下 flushAsync 只跑 microtask 輪次;transport 邊界(transportFetch,D-26)多一層 await,
+    // 固定輪數不夠,多跑幾輪讓 result 之後的 nextTick → emit 完成(LEARNINGS 2026-11-07)。
+    await flushAsync(16);
 
     expect(bodiesOf(adjustmentCalls(fetchImpl))[0]).toEqual({
       symbol: 'AAPL',

@@ -16,6 +16,12 @@ describe('baseCurrencyErrorKey(T2.6)', () => {
     expect(baseCurrencyErrorKey('boom')).toBe('baseCurrencyErrNetwork');
   });
 
+  it('transport 正規化的 NETWORK_ERROR(D-26)→ baseCurrencyErrNetwork,與非 ApiClientError 同鍵', () => {
+    const networkError = new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+    expect(baseCurrencyErrorKey(networkError)).toBe('baseCurrencyErrNetwork');
+    expect(baseCurrencyErrorKey(networkError)).toBe(baseCurrencyErrorKey(new TypeError('Failed to fetch')));
+  });
+
   it('401 → null(交給全域 SessionBanner,不重複顯示)', () => {
     expect(baseCurrencyErrorKey(apiError(401, 'AUTH_TOKEN_EXPIRED'))).toBeNull();
   });

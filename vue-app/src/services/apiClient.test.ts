@@ -589,3 +589,68 @@ describe('apiClient', () => {
     ]);
   });
 });
+
+// D-26:fetch reject(網路層失敗)在 transport 邊界正規化為 NETWORK_ERROR;AbortError 原樣上拋
+describe('apiClient transport 網路錯誤正規化(D-26)', () => {
+  it('normalizes a fetch TypeError into ApiClientError NETWORK_ERROR with status 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }));
+
+    const error = await apiRequest('/api/v1/portfolio/holdings').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: 'Network error',
+      requestId: null,
+    });
+    // 靜態訊息,不帶原例外訊息(T-05-04)
+    expect((error as ApiClientError).message).not.toContain('Failed to fetch');
+  });
+
+  it('rethrows AbortError as-is (not NETWORK_ERROR) so AbortController cancellation stays distinguishable', async () => {
+    const abort = new DOMException('aborted', 'AbortError');
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw abort;
+    }));
+
+    const error = await apiRequest('/api/v1/assets/search').catch((caught: unknown) => caught);
+
+    expect(error).toBe(abort);
+    expect(error).not.toBeInstanceOf(ApiClientError);
+  });
+
+  it('normalizes a fetch reject during CSRF bootstrap of an unsafe request into NETWORK_ERROR', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }));
+
+    await expect(apiRequest('/api/v1/trades', { method: 'POST', json: { symbol: 'AAPL' } }))
+      .rejects.toMatchObject({ name: 'ApiClientError', status: 0, code: 'NETWORK_ERROR' });
+    expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/csrf']);
+  });
+
+  it('gives each concurrent request its own NETWORK_ERROR and never calls auth/refresh (VER-02 concurrency)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }));
+
+    const results = await Promise.allSettled([
+      apiRequest('/api/v1/portfolio/summary'),
+      apiPaginatedRequest('/api/v1/portfolio/activities'),
+    ]);
+
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      const reason = (result as PromiseRejectedResult).reason as unknown;
+      expect(reason).toBeInstanceOf(ApiClientError);
+      expect(reason).toMatchObject({ status: 0, code: 'NETWORK_ERROR' });
+    }
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === '/api/v1/auth/refresh'),
+    ).toHaveLength(0);
+  });
+});
