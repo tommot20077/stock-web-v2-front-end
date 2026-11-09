@@ -28,7 +28,7 @@
     <div class="card" style="grid-column: span 5; padding: 20px">
       <div class="ttl" style="margin-bottom:12px">{{ t(lang, 'oplog') }}</div>
       <div v-for="(o, i) in logs" :key="o.id" class="log" :style="{ borderTop: i ? '1px solid var(--border)' : '0' }">
-        <span class="ldot" :style="{ background: o.status === 'success' ? 'var(--success)' : 'var(--dn)' }" />
+        <span class="ldot" :style="{ background: o.status === 'success' ? 'var(--success)' : 'var(--danger)' }" />
         <div style="flex:1">
           <div style="font-weight:500">{{ o.operation }}</div>
           <div style="color:var(--fg-dim);font-size:11px;margin-top:2px">{{ formatLogTime(o.time) }} · {{ o.actor }} · {{ formatDuration(o.durationMs) }}</div>

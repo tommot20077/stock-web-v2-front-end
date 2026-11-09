@@ -565,3 +565,39 @@ describe('E3 其餘 accent 文字用法改用 --accent-text(quick-261107-1j4)', 
     expect(offenders).toEqual([]);
   });
 });
+
+/*
+ * Phase 5 D-02(c) / D-28:失敗 / 錯誤 / 破壞性動作改用固定紅 --danger(與跌色 --dn 分離)。
+ * 紅漲綠跌偏好會把 --dn 對調成綠,若錯誤樣式沿用 --dn,使用者會把失敗誤讀成正常(T-05-19)。
+ */
+describe('--danger 固定錯誤色(D-28)', () => {
+  const RED_BLOCKS = [':root[data-up-color="red"]', ':root[data-theme="dark"][data-up-color="red"]'];
+
+  it(':root 與深色區塊定義 --danger / --on-danger;紅漲兩個區塊不覆寫(固定紅)', () => {
+    expect(blockOf(':root')['--danger']).toBe('#dc2626');
+    expect(blockOf(':root')['--on-danger']).toBe('#ffffff');
+    expect(blockOf(':root[data-theme="dark"]')['--danger']).toBe('#ef4444');
+    expect(blockOf(':root[data-theme="dark"]')['--on-danger']).toBe('#15171c');
+    for (const red of RED_BLOCKS) {
+      expect(blockOf(red)['--danger'], red).toBeUndefined();
+      expect(blockOf(red)['--on-danger'], red).toBeUndefined();
+    }
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}:--danger 文字對 --surface ≥ 4.5;--on-danger 對 --danger ≥ 4.5`, () => {
+      const vars = themeVars(theme);
+      const danger = vars['--danger'];
+      const onSurface = contrastRatio(danger, surfaces[theme]['--surface']);
+      expect(onSurface, `${danger} on --surface = ${onSurface.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+      const onDanger = contrastRatio(vars['--on-danger'], danger);
+      expect(onDanger, `--on-danger on --danger = ${onDanger.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+    });
+  }
+
+  it("Ops 失敗狀態燈使用 var(--danger),原始碼不再含 'var(--dn)'", () => {
+    const ops = templateAndScriptOf(vueSources['./pages/Ops.vue']);
+    expect(ops).toMatch(/o\.status === 'success' \? 'var\(--success\)' : 'var\(--danger\)'/);
+    expect(vueSources['./pages/Ops.vue']).not.toContain("'var(--dn)'");
+  });
+});
