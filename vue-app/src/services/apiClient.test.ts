@@ -654,3 +654,39 @@ describe('apiClient transport 網路錯誤正規化(D-26)', () => {
     ).toHaveLength(0);
   });
 });
+
+// SC2 缺口 F2:5xx 空 body(反向代理 / 閘道常見)不得讓 apiClient 解析崩潰,一律收斂成 ApiClientError
+describe('apiClient 5xx 空 body(SC2 F2)', () => {
+  it('does not crash on 503 + application/json + empty body: rejects with INVALID_JSON_RESPONSE', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    const error = await apiRequest('/api/v1/portfolio/summary').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({
+      status: 503,
+      code: 'INVALID_JSON_RESPONSE',
+      requestId: null,
+    });
+  });
+
+  it('does not crash on 503 without content-type and empty body: rejects with HTTP_ERROR and no trace id', async () => {
+    // body 為 null 才是真的「沒有 Content-Type」;字串 body 會被補上 text/plain
+    const response = new Response(null, { status: 503 });
+    expect(response.headers.get('Content-Type')).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+
+    const error = await apiPaginatedRequest('/api/v1/portfolio/activities').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({
+      status: 503,
+      code: 'HTTP_ERROR',
+      message: 'Request failed with status 503',
+      requestId: null,
+    });
+  });
+});
