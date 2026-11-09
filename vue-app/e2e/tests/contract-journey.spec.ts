@@ -121,6 +121,57 @@ function isApiCall(req: Request, method: string, pathname: string): boolean {
   return req.method() === method && new URL(req.url()).pathname === pathname;
 }
 
+// ---- OrderTicket helper:複製自 trade.spec.ts(本檔私有,不改 trade.spec.ts) ----
+
+async function openTicketFromTrades(page: Page) {
+  await page.getByTestId('nav-trades').click();
+  await page.getByTestId('trades-add-trade').click();
+  await expect(page.getByTestId('ticket-symbol-input')).toBeFocused();
+}
+
+async function pickSymbol(page: Page, query: string, symbol: string) {
+  await page.getByTestId('ticket-symbol-input').pressSequentially(query);
+  // 開 ticket 時的空查詢列表本來就含目標標的;要等 debounce 後的查詢結果把它排到第一列,ArrowDown 才會選中它
+  await expect(page.getByRole('option').first()).toHaveAttribute(
+    'data-testid',
+    `ticket-symbol-option-${symbol}`,
+  );
+  await page.getByTestId('ticket-symbol-input').press('ArrowDown');
+  await page.getByTestId('ticket-symbol-input').press('Enter');
+  await expect(page.getByTestId('ticket-symbol-input')).toHaveValue(symbol);
+}
+
+/** 審閱 → 送出;回傳 UI 實際送出的 `POST /api/v1/trades`(先掛 waitForRequest 再點送出,不會漏抓) */
+async function submitTrade(page: Page): Promise<Request> {
+  await page.getByTestId('ticket-review-advance').click();
+  const tradeRequest = page.waitForRequest((req) => isApiCall(req, 'POST', '/api/v1/trades'));
+  await page.getByTestId('ticket-submit').click();
+  return tradeRequest;
+}
+
+/** 以 page.request 重讀後端 summary 的 holdingCount(與瀏覽器共用 cookie jar;不觸發 page.on('request')) */
+async function holdingCount(page: Page): Promise<number> {
+  const res = await page.request.get('/api/v1/portfolio/summary');
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.success).toBe(true);
+  return body.data.holdingCount as number;
+}
+
+/** 以 page.request 重讀後端 holdings,回傳指定標的的持股數(沒有該標的時 undefined) */
+async function holdingQuantity(page: Page, symbol: string): Promise<number | undefined> {
+  const res = await page.request.get('/api/v1/portfolio/holdings');
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  expect(body.success).toBe(true);
+  const holding = (body.data as Array<{ symbol: string; totalQuantity: unknown }>).find(
+    (h) => h.symbol === symbol,
+  );
+  return holding === undefined ? undefined : Number(holding.totalQuantity);
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 test('J0 登入 → /me → 讀持倉 → 記錄手動交易 → 三頁重讀 → 登出(契約全程) @smoke', async ({
   page,
   context,
@@ -202,7 +253,87 @@ test('J0 登入 → /me → 讀持倉 → 記錄手動交易 → 三頁重讀 �
     expect(body.data.email).toBe(uniqueAccount.email);
   });
 
-  // portfolio reads 與手動交易(Task 2 補上:交易前讀取 → OrderTicket 手動交易 → 三頁重讀)
+  // portfolio reads = Overview + Positions + Trades(D-13);Cash 已由 cash-journey.spec.ts 覆蓋,不重複
+  await test.step('交易前讀 Overview 與 Positions', async () => {
+    await expect(page.getByTestId('overview-kpi').first()).toBeVisible();
+    expect(await holdingCount(page)).toBe(0);
+
+    const holdingsResponse = page.waitForResponse((res) =>
+      isApiCall(res.request(), 'GET', '/api/v1/portfolio/holdings'),
+    );
+    await page.getByTestId('nav-positions').click();
+    expect((await holdingsResponse).status()).toBe(200);
+    const table = page.getByTestId('positions-table');
+    await expect(table.getByTestId('positions-holdings-empty')).toBeVisible();
+    await expect(table.getByTestId('positions-row').filter({ hasText: 'AAPL' })).toHaveCount(0);
+  });
+
+  await test.step('以 OrderTicket 記錄手動交易(已成交紀錄,不是委託單)', async () => {
+    // POST /api/v1/trades 是已成交的手動紀錄(前端鐵律 5):只斷言「已記錄」的結果畫面,不談委託流程
+    await openTicketFromTrades(page);
+    await pickSymbol(page, 'AAP', 'AAPL');
+    await page.getByTestId('ticket-qty').fill('3');
+    const tradeRequest = await submitTrade(page);
+
+    // VER-03 idempotency:UI 送出的請求恰帶一個非空 Idempotency-Key
+    const idempotencyKeys = (await tradeRequest.headersArray())
+      .filter((h) => h.name.toLowerCase() === 'idempotency-key')
+      .map((h) => h.value);
+    expect(idempotencyKeys, 'POST /api/v1/trades 應恰帶一個 idempotency-key').toHaveLength(1);
+    expect(idempotencyKeys[0]?.trim() ?? '').not.toBe('');
+
+    // D-11:X-XSRF-TOKEN 等於同一請求 cookie 中的 XSRF-TOKEN
+    const headers = await tradeRequest.allHeaders();
+    expect(headers['idempotency-key']).toBe(idempotencyKeys[0]);
+    expect(headers['x-xsrf-token'], 'POST /api/v1/trades 應帶 x-xsrf-token').toBeTruthy();
+    expect(headers['x-xsrf-token']).toBe(
+      parseCookieHeader(headers['cookie'] ?? '').get(CSRF_COOKIE),
+    );
+    expect(parseCookieHeader(headers['cookie'] ?? '').get(ACCESS_COOKIE)).toBeTruthy();
+
+    const tradeResponse = await tradeRequest.response();
+    expect(tradeResponse?.ok(), 'POST /api/v1/trades 應成功').toBe(true);
+
+    const tradeId = page.getByTestId('ticket-result-trade-id');
+    await expect(tradeId).toBeVisible();
+    // 交易編號是完整 UUID,前端不得截斷
+    await expect(tradeId).toHaveText(UUID_PATTERN);
+    await expect(page.getByTestId('ticket-result-qty')).toHaveText('3');
+  });
+
+  await test.step('交易後三頁重讀到新值', async () => {
+    // Trades:停在 Trades 頁關閉 ticket,新成交列帶「新」標記且排在第一列
+    await page.getByTestId('ticket-close').click();
+    await expect(page.getByTestId('trades-fresh-badge')).toBeVisible();
+    await expect(page.getByTestId('trades-row').first()).toContainText('AAPL');
+
+    // Positions:重新掛載時讀 holdings,AAPL 列數量為 3
+    const holdingsResponse = page.waitForResponse((res) =>
+      isApiCall(res.request(), 'GET', '/api/v1/portfolio/holdings'),
+    );
+    await page.getByTestId('nav-positions').click();
+    expect((await holdingsResponse).status()).toBe(200);
+    const row = page
+      .getByTestId('positions-table')
+      .getByTestId('positions-row')
+      .filter({ hasText: 'AAPL' });
+    await expect(row).toHaveCount(1);
+    // innerText 以 tab 分隔儲存格:數量格是獨立的「3」(容忍 NBSP / 小數補零),不會誤配到價格或金額
+    await expect(row).toHaveText(/\s3(?:\.0+)?\s/, { useInnerText: true });
+    expect(await holdingQuantity(page, 'AAPL')).toBe(3);
+
+    // Overview:重新掛載時讀 summary,瀏覽器拿到的 holdingCount 由 0 變 1,近期交易含 AAPL
+    const summaryResponse = page.waitForResponse((res) =>
+      isApiCall(res.request(), 'GET', '/api/v1/portfolio/summary'),
+    );
+    await page.getByTestId('nav-overview').click();
+    const summary = await summaryResponse;
+    expect(summary.status()).toBe(200);
+    expect((await summary.json()).data.holdingCount).toBe(1);
+    await expect(page.getByTestId('overview-kpi').first()).toBeVisible();
+    await expect(page.getByTestId('overview-recent-trades')).toContainText('AAPL');
+    expect(await holdingCount(page)).toBe(1);
+  });
 
   await test.step('登出後 /me 401(cookie jar 與舊 cookie 兩種)', async () => {
     // 登出前擷取舊 cookie:之後從 out-of-band context 重放,證明伺服器端撤銷(tokenVersion),不只是 cookie 被清
