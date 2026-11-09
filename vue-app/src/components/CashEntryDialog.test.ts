@@ -910,3 +910,55 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
     expect((cashEntryDialogSource.match(/reversalConflict/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// =====================================================================================
+// Phase 5 D-02(d):發生時間上限與「未來」判斷由 useNow 驅動(對話框開啟時每 30 秒前進)。
+// 原寫法 `maxOccurredAt` 只在 resetForm 寫一次、`occurredAtIssue()` 直接讀 `Date.now()` —— 對話框開著不動,
+// `max` 不前進、未來提示也不會消失。送出前自檢仍以 `Date.now()` 重算(上方送出案例維持綠)。
+// 有 interval 的元件**不得** `vi.runAllTimers()`(會無限迴圈,前端 LEARNINGS 2026-11-07)。
+// =====================================================================================
+
+describe('CashEntryDialog — useNow 驅動發生時間上限與未來判斷(Phase 5 D-02d)', () => {
+  /** 本地時間建構,與 `toLocalInputValue` 的本地格式一致,不受容器時區影響。 */
+  const T = new Date(2026, 9, 24, 9, 30, 0);
+
+  async function advance(ms: number) {
+    vi.advanceTimersByTime(ms);
+    await flushAsync();
+  }
+
+  it('對話框開著不動:max 隨時間前進;未來輸入的提示在時間追上後消失', async () => {
+    vi.useFakeTimers({ now: T });
+    await mountDialog();
+    await fillValid();
+    const input = requireTestid('cash-occurred-at') as HTMLInputElement;
+    expect(input.getAttribute('max'), '開啟時上限 = 現在').toBe('2026-10-24T09:30');
+    expect(input.value, '預設值 = 開啟時的現在').toBe('2026-10-24T09:30');
+
+    // 兩個 30 秒 tick:上限前進到 09:31(不需編輯任何欄位)。
+    await advance(30_000);
+    await advance(30_000);
+    expect(input.getAttribute('max'), '前進 60 秒後上限應隨之前進').toBe('2026-10-24T09:31');
+    expect(input.value, '使用者輸入值不被時鐘改寫').toBe('2026-10-24T09:30');
+
+    // 上限 + 10 分鐘 → 立即顯示未來提示、送出 disabled。
+    await setValue(input, '2026-10-24T09:41');
+    expect(requireTestid('cash-field-error-occurredAt').textContent?.trim()).toBe(t('zh', 'cashErrOccurredAt'));
+    expect(submitButton().disabled, '未來時不得送出').toBe(true);
+
+    // 時間追過輸入值(09:42)→ 提示自動消失、上限前進、送出可按,使用者不必再碰欄位。
+    await advance(11 * 60_000);
+    expect(testid('cash-field-error-occurredAt'), '時間追上後未來提示應消失').toBeNull();
+    expect(input.getAttribute('max')).toBe('2026-10-24T09:42');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('原始碼:occurredAt 判斷不再直接讀 Date.now(),max 不再只寫一次', () => {
+    // 以布林斷言,失敗時不傾印整份原始碼。
+    expect(cashEntryDialogSource.includes('useNow({ active: () => props.open })'), '應以 useNow 驅動').toBe(true);
+    expect(cashEntryDialogSource.includes('classifyInstantInput(occurredAt.value, Date.now())'), '不得直接讀 Date.now()')
+      .toBe(false);
+    expect(/maxOccurredAt\.value\s*=/.test(cashEntryDialogSource), 'maxOccurredAt 應為 computed,不再寫入').toBe(false);
+  });
+});
