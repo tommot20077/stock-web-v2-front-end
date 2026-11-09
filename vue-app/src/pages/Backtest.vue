@@ -498,8 +498,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tl tbody td { padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .tl tbody tr:last-child td { border-bottom: 0; }
 .pill { padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: 4px; letter-spacing: .3px; }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
-.pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.pill.buy { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); }
+.pill.sell { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn); }
 
 .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
 .up { color: var(--up-text); }

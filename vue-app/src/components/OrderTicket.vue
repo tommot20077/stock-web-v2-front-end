@@ -1462,8 +1462,8 @@ function handleSubmitFailure(error: unknown) {
   border: 1px solid var(--border); border-radius: 8px;
   font-size: 13px; font-weight: 600; color: var(--fg-dim); cursor: pointer; transition: all .15s;
 }
-.side-btn.buy.active { background: rgba(22,163,74,0.12); color: var(--up-text); border-color: var(--up); }
-.side-btn.sell.active { background: rgba(220,38,38,0.10); color: var(--dn); border-color: var(--dn); }
+.side-btn.buy.active { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); border-color: var(--up); }
+.side-btn.sell.active { background: color-mix(in oklch, var(--dn) 10%, transparent); color: var(--dn); border-color: var(--dn); }
 
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

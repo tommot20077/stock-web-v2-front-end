@@ -1041,8 +1041,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   font-size: 11px; font-weight: 500;
   background: var(--surface2); color: var(--fg-dim);
 }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
-.pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.pill.buy { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); }
+.pill.sell { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn); }
 .pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
 /*
  * 04.2-20(UI-SPEC §Typography 遷移規則第 9 列):API tbody 類型格的 pill(12 / 600)。
@@ -1053,8 +1053,8 @@ tbody tr.fresh { animation: highlight 1.6s ease-out; }
   font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;
   background: var(--surface2); color: var(--fg);
 }
-.kind-pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
-.kind-pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.kind-pill.buy { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); }
+.kind-pill.sell { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn); }
 .kind-pill.div { background: rgba(168,85,247,0.12); color: #a855f7; }
 /* 已沖銷:中性 pill(與 Cash.vue 的 .status-pill 同規格),原紀錄金額 / 股數加刪除線 */
 .status-pill {

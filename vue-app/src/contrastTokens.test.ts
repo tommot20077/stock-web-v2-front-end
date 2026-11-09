@@ -646,3 +646,35 @@ describe('錯誤樣式不得使用漲跌色(D-28)', () => {
     expect(errorStyleOffenders([...vueRules, ...globalRules])).toEqual([]);
   });
 });
+
+/*
+ * Phase 5 D-02(c):漲跌語意的膠囊 / 按鈕 / 深度條 / 指標底色若寫死 rgba 字面,紅漲綠跌偏好下
+ * 文字色會對調、底色卻不會(綠底紅字)。改為 color-mix(in oklch, var(--up|--dn) N%, transparent),
+ * 比例沿用原 alpha。.pill.div / .kind-pill.div(紫色,股利)不是漲跌語意,不在此規則內。
+ */
+describe('漲跌底色隨紅漲綠跌對調(D-02c)', () => {
+  const UPDOWN_SELECTOR = /\.(pill|kind-pill)\.(buy|sell)|\.side-btn\.(buy|sell)|\.depth\.(up|dn)-bg|\.metric-delta\.(good|bad)/;
+
+  const updownRules = () => vueRules.filter(r => UPDOWN_SELECTOR.test(r.selector) && backgroundOf(r) !== undefined);
+
+  it('守門涵蓋規劃時掃到的漲跌底色規則(防止 selector 失效讓斷言空轉)', () => {
+    const files = new Set(updownRules().map(r => r.file.replace(/^\.\//, '')));
+    for (const file of ['pages/Overview.vue', 'pages/Trades.vue', 'pages/Backtest.vue', 'components/OrderTicket.vue', 'pages/Chart.vue', 'pages/Analytics.vue']) {
+      expect(files.has(file), file).toBe(true);
+    }
+  });
+
+  it('漲跌類規則的 background 不含 rgba( 字面,且引用 var(--up) 或 var(--dn)', () => {
+    const offenders = updownRules()
+      .filter(r => {
+        const bg = backgroundOf(r) ?? '';
+        return /rgba\(/.test(bg) || !/var\(--(up|dn)\)/.test(bg);
+      })
+      .map(r => `${r.file} ${r.selector} → background: ${backgroundOf(r)}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('.pill.div / .kind-pill.div 不受此規則約束(非漲跌語意,維持紫色)', () => {
+    expect(vueRules.filter(r => /\.(pill|kind-pill)\.div/.test(r.selector)).every(r => !UPDOWN_SELECTOR.test(r.selector))).toBe(true);
+  });
+});

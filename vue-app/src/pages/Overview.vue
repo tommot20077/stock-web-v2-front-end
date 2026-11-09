@@ -1149,8 +1149,8 @@ thead th + th, tbody td + td { padding-left: 12px; }
   font-size: 11px; font-weight: 500;
   background: var(--surface2); color: var(--fg-dim);
 }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
-.pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.pill.buy { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); }
+.pill.sell { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn); }
 /* 區塊級狀態(D-11/D-12):診斷樣式沿用 SessionBanner 的 code/traceId 呈現慣例 */
 .block-state { padding: 14px 0; font-size: 13px; color: var(--fg-dim); }
 .block-error { padding: 14px 20px; font-size: 13px; }
