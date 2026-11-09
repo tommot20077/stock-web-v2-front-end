@@ -255,9 +255,8 @@ test('J0 登入 → /me → 讀持倉 → 記錄手動交易 → 三頁重讀 �
 
   // portfolio reads = Overview + Positions + Trades(D-13);Cash 已由 cash-journey.spec.ts 覆蓋,不重複
   await test.step('交易前讀 Overview 與 Positions', async () => {
-    await expect(page.getByTestId('overview-kpi').first()).toBeVisible();
-    expect(await holdingCount(page)).toBe(0);
-
+    // 先切到 Positions 再回 Overview,讓兩頁都在登入後重新掛載讀取:未登入時 Overview 已掛載並以 401 進入
+    // 錯誤態,UI 登入後不會自動重讀(見 05-01-SUMMARY / LEARNINGS 2026-11-09),停在原頁看不到 KPI。
     const holdingsResponse = page.waitForResponse((res) =>
       isApiCall(res.request(), 'GET', '/api/v1/portfolio/holdings'),
     );
@@ -266,6 +265,16 @@ test('J0 登入 → /me → 讀持倉 → 記錄手動交易 → 三頁重讀 �
     const table = page.getByTestId('positions-table');
     await expect(table.getByTestId('positions-holdings-empty')).toBeVisible();
     await expect(table.getByTestId('positions-row').filter({ hasText: 'AAPL' })).toHaveCount(0);
+
+    const summaryResponse = page.waitForResponse((res) =>
+      isApiCall(res.request(), 'GET', '/api/v1/portfolio/summary'),
+    );
+    await page.getByTestId('nav-overview').click();
+    const summary = await summaryResponse;
+    expect(summary.status()).toBe(200);
+    expect((await summary.json()).data.holdingCount).toBe(0);
+    await expect(page.getByTestId('overview-kpi').first()).toBeVisible();
+    expect(await holdingCount(page)).toBe(0);
   });
 
   await test.step('以 OrderTicket 記錄手動交易(已成交紀錄,不是委託單)', async () => {
