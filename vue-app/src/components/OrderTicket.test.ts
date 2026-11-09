@@ -1995,3 +1995,82 @@ describe('OrderTicket 成交時間自檢 — 空白 / 過早 / 未來(quick-2611
     expect(bodyText()).not.toContain('must not be before 1900-01-01');
   });
 });
+
+// =====================================================================================
+// Phase 5 D-02(d):成交時間上限與「未來」判斷由 useNow 驅動(對話框開啟時每 30 秒前進)。
+// 原寫法 `maxExecutedAt` 只在開啟時寫一次、`executedAtIssue` 直接讀 `Date.now()` —— computed 沒有
+// reactive 時間依賴,ticket 開著不動時 `max` 不前進、未來提示也不會消失。
+// 有 interval 的元件**不得** `vi.runAllTimers()`(會無限迴圈,前端 LEARNINGS 2026-11-07)。
+// =====================================================================================
+
+describe('OrderTicket 成交時間 — useNow 驅動上限與未來判斷(Phase 5 D-02d)', () => {
+  /** 本地時間建構,與 `toLocalInputValue` 的本地格式一致,不受容器時區影響。 */
+  const T = new Date(2026, 7, 15, 10, 30, 0);
+
+  it('ticket 開著不動:max 隨時間前進;未來輸入的提示在時間追上後消失', async () => {
+    vi.useFakeTimers({ now: T });
+    await mountTicket({ mode: 'api' });
+    const input = requireInput('ticket-executed-at');
+    expect(input.getAttribute('max'), '開啟時上限 = 現在').toBe('2026-08-15T10:30');
+    expect(input.value, '預設值 = 開啟時的上限').toBe('2026-08-15T10:30');
+
+    // 兩個 30 秒 tick:上限前進到 10:31(不需編輯任何欄位)。
+    await advance(30_000);
+    await advance(30_000);
+    expect(input.getAttribute('max'), '前進 60 秒後上限應隨之前進').toBe('2026-08-15T10:31');
+    expect(input.value, '使用者輸入值不被時鐘改寫').toBe('2026-08-15T10:30');
+
+    // 上限 + 10 分鐘 → 立即顯示未來提示、不得前進。
+    await setInput(input, '2026-08-15T10:41');
+    expect(requireTestid('ticket-form-error').textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+    expect(advanceButton().disabled, '未來時不得前進到確認步驟').toBe(true);
+
+    // 時間追過輸入值(10:42)→ 提示自動消失、上限前進,使用者不必再碰欄位。
+    await advance(11 * 60_000);
+    expect(testid('ticket-form-error'), '時間追上後未來提示應消失').toBeNull();
+    expect(input.getAttribute('max')).toBe('2026-08-15T10:42');
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('原始碼:executedAtIssue 不再直接讀 Date.now(),max 不再只寫一次', () => {
+    // 以布林斷言,失敗時不傾印整份原始碼。
+    expect(orderTicketSource.includes('useNow({ active: () => props.open })'), '應以 useNow 驅動').toBe(true);
+    expect(orderTicketSource.includes('classifyInstantInput(executedAt.value, Date.now())'), '不得直接讀 Date.now()')
+      .toBe(false);
+    expect(/maxExecutedAt\.value\s*=/.test(orderTicketSource), 'maxExecutedAt 應為 computed,不再寫入').toBe(false);
+  });
+});
+
+describe('OrderTicket 成交時間 — 後端未來時間欄位錯誤綁定(Phase 5 D-02a / 05-09)', () => {
+  it('400 VALIDATION_FAILED + fields.executedAt="must not be in the future" → 欄位節點顯示既有文案', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      // 05-09 之後後端的真實形狀(TradingService#resolveExecutedAt 未來分支)。
+      trades: () => jsonResponse(
+        {
+          success: false,
+          data: null,
+          error: {
+            code: 'VALIDATION_FAILED',
+            message: 'Invalid executedAt',
+            fields: { executedAt: 'must not be in the future' },
+          },
+          meta: { traceId: 't' },
+        },
+        400,
+      ),
+    }));
+    await gotoReview();
+    await submitTrade();
+
+    expect(testid('ticket-review-advance'), '欄位錯誤應退回 ticket 步驟').not.toBeNull();
+    const node = requireTestid('ticket-field-error-executedAt');
+    expect(node.textContent?.trim()).toBe(t('en', 'tradeErrExecutedAt'));
+    const input = requireInput('ticket-executed-at');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect((input.getAttribute('aria-describedby') ?? '').split(/\s+/)).toContain(node.id);
+    // fields 的 value 與後端 message 都不得進入 DOM(D-16 / T-04-09)。
+    expect(bodyText()).not.toContain('must not be in the future');
+    expect(bodyText()).not.toContain('Invalid executedAt');
+  });
+});

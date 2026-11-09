@@ -284,9 +284,9 @@
                 />
                 <p id="trade-executed-at-hint" class="hint">{{ t(lang, 'tradeExecutedAtHint') }}</p>
                 <!--
-                  後端以 `fields.executedAt` 回兩種錯誤:早於 1900-01-01(quick-261107-1j4)與早於這檔標的
-                  最近一筆未沖銷股數調整的除權日(04.2-02);晚於現在 5 分鐘以上則是無 fields 的 400。
-                  這個節點承接前者,文案依目前輸入值歸類(value 不入 DOM)。
+                  後端以 `fields.executedAt` 回三種錯誤:早於 1900-01-01(quick-261107-1j4)、早於這檔標的
+                  最近一筆未沖銷股數調整的除權日(04.2-02),以及晚於伺服器時間 5 分鐘以上(Phase 5 D-02a,
+                  先前無 fields)。這個節點全部承接,文案依目前輸入值歸類(value 不入 DOM)。
                 -->
                 <p
                   v-if="fieldErrorText('executedAt')"
@@ -582,6 +582,7 @@ import {
 } from '../services/portfolioRevision';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
+import { useNow } from '../composables/useNow';
 import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
 import type { Lang } from '../types';
 
@@ -632,7 +633,20 @@ const px = ref<number>(0);
 const fee = ref<number>(0);
 const note = ref('');
 const executedAt = ref('');
-const maxExecutedAt = ref('');
+
+/**
+ * Phase 5 D-02(d)(同 04.2 IN-09 / HoldingEventDialog):ticket 開啟時每 30 秒前進的 reactive 時鐘,
+ * 讓成交時間上限與「未來」判斷隨時間更新,不必等使用者編輯欄位。取值一律經 `clockNow()`:與當下
+ * `Date.now()` 取大者,欄位一被編輯就用最新時間。本元件沒有獨立的送出前自檢,`canSubmit` 在送出當下
+ * 讀取的 `executedAtIssue` 也經 `clockNow()` 含當下 `Date.now()`,不會落後於現在。
+ */
+const now = useNow({ active: () => props.open });
+function clockNow(): number {
+  return Math.max(now.value, Date.now());
+}
+
+/** datetime-local 的 `max`:隨 `now` 前進(D-02d);原本只在開啟時寫一次。 */
+const maxExecutedAt = computed(() => toLocalInputValue(new Date(clockNow())));
 
 const submitting = ref(false);
 const orderError = ref('');
@@ -990,7 +1004,7 @@ const sellPrecheckError = computed(() => {
  * 前端自檢(Q8.4 的 (ii) + quick-261107-1j4):依目前輸入歸類為空白 / 早於 1900-01-01 / 未來,各給專屬文案。
  * 下限以 instant(UTC 1900-01-01 00:00)比較,與後端 `fields.executedAt` 一致。**這是 UX,不是後端驗證的替代品**。
  */
-const executedAtIssue = computed(() => classifyInstantInput(executedAt.value, Date.now()));
+const executedAtIssue = computed(() => classifyInstantInput(executedAt.value, clockNow()));
 
 const EXECUTED_AT_ISSUE_COPY = {
   required: 'tradeErrExecutedAtRequired',
@@ -1146,9 +1160,8 @@ function resetTicket() {
   currentKey.value = null;
   dirtySinceSubmit.value = false;
   submitError.value = null;
-  const now = new Date();
-  maxExecutedAt.value = toLocalInputValue(now);
-  executedAt.value = maxExecutedAt.value;
+  // D-03:預設 = 現在(上限本身由 useNow 驅動的 computed 提供,這裡只寫輸入值)。
+  executedAt.value = toLocalInputValue(new Date(Date.now()));
   cancelPendingSearch();
   searchController?.abort();
   symbolState.value = { status: 'idle' };
