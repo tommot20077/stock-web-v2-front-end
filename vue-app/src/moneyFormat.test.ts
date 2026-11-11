@@ -10,6 +10,7 @@ import {
   fmtWeightPct,
   minorUnits,
 } from './moneyFormat';
+import { parseDecimal } from './services/decimal';
 
 // Phase 04.1 D-30:金額一律「數字 + U+00A0 + ISO 代碼」,不用 $ / NT$ / ¥。
 const NBSP = '\u00A0';
@@ -159,6 +160,69 @@ describe('moneyFormat', () => {
       expect(fmtQuantity(null)).toBe('—');
       expect(fmtQuantity(undefined)).toBe('—');
       expect(fmtQuantity(NaN)).toBe('—');
+    });
+  });
+
+  // Phase 5 D-08:Decimal 輸入走 toFixed(dp, HALF_UP) → Intl 千分位,全程不經 JS number。
+  describe('Decimal 輸入', () => {
+    const d = parseDecimal;
+
+    it('12 位整數 + 8 位小數完整顯示(number 會失真)', () => {
+      expect(fmtMoney(d('123456789012.12345678'), 'USD', 8)).toBe(`123,456,789,012.12345678${NBSP}USD`);
+      expect(fmtMoneyAmount(d('123456789012.12345678'), 'USD', 8)).toBe('123,456,789,012.12345678');
+    });
+
+    it('HALF_UP 捨入(2.345 → 2.35,-2.345 → -2.35)', () => {
+      expect(fmtMoney(d('2.345'), 'USD', 2)).toBe(`2.35${NBSP}USD`);
+      expect(fmtMoney(d('-2.345'), 'USD', 2)).toBe(`-2.35${NBSP}USD`);
+      expect(fmtMoney(d('2.5'), 'JPY', 0)).toBe(`3${NBSP}JPY`);
+    });
+
+    it('一般值與等值 number 輸出相同字串', () => {
+      const cases: Array<[string, string, number]> = [
+        ['1234567', 'TWD', 0],
+        ['218.4', 'USD', 2],
+        ['-3200', 'TWD', 0],
+        ['0', 'USD', 2],
+        ['1500', 'JPY', 0],
+        ['0.5', 'EUR', 2],
+      ];
+      for (const [wire, code, dp] of cases) {
+        expect(fmtMoney(d(wire), code, dp), wire).toBe(fmtMoney(Number(wire), code, dp));
+        expect(fmtSignedMoney(d(wire), code, dp), wire).toBe(fmtSignedMoney(Number(wire), code, dp));
+        expect(fmtMoneyAmount(d(wire), code), wire).toBe(fmtMoneyAmount(Number(wire), code));
+        expect(fmtSignedMoneyAmount(d(wire), code), wire).toBe(fmtSignedMoneyAmount(Number(wire), code));
+      }
+    });
+
+    it('帶號:> 0 加 +;捨入後為零不加正號', () => {
+      expect(fmtSignedMoney(d('12481'), 'TWD', 0)).toBe(`+12,481${NBSP}TWD`);
+      expect(fmtSignedMoney(d('0.001'), 'USD', 2)).toBe(`0.00${NBSP}USD`);
+      expect(fmtSignedMoney(d('0.005'), 'USD', 2)).toBe(`+0.01${NBSP}USD`);
+      expect(fmtSignedMoneyAmount(d('0E-8'), 'USD')).toBe('0.00');
+    });
+
+    it('null 仍為 —', () => {
+      expect(fmtMoney(null, 'USD', 2)).toBe('—');
+      expect(fmtSignedMoney(undefined, 'USD', 2)).toBe('—');
+    });
+
+    it('比率 / 權重的 × 100 在 Decimal 內做', () => {
+      expect(fmtRatioPct(d('0.0104'))).toBe('+1.04%');
+      expect(fmtRatioPct(d('-0.003'))).toBe('-0.30%');
+      expect(fmtRatioPct(d('0'))).toBe('0.00%');
+      expect(fmtWeightPct(d('0.52'))).toBe('52.0%');
+      expect(fmtWeightPct(d('1'))).toBe('100.0%');
+    });
+
+    it('股數:最多 8 位小數去尾零、千分位、帶號規則同 number', () => {
+      expect(fmtSignedQuantity(d('1050'))).toBe('+1,050');
+      expect(fmtSignedQuantity(d('12.50000000'))).toBe('+12.5');
+      expect(fmtSignedQuantity(d('1.123456785'))).toBe('+1.12345679');
+      expect(fmtSignedQuantity(d('0.000000001'))).toBe('0');
+      expect(fmtSignedQuantity(d('-0.000000001'))).toBe('0');
+      expect(fmtQuantity(d('-3.25'))).toBe('-3.25');
+      expect(fmtQuantity(d('123456789012.12345678'))).toBe('123,456,789,012.12345678');
     });
   });
 

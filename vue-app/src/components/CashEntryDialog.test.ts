@@ -16,7 +16,8 @@ import {
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
-import type { CashEntryDto } from '../services/cashApi';
+import { toCashEntry, type CashEntry, type CashEntryDto } from '../services/cashApi';
+import { toWire } from '../services/decimal';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -32,7 +33,8 @@ const RECORDED_ENTRY: CashEntryDto = {
   id: 'cash-entry-backend-1',
   type: 'DEPOSIT',
   currency: 'TWD',
-  amount: 50000,
+  // wire 為十進位字串(Phase 5 D-05 / D-08)。
+  amount: '50000',
   note: 'from-backend',
   occurredAt: '2026-10-24T09:30:00+08:00',
   createdAt: '2026-10-24T09:30:05+08:00',
@@ -40,6 +42,11 @@ const RECORDED_ENTRY: CashEntryDto = {
   reversalOfOccurredAt: null,
   reversed: false,
 };
+
+/** emit 出來的 domain 物件轉回 wire 形狀再比較(Decimal → toWire),不依賴 big.js 內部欄位。 */
+function plain(entry: CashEntry): CashEntryDto {
+  return { ...entry, amount: toWire(entry.amount) };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -232,7 +239,7 @@ describe('CashEntryDialog tracer — 入金一筆端到端(D-11 / D-30)', () => 
     const body = entryBodies(fetchImpl)[0];
     expect(body.type).toBe('DEPOSIT');
     expect(body.currency).toBe('TWD');
-    expect(body.amount).toBe(50000);
+    expect(body.amount).toBe('50000');
     expect(body.note).toBe('salary');
     expect(String(body.occurredAt), 'occurredAt 必須帶 offset 的 ISO').toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
@@ -257,7 +264,7 @@ describe('CashEntryDialog tracer — 入金一筆端到端(D-11 / D-30)', () => 
     expect(lastCreatedTradeId.value).toBeNull();
 
     expect(onRecorded).toHaveBeenCalledTimes(1);
-    expect(onRecorded).toHaveBeenCalledWith(RECORDED_ENTRY);
+    expect(plain(onRecorded.mock.calls[0][0] as CashEntry)).toEqual(RECORDED_ENTRY);
   });
 
   it('dialogHasNoReviewStep', async () => {
@@ -531,7 +538,7 @@ describe('CashEntryDialog — Idempotency-Key 生命週期(D-11 / T-04.1-47)', (
 
     // 改完欄位立刻送出:flush 'sync' 的 dirty 標記讓這一次就換 key,而不是下一次。
     expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-2']);
-    expect(entryBodies(fetchImpl).map(b => b.amount)).toEqual([100, 200]);
+    expect(entryBodies(fetchImpl).map(b => b.amount)).toEqual(['100', '200']);
   });
 
   it('dropsTheKeyAfterCashIdempotencyKeyReused', async () => {
@@ -742,7 +749,7 @@ const ORIGINAL: CashEntryDto = {
   id: 'e-9',
   type: 'WITHDRAWAL',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   note: 'atm',
   occurredAt: '2026-10-05T10:00:00+08:00',
   createdAt: '2026-10-05T10:00:05+08:00',
@@ -756,7 +763,7 @@ const REVERSAL_ENTRY: CashEntryDto = {
   id: 'rev-entry-1',
   type: 'DEPOSIT',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   note: null,
   occurredAt: '2026-10-24T11:00:00+08:00',
   createdAt: '2026-10-24T11:00:01+08:00',
@@ -775,7 +782,7 @@ function localDate(iso: string): string {
 }
 
 async function mountReversal(options: MountOptions = {}) {
-  return mountDialog({ ...options, props: { reversalOf: ORIGINAL, ...options.props } });
+  return mountDialog({ ...options, props: { reversalOf: toCashEntry(ORIGINAL), ...options.props } });
 }
 
 describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
@@ -825,12 +832,12 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
     expect(entryBodies(fetchImpl)[0]).toEqual({
       type: 'DEPOSIT',
       currency: 'USD',
-      amount: 1000,
+      amount: '1000',
       note: 'oops',
       occurredAt: null,
       reversalOfId: 'e-9',
     });
-    expect(onRecorded).toHaveBeenCalledWith(REVERSAL_ENTRY);
+    expect(plain(onRecorded.mock.calls[0][0] as CashEntry)).toEqual(REVERSAL_ENTRY);
   });
 
   it('showsTheReversalResultWithOnlyADoneButton', async () => {
@@ -897,7 +904,7 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
   it('doesNotShowTheWithdrawOverBalanceHintInReversalMode', async () => {
     await mountDialog({
       props: {
-        reversalOf: { ...ORIGINAL, type: 'DEPOSIT' },
+        reversalOf: toCashEntry({ ...ORIGINAL, type: 'DEPOSIT' }),
         balances: [{ currency: 'USD', amount: 1 }],
       },
     });

@@ -37,7 +37,8 @@ function entry(over: Partial<CashEntryDto> & { id: string }): CashEntryDto {
   return {
     type: 'DEPOSIT',
     currency: 'TWD',
-    amount: 50000,
+    // wire 為十進位字串(Phase 5 D-05 / D-08)。
+    amount: '50000',
     note: null,
     occurredAt: '2026-10-20T09:30:00+08:00',
     createdAt: '2026-10-20T09:30:05+08:00',
@@ -54,7 +55,7 @@ const REVERSAL_ENTRY = entry({
   id: 'cash-reversal-1',
   type: 'DEPOSIT',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   occurredAt: '2026-10-19T11:00:00+08:00',
   reversalOfId: ORIGINAL_ID,
   reversalOfOccurredAt: '2026-10-18T10:00:00+08:00',
@@ -63,7 +64,7 @@ const REVERSED_WITHDRAWAL = entry({
   id: ORIGINAL_ID,
   type: 'WITHDRAWAL',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   occurredAt: '2026-10-18T10:00:00+08:00',
   reversed: true,
 });
@@ -162,7 +163,7 @@ function cashFetch(initial: CashEntryDto[] = THREE_ENTRIES, routes: CashRoutes =
           id: `created-${created}`,
           type: String(body.type),
           currency: String(body.currency),
-          amount: Number(body.amount),
+          amount: String(body.amount),
           note: (body.note as string | null) ?? null,
           occurredAt: '2026-10-24T12:00:00+08:00',
           reversalOfId: original ? original.id : null,
@@ -307,6 +308,15 @@ describe('Cash page — list rendering (API mode)', () => {
     const withdrawal = rows()[2]!;
     expect(withdrawal.textContent).toContain(t('zh', 'cashTypeWithdrawal'));
     expect(withdrawal.textContent).toContain('-1,000.00 USD');
+  });
+
+  // Phase 5 D-08:wire 字串 → Decimal → fmtMoney,全程不經 JS number。超過 2^53 的值經 number 會變成 ...992.00。
+  it('renders wire amount strings beyond double precision exactly (Decimal end to end)', async () => {
+    await mountApiCash(cashFetch([entry({ id: 'cash-huge-1', currency: 'USD', amount: '9007199254740993.005' })]));
+
+    const row = rows()[0]!;
+    expect(row.textContent).toContain('+9,007,199,254,740,993.01\u00A0USD');
+    expect(row.textContent).not.toContain('740,992');
   });
 
   it('marks the reversed original with a 已沖銷 pill and a struck-through amount, and offers no reverse button', async () => {

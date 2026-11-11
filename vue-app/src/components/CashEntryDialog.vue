@@ -301,7 +301,8 @@ import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
-import type { CashEntryDto, CashEntryType } from '../services/cashApi';
+import type { CashEntry, CashEntryType } from '../services/cashApi';
+import { numberToWire, parseDecimal } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = withDefaults(defineProps<{
@@ -310,7 +311,7 @@ const props = withDefaults(defineProps<{
   initialType?: CashEntryType;
   initialCurrency?: string;
   balances?: CashBalanceDto[] | null;
-  reversalOf?: CashEntryDto | null;
+  reversalOf?: CashEntry | null;
 }>(), {
   initialType: 'DEPOSIT',
   initialCurrency: 'TWD',
@@ -319,7 +320,7 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'recorded', entry: CashEntryDto): void;
+  (e: 'recorded', entry: CashEntry): void;
   (e: 'reversalConflict', code: string): void;
 }>();
 
@@ -350,7 +351,7 @@ const note = ref('');
 const touched = reactive({ amount: false, occurredAt: false });
 
 const submitting = ref(false);
-const recorded = ref<CashEntryDto | null>(null);
+const recorded = ref<CashEntry | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
 const noteInput = ref<HTMLTextAreaElement | null>(null);
@@ -449,7 +450,7 @@ const reversalOfDate = computed(() => {
 const resultSubText = computed(() => {
   const entry = recorded.value;
   if (!entry) return '';
-  const signed = entry.type === 'WITHDRAWAL' ? -entry.amount : entry.amount;
+  const signed = entry.type === 'WITHDRAWAL' ? entry.amount.neg() : entry.amount;
   return fmtSignedMoney(signed, entry.currency, minorUnits(entry.currency));
 });
 
@@ -606,8 +607,8 @@ async function submitEntry() {
     const entry = await getRuntimeApiClients().cash.createEntry({
       type: type.value,
       currency: currency.value,
-      // 沖銷直接取原紀錄的數字,不經字串往返(例如 1e-8 的 String 化)。
-      amount: props.reversalOf ? props.reversalOf.amount : parsedAmount.value,
+      // 沖銷直接沿用原紀錄的 Decimal,不經字串往返;adapter 以 toWire 送出(一般記號)。
+      amount: props.reversalOf ? props.reversalOf.amount : parseDecimal(numberToWire(parsedAmount.value)),
       note: note.value ? note.value : null,
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       // 沖銷不送發生時間(U-04):由後端帶 now()。

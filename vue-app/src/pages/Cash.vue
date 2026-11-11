@@ -230,7 +230,7 @@ import { t, tf } from '../i18n';
 import { fmtMoney, minorUnits } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
 import type { PaginatedResponse, PortfolioSummaryDto } from '../services/apiTypes';
-import type { CashEntryDto, CashEntryType } from '../services/cashApi';
+import type { CashEntry, CashEntryType } from '../services/cashApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
   cashBalanceListText,
@@ -278,7 +278,7 @@ function describeError(error: unknown): BlockError {
 // =============== 入出金列表 ===============
 type EntriesState =
   | { status: 'loading' }
-  | { status: 'loaded'; data: PaginatedResponse<CashEntryDto> }
+  | { status: 'loaded'; data: PaginatedResponse<CashEntry> }
   | { status: 'error'; error: BlockError };
 
 const entriesState = ref<EntriesState>({ status: 'loading' });
@@ -292,7 +292,7 @@ let entriesSeq = 0;
 const entriesLoading = computed(() => entriesState.value.status === 'loading');
 const entriesError = computed(() => (entriesState.value.status === 'error' ? entriesState.value.error : null));
 const entriesPage = computed(() => (entriesState.value.status === 'loaded' ? entriesState.value.data : null));
-const items = computed<CashEntryDto[]>(() => entriesPage.value?.items ?? []);
+const items = computed<CashEntry[]>(() => entriesPage.value?.items ?? []);
 const totalPages = computed(() => entriesPage.value?.totalPages ?? 0);
 
 interface LoadEntriesOptions {
@@ -366,7 +366,7 @@ function goToPage(delta: number) {
 }
 
 // =============== 新紀錄標記(只比 id,不使用計時器) ===============
-function isFresh(row: CashEntryDto): boolean {
+function isFresh(row: CashEntry): boolean {
   const created = lastCreatedCashEntryId.value;
   return created !== null && row.id === created;
 }
@@ -427,7 +427,7 @@ const fxExcludedCodes = computed(() => unconvertedCashCurrencies(orderedBalances
 const dialogOpen = ref(false);
 const dialogType = ref<CashEntryType>('DEPOSIT');
 const dialogCurrency = ref('TWD');
-const dialogReversal = ref<CashEntryDto | null>(null);
+const dialogReversal = ref<CashEntry | null>(null);
 /** 出金超額提示用;mock mode 與 summary 讀取失敗時不傳(UI-SPEC §3)。 */
 const dialogBalances = computed(() => (live || !summary.value ? null : summary.value.cashBalances));
 
@@ -459,7 +459,7 @@ function openEntryDialog(kind: CashEntryType, event: Event) {
   dialogOpen.value = true;
 }
 
-function openReversal(row: CashEntryDto, event: Event) {
+function openReversal(row: CashEntry, event: Event) {
   beginDialog(event, true);
   dialogReversal.value = row;
   dialogOpen.value = true;
@@ -542,13 +542,16 @@ function typeLabel(kind: string): string {
   return kind;
 }
 
-/** 入金 `+`、出金 `-`(U-06:中性色,不是損益);未知類型不猜測方向。 */
-function amountText(row: CashEntryDto): string {
+/**
+ * 入金 `+`、出金 `-`(U-06:中性色,不是損益);未知類型不猜測方向。
+ * 方向只看 `type`(後端保證 amount > 0);`amount` 是 Decimal,直接交給 fmtMoney,不經 JS number(D-08)。
+ */
+function amountText(row: CashEntry): string {
   const sign = row.type === 'DEPOSIT' ? '+' : row.type === 'WITHDRAWAL' ? '-' : '';
   return `${sign}${fmtMoney(row.amount, row.currency, minorUnits(row.currency))}`;
 }
 
-function reverseAria(row: CashEntryDto): string {
+function reverseAria(row: CashEntry): string {
   return tf(props.lang, 'cashReverseThisAria', {
     date: fmtDateTime(row.occurredAt),
     type: typeLabel(row.type),

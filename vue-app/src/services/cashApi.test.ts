@@ -4,10 +4,15 @@ import {
   createHttpCashApi,
   createMockCashApi,
   resetMockCashLedgerForTests,
+  toCashEntry,
+  type CashEntry,
   type CashEntryDto,
-  type CreateCashEntryRequest,
+  type CreateCashEntryInput,
 } from './cashApi';
 import type { ApiClientError } from './apiClient';
+import { parseDecimal, toWire } from './decimal';
+
+const d = parseDecimal;
 
 /**
  * 本檔鎖住入出金寫入的送出契約(CASH-01 / CASH-03),照 `tradingApi.test.ts` 的形狀:
@@ -18,13 +23,16 @@ import type { ApiClientError } from './apiClient';
  * 3. **401 refresh 後的 replay 沿用同一把 key**:現金帳本是 append-only,重複寫入改不回來。
  * 4. **API mode 的失敗以 `ApiClientError` 原樣上拋**,UI 層靠 `code` / `fields` 分派。
  *
+ * 5. **金額是十進位字串(Phase 5 D-05 / D-08)**:wire 進出都是字串,domain 是 `Decimal`;
+ *    `123456789012.12345678` 這種 JS number 會失真的值要逐字往返,wire 若仍是 number 要大聲失敗。
+ *
  * fixture 為手寫,逐欄對應後端 `CashEntryDto`(04.1-04 / 04.1-06 凍結契約)。
  */
 
-const CASH_REQUEST: CreateCashEntryRequest = {
+const CASH_REQUEST: CreateCashEntryInput = {
   type: 'DEPOSIT',
   currency: 'TWD',
-  amount: 50000,
+  amount: d('50000'),
   note: 'salary',
   occurredAt: '2026-10-01T09:00:00+08:00',
 };
@@ -36,7 +44,7 @@ const CASH_DTO: CashEntryDto = {
   id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   type: 'DEPOSIT',
   currency: 'TWD',
-  amount: 50000,
+  amount: '50000',
   note: 'salary',
   occurredAt: '2026-10-01T01:00:00Z',
   createdAt: '2026-10-01T01:00:05Z',
@@ -44,6 +52,11 @@ const CASH_DTO: CashEntryDto = {
   reversalOfOccurredAt: null,
   reversed: false,
 };
+
+/** domain 物件轉回可比較的純資料(Decimal → wire 字串),讓 toEqual 不必依賴 big.js 內部欄位。 */
+function plain(entry: CashEntry): CashEntryDto {
+  return { ...entry, amount: toWire(entry.amount) };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -101,13 +114,15 @@ describe('cashApi http adapter — createEntry', () => {
     expect(headerValue(init, 'x-xsrf-token')).toBe('csrf-cash');
     expect(Object.keys(bodyAt(0)).sort()).toEqual(CONTRACT_FIELDS);
     expect(bodyAt(0).reversalOfId).toBeNull();
-    expect(dto).toEqual(CASH_DTO);
+    // 金額以字串送出,不是 JSON number。
+    expect(bodyAt(0).amount).toBe('50000');
+    expect(plain(dto)).toEqual(CASH_DTO);
   });
 
   it('httpCreateEntryDropsExcessFields', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(CASH_DTO))));
     // TypeScript 的 excess property check 只對物件字面量生效;結構相容的更寬物件必須被逐欄投影擋下。
-    const widerFormState = { ...CASH_REQUEST, extra: 'smuggled', userId: 7 } as CreateCashEntryRequest;
+    const widerFormState = { ...CASH_REQUEST, extra: 'smuggled', userId: 7 } as CreateCashEntryInput;
 
     await createHttpCashApi('/api/v1').createEntry(widerFormState, 'key-1');
 
@@ -139,8 +154,21 @@ describe('cashApi http adapter — createEntry', () => {
     const firstKey = headerValue(initAt(writeIndexes[0]), 'idempotency-key');
     expect(firstKey).toBe('key-1');
     expect(headerValue(initAt(writeIndexes[1]), 'idempotency-key')).toBe(firstKey);
-    expect(bodyAt(writeIndexes[1])).toEqual(bodyAt(writeIndexes[0]));
-    expect(dto).toEqual(CASH_DTO);
+    expect(String(initAt(writeIndexes[1]).body)).toBe(String(initAt(writeIndexes[0]).body));
+    expect(plain(dto)).toEqual(CASH_DTO);
+  });
+
+  it('httpCreateEntrySendsFullPrecisionAmountAsWireString', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...CASH_DTO, amount: '0.00000001' }))));
+
+    const dto = await createHttpCashApi('/api/v1').createEntry(
+      { ...CASH_REQUEST, amount: d('123456789012.12345678') },
+      'key-precision',
+    );
+
+    expect(bodyAt(0).amount).toBe('123456789012.12345678');
+    // 回應的 1e-8 量級金額經 mapper 後仍以一般記號往返。
+    expect(toWire(dto.amount)).toBe('0.00000001');
   });
 
   it('httpErrorsSurfaceAsApiClientError', async () => {
@@ -165,10 +193,10 @@ describe('cashApi mock adapter — createEntry', () => {
 
     const dto = await createMockCashApi().createEntry(CASH_REQUEST, 'key-1');
 
+    expect(toWire(dto.amount)).toBe('50000');
     expect(dto).toMatchObject({
       type: 'DEPOSIT',
       currency: 'TWD',
-      amount: 50000,
       note: 'salary',
       reversalOfId: null,
       reversed: false,
@@ -197,7 +225,34 @@ describe('cashApi http adapter — listEntries', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
     expect(urlAt(0)).toBe('/api/v1/portfolio/cash-entries?page=2&size=10');
     expect(String(initAt(0).method ?? 'GET').toUpperCase()).toBe('GET');
-    expect(result).toEqual(page);
+    expect({ ...result, items: result.items.map(plain) }).toEqual(page);
+  });
+
+  it('maps wire amount strings to Decimal without losing precision', async () => {
+    const wire = { ...CASH_DTO, amount: '123456789012.12345678' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(
+      { items: [wire, { ...CASH_DTO, id: 'zero', amount: '0E-8' }], page: 0, size: 10, totalElements: 2, totalPages: 1 },
+    ))));
+
+    const result = await createHttpCashApi('/api/v1').listEntries();
+
+    expect(toWire(result.items[0].amount)).toBe('123456789012.12345678');
+    expect(toWire(result.items[1].amount)).toBe('0');
+    // 對照組:同一個值經 JS number 會失真。
+    expect(String(Number(wire.amount))).not.toBe(wire.amount);
+  });
+
+  it('fails loudly when the wire amount is still a JSON number (strict decimal)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(
+      { items: [{ ...CASH_DTO, amount: 50000 }], page: 0, size: 10, totalElements: 1, totalPages: 1 },
+    ))));
+
+    await expect(createHttpCashApi('/api/v1').listEntries()).rejects.toThrow(TypeError);
+  });
+
+  it('toCashEntry keeps every other field verbatim', () => {
+    const entry = toCashEntry(CASH_DTO);
+    expect(plain(entry)).toEqual(CASH_DTO);
   });
 
   it('omits the query string when no params are given', async () => {
@@ -230,7 +285,7 @@ describe('cashApi mock adapter — 固定種子與列表(UI-SPEC U-26)', () => {
     expect(page).toMatchObject({ page: 0, size: 10, totalElements: 4, totalPages: 1 });
     const times = page.items.map(item => Date.parse(item.occurredAt));
     expect([...times].sort((a, b) => b - a)).toEqual(times);
-    const summary = page.items.map(item => `${item.type} ${item.currency} ${item.amount}`);
+    const summary = page.items.map(item => `${item.type} ${item.currency} ${toWire(item.amount)}`);
     expect(summary).toEqual(expect.arrayContaining([
       'DEPOSIT TWD 500000',
       'DEPOSIT USD 20000',
@@ -270,7 +325,7 @@ describe('cashApi mock adapter — 固定種子與列表(UI-SPEC U-26)', () => {
     const api = createMockCashApi();
 
     const created = await api.createEntry(
-      { type: 'DEPOSIT', currency: 'EUR', amount: 10, occurredAt: '2099-01-01T00:00:00Z' },
+      { type: 'DEPOSIT', currency: 'EUR', amount: d('10'), occurredAt: '2099-01-01T00:00:00Z' },
       'key-new',
     );
     const page = await api.listEntries({ page: 0, size: 10 });
@@ -283,27 +338,27 @@ describe('cashApi mock adapter — 固定種子與列表(UI-SPEC U-26)', () => {
     const api = createMockCashApi();
     const first = await api.listEntries({ page: 0, size: 10 });
     first.items.pop();
-    first.items[0].amount = 1;
+    first.items[0].amount = d('1');
 
     const second = await api.listEntries({ page: 0, size: 10 });
 
     expect(second.items).toHaveLength(4);
-    expect(second.items[0].amount).not.toBe(1);
+    expect(toWire(second.items[0].amount)).not.toBe('1');
   });
 });
 
 describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同錯誤碼)', () => {
-  async function seededId(type: string, currency: string, amount: number): Promise<string> {
+  async function seededId(type: string, currency: string, amount: string): Promise<string> {
     const page = await createMockCashApi().listEntries({ page: 0, size: 100 });
-    return page.items.find(item => item.type === type && item.currency === currency && item.amount === amount)!.id;
+    return page.items.find(item => item.type === type && item.currency === currency && item.amount.eq(d(amount)))!.id;
   }
 
   it('reverses an entry and flips its reversed flag', async () => {
     const api = createMockCashApi();
-    const originalId = await seededId('DEPOSIT', 'TWD', 500000);
+    const originalId = await seededId('DEPOSIT', 'TWD', '500000');
 
     const reversal = await api.createEntry(
-      { type: 'WITHDRAWAL', currency: 'TWD', amount: 500000, reversalOfId: originalId },
+      { type: 'WITHDRAWAL', currency: 'TWD', amount: d('500000'), reversalOfId: originalId },
       'key-rev-1',
     );
 
@@ -316,8 +371,8 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
 
   it('rejects a second reversal of the same entry with CASH_ENTRY_ALREADY_REVERSED', async () => {
     const api = createMockCashApi();
-    const originalId = await seededId('DEPOSIT', 'TWD', 500000);
-    const body = { type: 'WITHDRAWAL', currency: 'TWD', amount: 500000, reversalOfId: originalId } as const;
+    const originalId = await seededId('DEPOSIT', 'TWD', '500000');
+    const body = { type: 'WITHDRAWAL', currency: 'TWD', amount: d('500000'), reversalOfId: originalId } as const;
     await api.createEntry(body, 'key-rev-1');
 
     const error = await thrownBy(api.createEntry(body, 'key-rev-2'));
@@ -340,7 +395,7 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
 
   it('rejects an unknown original with a 404 CASH_ENTRY_NOT_FOUND', async () => {
     const error = await thrownBy(createMockCashApi().createEntry(
-      { type: 'WITHDRAWAL', currency: 'TWD', amount: 1, reversalOfId: 'no-such-entry' },
+      { type: 'WITHDRAWAL', currency: 'TWD', amount: d('1'), reversalOfId: 'no-such-entry' },
       'key-rev-404',
     ));
 
@@ -349,18 +404,18 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
 
   it('rejects a reversal that does not mirror the original with fields.reversalOfId', async () => {
     const api = createMockCashApi();
-    const originalId = await seededId('DEPOSIT', 'TWD', 500000);
+    const originalId = await seededId('DEPOSIT', 'TWD', '500000');
 
     const wrongAmount = await thrownBy(api.createEntry(
-      { type: 'WITHDRAWAL', currency: 'TWD', amount: 499999, reversalOfId: originalId },
+      { type: 'WITHDRAWAL', currency: 'TWD', amount: d('499999'), reversalOfId: originalId },
       'key-a',
     ));
     const wrongCurrency = await thrownBy(api.createEntry(
-      { type: 'WITHDRAWAL', currency: 'USD', amount: 500000, reversalOfId: originalId },
+      { type: 'WITHDRAWAL', currency: 'USD', amount: d('500000'), reversalOfId: originalId },
       'key-b',
     ));
     const wrongDirection = await thrownBy(api.createEntry(
-      { type: 'DEPOSIT', currency: 'TWD', amount: 500000, reversalOfId: originalId },
+      { type: 'DEPOSIT', currency: 'TWD', amount: d('500000'), reversalOfId: originalId },
       'key-c',
     ));
 
@@ -372,14 +427,14 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
 
   it('returns the same entry for a repeated key + payload (idempotent), even for a reversal', async () => {
     const api = createMockCashApi();
-    const plain = { type: 'DEPOSIT', currency: 'JPY', amount: 1000, occurredAt: '2026-10-20T00:00:00Z' } as const;
+    const plain = { type: 'DEPOSIT', currency: 'JPY', amount: d('1000'), occurredAt: '2026-10-20T00:00:00Z' } as const;
 
     const first = await api.createEntry(plain, 'key-same');
     const second = await api.createEntry(plain, 'key-same');
     expect(second.id).toBe(first.id);
 
-    const originalId = await seededId('DEPOSIT', 'USD', 20000);
-    const reverse = { type: 'WITHDRAWAL', currency: 'USD', amount: 20000, reversalOfId: originalId } as const;
+    const originalId = await seededId('DEPOSIT', 'USD', '20000');
+    const reverse = { type: 'WITHDRAWAL', currency: 'USD', amount: d('20000'), reversalOfId: originalId } as const;
     const r1 = await api.createEntry(reverse, 'key-rev-same');
     const r2 = await api.createEntry(reverse, 'key-rev-same');
     expect(r2.id).toBe(r1.id);
@@ -388,11 +443,20 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
     expect(page.totalElements).toBe(6);
   });
 
+  it('compares the replayed amount with compareTo semantics (500 == 500.00), like the backend matcher', async () => {
+    const api = createMockCashApi();
+    const first = await api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: d('500') }, 'key-scale');
+
+    const second = await api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: d('500.00000000') }, 'key-scale');
+
+    expect(second.id).toBe(first.id);
+  });
+
   it('rejects the same key with a different amount as CASH_IDEMPOTENCY_KEY_REUSED', async () => {
     const api = createMockCashApi();
-    await api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: 100 }, 'key-reuse');
+    await api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: d('100') }, 'key-reuse');
 
-    const error = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: 200 }, 'key-reuse'));
+    const error = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: d('200') }, 'key-reuse'));
 
     expect(error).toMatchObject({ code: 'CASH_IDEMPOTENCY_KEY_REUSED', status: 409 });
   });
@@ -400,8 +464,8 @@ describe('cashApi mock adapter — 沖銷三條規則與冪等(與後端相同�
   it('rejects an unsupported currency and a non-positive amount as VALIDATION_FAILED with fields', async () => {
     const api = createMockCashApi();
 
-    const currency = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'XXX', amount: 1 }, 'k1'));
-    const amount = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: 0 }, 'k2'));
+    const currency = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'XXX', amount: d('1') }, 'k1'));
+    const amount = await thrownBy(api.createEntry({ type: 'DEPOSIT', currency: 'TWD', amount: d('0') }, 'k2'));
 
     expect(currency).toMatchObject({ code: 'VALIDATION_FAILED', status: 400 });
     expect(currency.fields).toHaveProperty('currency');
