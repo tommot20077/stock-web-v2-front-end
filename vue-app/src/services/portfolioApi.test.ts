@@ -430,7 +430,11 @@ describe('portfolioApi mock adapter reactivity', () => {
     expect(api.live?.lastFill).toBeNull();
     portfolio.executeOrder({ sym: 'AAPL', name: 'Apple Inc.', side: 'BUY', qty: 10, px: 200, fee: 1, sector: 'Tech' });
 
-    expect(api.live?.lastFill).toMatchObject({ sym: 'AAPL', type: 'BUY', qty: 10, px: 200 });
+    // Phase 5 D-08:live.lastFill 與 LastFill 三處同形,qty / px 由 getter 轉成 Decimal。
+    const fill = api.live?.lastFill;
+    expect(fill).toMatchObject({ sym: 'AAPL', type: 'BUY' });
+    expect(isDecimal(fill?.qty) && isDecimal(fill?.px)).toBe(true);
+    expect([toWire(fill!.qty), toWire(fill!.px)]).toEqual(['10', '200']);
     expect(api.live?.trades[0]).toMatchObject({ sym: 'AAPL', type: 'BUY', qty: 10, px: 200 });
   });
 
@@ -591,20 +595,23 @@ describe('portfolioApi mock adapter reads', () => {
     expect(holding.assetType).toBe('STOCK');
   });
 
-  it('maps store trades to TradeDto shape with a stable id and ISO executedAt', async () => {
+  it('maps store trades to the TradeRecord shape with a stable id and ISO executedAt', async () => {
     const api = createMockPortfolioApi();
     useMockPortfolioStore().trades = customTrades();
 
     const page = await api.listTrades();
 
     expect(page).toMatchObject({ page: 0, size: 20, totalElements: 3, totalPages: 1 });
-    expect(page.items[0]).toEqual({
+    const [first] = page.items;
+    // Phase 5 D-08:mock 先以 numberToWire 組 wire,再走 toTradeRecord —— 金額為 Decimal。
+    expect([first.quantity, first.price, first.fee].every(isDecimal)).toBe(true);
+    expect({ ...first, quantity: toWire(first.quantity), price: toWire(first.price), fee: toWire(first.fee) }).toEqual({
       id: 'mock-0',
       symbol: 'AAA',
       type: 'BUY',
-      quantity: 10,
-      price: 100,
-      fee: 1,
+      quantity: '10',
+      price: '100',
+      fee: '1',
       note: 'a',
       // mock `Trade` 沒有幣別,不猜測(UI-SPEC U-29)
       currency: null,

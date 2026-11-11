@@ -19,6 +19,8 @@ import {
 // 原始碼字面(Vite ?raw):用來斷言測試 reset 沒有被偷偷掛進全域 setup。
 import testSetupSource from '../testSetup?raw';
 import type { TradeDto } from './apiTypes';
+import { isDecimal, parseDecimal, toWire } from './decimal';
+import { toTradeRecord } from './tradingApi';
 
 /**
  * 本檔鎖住 D-10 / D-11 / D-13 的共用訊號契約。
@@ -32,22 +34,32 @@ import type { TradeDto } from './apiTypes';
  */
 
 /**
- * 逐欄對應 `apiTypes.ts:76-88` 的 `TradeDto`。
+ * 逐欄對應 `apiTypes.ts` 的 `TradeDto`(wire 字串,後端 setScale(8) 帶尾零)。
  * `quantity`(10)與 `price`(218.4)刻意取不同量級,任何一處把兩者接反,
  * `{ qty, px }` 的斷言就會紅。
  */
-const TRADE_DTO: TradeDto = {
+const TRADE_WIRE: TradeDto = {
   id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   symbol: 'AAPL',
   type: 'BUY',
-  quantity: 10,
-  price: 218.4,
-  fee: 1.5,
+  quantity: '10.00000000',
+  price: '218.40000000',
+  fee: '1.50000000',
   note: '手動補登',
   currency: 'USD',
   executedAt: '2026-07-29T02:30:00Z',
   createdAt: '2026-07-30T01:00:00Z',
 };
+
+/** Phase 5 D-08:notifyTradeCreated 收 domain TradeRecord(數量 / 價格 / 手續費為 Decimal)。 */
+const TRADE_DTO = toTradeRecord(TRADE_WIRE);
+
+/** LastFill 的 qty / px 是 Decimal;比較前投影成 wire 字串(big.js 正規化尾零,`"10.00000000"` → `"10"`)。 */
+function fillWire(fill: typeof apiLastFill.value) {
+  if (!fill) return null;
+  expect(isDecimal(fill.qty) && isDecimal(fill.px), 'qty / px 必須是 Decimal').toBe(true);
+  return { sym: fill.sym, type: fill.type, qty: toWire(fill.qty), px: toWire(fill.px) };
+}
 
 afterEach(() => {
   resetPortfolioRevisionForTests();
@@ -76,7 +88,7 @@ describe('portfolioRevision — notifyTradeCreated 是單一原子動作', () =>
     expect(portfolioRevision.value).toBe(1);
     // 欄位名刻意是 sym / type / qty / px(與 portfolioApi.ts:36 的 mock lastFill 逐字一致),
     // **不是** symbol / quantity / price —— 兩頁的 fresh 綁定表達式因此完全不用改。
-    expect(apiLastFill.value).toEqual({ sym: 'AAPL', type: 'BUY', qty: 10, px: 218.4 });
+    expect(fillWire(apiLastFill.value)).toEqual({ sym: 'AAPL', type: 'BUY', qty: '10', px: '218.4' });
     expect(lastCreatedTradeId.value).toBe(TRADE_DTO.id);
   });
 
@@ -87,12 +99,12 @@ describe('portfolioRevision — notifyTradeCreated 是單一原子動作', () =>
       id: 'second',
       symbol: 'NVDA',
       type: 'SELL',
-      quantity: 4,
-      price: 1142.83,
+      quantity: parseDecimal('4'),
+      price: parseDecimal('1142.83'),
     });
 
     expect(portfolioRevision.value).toBe(2);
-    expect(apiLastFill.value).toEqual({ sym: 'NVDA', type: 'SELL', qty: 4, px: 1142.83 });
+    expect(fillWire(apiLastFill.value)).toEqual({ sym: 'NVDA', type: 'SELL', qty: '4', px: '1142.83' });
     expect(lastCreatedTradeId.value).toBe('second');
   });
 });
@@ -181,7 +193,7 @@ describe('portfolioRevision — 唯讀性', () => {
     // @ts-expect-error 唯讀 ref 不得直接賦值
     portfolioRevision.value = 99;
     // @ts-expect-error 唯讀 ref 不得直接賦值
-    apiLastFill.value = { sym: 'X', type: 'BUY', qty: 1, px: 1 };
+    apiLastFill.value = { sym: 'X', type: 'BUY', qty: parseDecimal('1'), px: parseDecimal('1') };
     // @ts-expect-error 唯讀 ref 不得直接賦值
     lastCreatedTradeId.value = 'forged';
 
@@ -201,7 +213,7 @@ describe('portfolioRevision — D-11 提示清除', () => {
 
     expect(lastCreatedTradeId.value).toBeNull();
     expect(portfolioRevision.value).toBe(1);
-    expect(apiLastFill.value).toEqual({ sym: 'AAPL', type: 'BUY', qty: 10, px: 218.4 });
+    expect(fillWire(apiLastFill.value)).toEqual({ sym: 'AAPL', type: 'BUY', qty: '10', px: '218.4' });
   });
 
   it('clearLastFill only clears lastFill, leaving revision and trade id intact', () => {

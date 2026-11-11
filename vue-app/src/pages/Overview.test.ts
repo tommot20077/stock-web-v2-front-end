@@ -8,6 +8,7 @@ import { t, tf } from '../i18n';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtWeightPct } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { parseDecimal } from '../services/decimal';
+import { toTradeRecord } from '../services/tradingApi';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   bumpPortfolioRevision,
@@ -57,11 +58,11 @@ const SUMMARY: PortfolioSummaryDto = {
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。
 const API_TRADES: TradeDto[] = [
-  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: 10, price: 11.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
-  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: 20, price: 12.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
-  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: 30, price: 13.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
-  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: 40, price: 14.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
-  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: 50, price: 15.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
+  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: '10', price: '11.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
+  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: '20', price: '12.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
+  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: '30', price: '13.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
+  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: '40', price: '14.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
+  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: '50', price: '15.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
 ];
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -646,7 +647,7 @@ function deferred<T>() {
 }
 
 const REFRESHED_TRADES: TradeDto[] = [
-  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null, currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
+  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: '1', price: '2', fee: '0', note: null, currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
 ];
 
 describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
@@ -1245,7 +1246,7 @@ describe('Overview — mock mode 的可用現金卡(鐵律 6:不得有無效果�
 
 describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () => {
   const TRADE_FOR_NOTIFY: TradeDto = {
-    id: 'tr-n', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null,
+    id: 'tr-n', symbol: 'ZNEW', type: 'BUY', quantity: '1', price: '2', fee: '0', note: null,
     currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z',
   };
 
@@ -1265,7 +1266,7 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
   }
 
   it('交易 → portfolioStaleAfterTrade', async () => {
-    const text = await staleTextAfter(() => notifyTradeCreated(TRADE_FOR_NOTIFY));
+    const text = await staleTextAfter(() => notifyTradeCreated(toTradeRecord(TRADE_FOR_NOTIFY)));
     expect(text).toContain(t('en', 'portfolioStaleAfterTrade'));
     expect(text).not.toContain(t('en', 'portfolioStaleAfterCashEntry'));
     expect(text).not.toContain(t('en', 'portfolioStaleAfterBaseCurrency'));
@@ -1504,9 +1505,9 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
 
   it('標的後一個 overview-trade-ccy-tag = trade.currency;價格 / 總額為裸數字,整列無 $', async () => {
     const rows = await mountTrades([
-      trade({ id: 'a', symbol: 'ZZA', currency: 'USD', quantity: 10, price: 12.5 }),
-      trade({ id: 'b', symbol: 'ZZB', currency: 'JPY', quantity: 3, price: 150 }),
-      trade({ id: 'c', symbol: 'ZZC', currency: 'TWD', quantity: 10, price: 11.5 }),
+      trade({ id: 'a', symbol: 'ZZA', currency: 'USD', quantity: '10', price: '12.5' }),
+      trade({ id: 'b', symbol: 'ZZB', currency: 'JPY', quantity: '3', price: '150' }),
+      trade({ id: 'c', symbol: 'ZZC', currency: 'TWD', quantity: '10', price: '11.5' }),
     ]);
 
     expect(rows).toHaveLength(3);
@@ -1529,7 +1530,7 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
   });
 
   it('currency 缺值:不渲染標籤、金額仍顯示裸數字,不出現 $ 或 undefined / null', async () => {
-    const rows = await mountTrades([trade({ id: 'n', symbol: 'ZZN', currency: null, quantity: 3, price: 100 })]);
+    const rows = await mountTrades([trade({ id: 'n', symbol: 'ZZN', currency: null, quantity: '3', price: '100' })]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].querySelector('[data-testid="overview-trade-ccy-tag"]')).toBeNull();

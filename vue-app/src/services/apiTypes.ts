@@ -291,15 +291,20 @@ type HoldingDecimalKey =
  */
 export type Holding = DecimalFields<HoldingDto, HoldingDecimalKey>;
 
-/** 對應後端 TradeResponse。 */
+/**
+ * 對應後端 `TradeDto`(`stock-module-trading/.../api/TradeDto.java`);逐欄同形,勿增刪欄位(judgment §4)。
+ *
+ * 數量 / 價格 / 手續費是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `tradingApi.toTradeRecord` 轉成 {@link TradeRecord}(Decimal)。
+ */
 export interface TradeDto {
   /** uuid;頁面用作 :key */
   id: string;
   symbol: string;
   type: 'BUY' | 'SELL';
-  quantity: number;
-  price: number;
-  fee: number;
+  quantity: string;
+  price: string;
+  fee: string;
   note: string | null;
   /**
    * 標的交易幣別(後端經 AssetFacade 取得的 ISO 4217 代碼,例 `TWD`)。
@@ -310,6 +315,12 @@ export interface TradeDto {
   executedAt: string;
   createdAt: string;
 }
+
+/**
+ * domain:單一手動交易紀錄(由 `tradingApi.toTradeRecord` 產生)。數量 / 價格 / 手續費為 Decimal,其餘欄位原樣;
+ * 頁面與元件只拿這個型別,不拿 wire DTO(Phase 5 D-08)。名稱加 `Record` 後綴以免與 mock 型別 `Trade` 撞名。
+ */
+export type TradeRecord = DecimalFields<TradeDto, 'quantity' | 'price' | 'fee'>;
 
 /**
  * 對應後端 stock-module-asset 的 `AssetDto`(`AssetDto.java:9-24`);逐欄同形,勿增刪(judgment §4)。

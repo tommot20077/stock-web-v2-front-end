@@ -2,6 +2,8 @@ import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import { isMockHoldingEventTradeRow, listMockHoldingEvents } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import { numberToWire, parseDecimal, parseNullableDecimal } from './decimal';
+import type { LastFill } from './portfolioRevision';
+import { toMockLastFill, toTradeRecord } from './tradingApi';
 import type {
   AllocationSlice,
   AllocationSliceDto,
@@ -17,6 +19,7 @@ import type {
   SectorAllocation,
   SectorAllocationDto,
   TradeDto,
+  TradeRecord,
 } from './apiTypes';
 import type { Position, Trade } from '../types';
 
@@ -53,7 +56,12 @@ export type ActivityListParams = Omit<TradeListParams, 'type' | 'sort'> & {
 export interface PortfolioLiveMockData {
   readonly trades: Trade[];
   readonly positions: Position[];
-  readonly lastFill: { sym: string; type: 'BUY' | 'SELL'; qty: number; px: number } | null;
+  /**
+   * 與 `tradingApi.ts` 的 `TradingLiveMockData.lastFill`、`portfolioRevision.ts` 的 `LastFill` 三處同形
+   * (Phase 5 D-08 起 `qty` / `px` 為 Decimal;getter 以 `toMockLastFill` 從 mock store 的 number 轉換)。
+   * 兩頁的 fresh 高亮只比 `sym`。
+   */
+  readonly lastFill: LastFill | null;
   /**
    * 04.2-21:本 session 由 mock holdingEventApi 記錄的股利 / 股數調整(活動列形狀,依建立順序,回傳 clone)。
    * Trades mock 模式以此與靜態交易列合併(UI-SPEC §Interaction 0)。**不是** reactive:事件狀態在 adapter 模組內,
@@ -78,7 +86,8 @@ export interface PortfolioApi {
   getSummary(): Promise<PortfolioSummary>;
   /** 持倉的 domain 形狀(股數 / 金額為 Decimal);http 與 mock 都經 {@link toHolding}。 */
   listHoldings(): Promise<Holding[]>;
-  listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
+  /** 手動交易分頁的 domain 形狀(數量 / 價格 / 手續費為 Decimal);http 與 mock 都經 `tradingApi.toTradeRecord`。 */
+  listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeRecord>>;
   /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
   listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivityDto>>;
   /** 僅 mock 實作提供(Q3 裁決)。 */
@@ -285,6 +294,7 @@ function holdingFrom(position: Position): HoldingDto {
   };
 }
 
+/** mock store 的交易(number)→ wire `TradeDto`(金額以 `numberToWire` 轉字串),之後與 http 同走 `toTradeRecord`。 */
 function tradeDtoFrom(trade: Trade, index: number): TradeDto {
   return {
     // store trade 沒有 id;用陣列索引組穩定合成值,頁面才有可用的 :key。
@@ -293,9 +303,9 @@ function tradeDtoFrom(trade: Trade, index: number): TradeDto {
     // mock 專屬的 DIV 型別原樣通過(後端契約只有 BUY/SELL,頁面在 mock mode
     // 不經 listTrades 消費 —— mock mode 走 live.trades)。
     type: trade.type as TradeDto['type'],
-    quantity: trade.qty,
-    price: trade.px,
-    fee: trade.fee,
+    quantity: numberToWire(trade.qty),
+    price: numberToWire(trade.px),
+    fee: numberToWire(trade.fee),
     note: trade.note,
     // mock `Trade` 沒有幣別,不猜測(UI-SPEC U-29);mock 畫面不讀此欄位。
     currency: null,
@@ -304,14 +314,15 @@ function tradeDtoFrom(trade: Trade, index: number): TradeDto {
   };
 }
 
-function sortValue(trade: TradeDto, sort: NonNullable<TradeListParams['sort']>): number {
-  if (sort === 'quantity') return trade.quantity;
+/** 兩筆交易依 `sort` 欄位比較(升冪);數量與總額以 Decimal `cmp` 比較。 */
+function compareTrades(a: TradeRecord, b: TradeRecord, sort: NonNullable<TradeListParams['sort']>): number {
+  if (sort === 'quantity') return a.quantity.cmp(b.quantity);
   // total = quantity × price(與後端 D-06 定義一致,不含 fee)
-  if (sort === 'total') return trade.quantity * trade.price;
-  return Date.parse(trade.executedAt);
+  if (sort === 'total') return a.quantity.times(a.price).cmp(b.quantity.times(b.price));
+  return Date.parse(a.executedAt) - Date.parse(b.executedAt);
 }
 
-function applyTradeParams(trades: TradeDto[], params: TradeListParams): TradeDto[] {
+function applyTradeParams(trades: TradeRecord[], params: TradeListParams): TradeRecord[] {
   const from = params.dateFrom ? Date.parse(params.dateFrom) : null;
   const to = params.dateTo ? Date.parse(params.dateTo) : null;
   const filtered = trades.filter(trade => {
@@ -326,7 +337,7 @@ function applyTradeParams(trades: TradeDto[], params: TradeListParams): TradeDto
 
   const sort = params.sort ?? 'executedAt';
   const factor = (params.direction ?? 'desc') === 'asc' ? 1 : -1;
-  return filtered.sort((a, b) => (sortValue(a, sort) - sortValue(b, sort)) * factor);
+  return filtered.sort((a, b) => compareTrades(a, b, sort) * factor);
 }
 
 /**
@@ -410,7 +421,7 @@ export function createMockPortfolioApi(): PortfolioApi {
       return useMockPortfolioStore().positions;
     },
     get lastFill() {
-      return useMockPortfolioStore().lastFill;
+      return toMockLastFill(useMockPortfolioStore().lastFill);
     },
     get holdingEvents() {
       return listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
@@ -430,7 +441,7 @@ export function createMockPortfolioApi(): PortfolioApi {
       return useMockPortfolioStore().positions.map(position => toHolding(holdingFrom(position)));
     },
     async listTrades(params = {}) {
-      const all = useMockPortfolioStore().trades.map(tradeDtoFrom);
+      const all = useMockPortfolioStore().trades.map((trade, index) => toTradeRecord(tradeDtoFrom(trade, index)));
       const matched = applyTradeParams(all, params);
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;
@@ -469,18 +480,21 @@ export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
     mode: 'api',
     getSummary: async () => toPortfolioSummary(await apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`)),
     listHoldings: async () => (await apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`)).map(toHolding),
-    listTrades: params => apiPaginatedRequest<TradeDto>(
-      `${basePath}/trades${buildQueryString({
-        symbol: params?.symbol,
-        type: params?.type,
-        dateFrom: params?.dateFrom,
-        dateTo: params?.dateTo,
-        sort: params?.sort,
-        direction: params?.direction,
-        page: params?.page ?? DEFAULT_PAGE,
-        size: params?.size ?? DEFAULT_SIZE,
-      })}`,
-    ),
+    listTrades: async params => {
+      const page = await apiPaginatedRequest<TradeDto>(
+        `${basePath}/trades${buildQueryString({
+          symbol: params?.symbol,
+          type: params?.type,
+          dateFrom: params?.dateFrom,
+          dateTo: params?.dateTo,
+          sort: params?.sort,
+          direction: params?.direction,
+          page: params?.page ?? DEFAULT_PAGE,
+          size: params?.size ?? DEFAULT_SIZE,
+        })}`,
+      );
+      return { ...page, items: page.items.map(toTradeRecord) };
+    },
     listActivities: params => apiPaginatedRequest<PortfolioActivityDto>(
       `${basePath}/portfolio/activities${buildQueryString({
         symbol: params?.symbol,

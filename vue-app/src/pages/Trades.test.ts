@@ -16,6 +16,8 @@ import {
 import { resetMockHoldingEventsForTests, type DividendDto } from '../services/holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { PaginatedResponse, PortfolioActivityDto, PortfolioActivityKind, TradeDto } from '../services/apiTypes';
+import { parseDecimal, toWire } from '../services/decimal';
+import { toTradeRecord } from '../services/tradingApi';
 import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
 // Phase 3 Plan 05(03-05-PLAN.md)。API mode 的 Trades 一律把篩選/排序/分頁轉成
@@ -40,9 +42,9 @@ function tradeDto(over: Partial<TradeDto> & { id: string }): TradeDto {
   return {
     symbol: 'AAA',
     type: 'BUY',
-    quantity: 1,
-    price: 10,
-    fee: 0,
+    quantity: '1',
+    price: '10',
+    fee: '0',
     note: null,
     currency: 'TWD',
     executedAt: '2026-05-16T09:30:00Z',
@@ -51,6 +53,11 @@ function tradeDto(over: Partial<TradeDto> & { id: string }): TradeDto {
   };
 }
 
+/**
+ * 05-19:交易 fixture 的金額是 wire 字串(TradeDto 已字串化),但 `PortfolioActivityDto` 在 05-21 之前仍是 number,
+ * 所以這裡以 `Number()` 填活動列的 quantity / price / fee,`amount` 先以 Decimal `times` 精確相乘再轉 number
+ * (測試碼,不屬 D-08 產品碼;05-21 活動列字串化時改為直接傳字串並以 `toWire` 計算 amount)。
+ */
 function trade(over: Partial<TradeDto> & { id: string }): PortfolioActivityDto {
   const tr = tradeDto(over);
   return activity({
@@ -60,10 +67,10 @@ function trade(over: Partial<TradeDto> & { id: string }): PortfolioActivityDto {
     currency: tr.currency,
     occurredAt: tr.executedAt,
     createdAt: tr.createdAt,
-    quantity: tr.quantity,
-    price: tr.price,
-    fee: tr.fee,
-    amount: tr.quantity * tr.price,
+    quantity: Number(tr.quantity),
+    price: Number(tr.price),
+    fee: Number(tr.fee),
+    amount: Number(toWire(parseDecimal(tr.quantity).times(parseDecimal(tr.price)))),
     note: tr.note,
   });
 }
@@ -305,8 +312,8 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
   it('初始載入明確送出預設排序與分頁參數,並渲染後端回傳的列;總額為裸數字、幣別為標籤、無 $(D-07 / D-28 / D-30)', async () => {
     const fetchMock = scriptedFetch(() => success(page({
       items: [
-        trade({ id: 'u-1', symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, note: 'hello', executedAt: '2026-05-16T09:30:00Z' }),
-        trade({ id: 'u-2', symbol: 'TSLA', type: 'SELL', quantity: 2, price: 50, fee: 2, note: null }),
+        trade({ id: 'u-1', symbol: 'NVDA', type: 'BUY', quantity: '3', price: '100', fee: '1', note: 'hello', executedAt: '2026-05-16T09:30:00Z' }),
+        trade({ id: 'u-2', symbol: 'TSLA', type: 'SELL', quantity: '2', price: '50', fee: '2', note: null }),
       ],
       totalElements: 2,
       totalPages: 1,
@@ -341,7 +348,7 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
 
   it('apiRowWithoutCurrencyRendersNoTagAndNoDollar:currency 缺值時不渲染標籤,金額為裸數字,不出現 $ 或 undefined', async () => {
     const fetchMock = scriptedFetch(() => success(page({
-      items: [trade({ id: 'nc-1', symbol: 'NVDA', quantity: 3, price: 100, fee: 1, currency: null })],
+      items: [trade({ id: 'nc-1', symbol: 'NVDA', quantity: '3', price: '100', fee: '1', currency: null })],
       totalElements: 1,
       totalPages: 1,
     })));
@@ -361,7 +368,7 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
 
   it('row :key 用 TradeDto.id(uuid),同內容不同 id 的交易不共用 key', async () => {
     // 兩筆顯示內容完全相同、只有 id 不同 —— 舊的「多欄拼接 key」在這裡會產生重複 key。
-    const twin = { symbol: 'ZZZ', type: 'BUY' as const, quantity: 1, price: 10, fee: 0, note: 'same', executedAt: '2026-03-01T00:00:00Z' };
+    const twin = { symbol: 'ZZZ', type: 'BUY' as const, quantity: '1', price: '10', fee: '0', note: 'same', executedAt: '2026-03-01T00:00:00Z' };
     const fetchMock = scriptedFetch(() => success(page({
       items: [trade({ id: 'id-a', ...twin }), trade({ id: 'id-b', ...twin })],
       totalElements: 2,
@@ -753,9 +760,9 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
       id: `buy-${i}`,
       symbol: `B${i}`,
       type: 'BUY',
-      quantity: i + 1,
-      price: 10,
-      fee: 1,
+      quantity: String(i + 1),
+      price: '10',
+      fee: '1',
       note: `buy ${i}`,
       executedAt: `2026-05-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`,
     }));
@@ -766,9 +773,9 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
       id: `sell-${i}`,
       symbol: `S${i}`,
       type: 'SELL',
-      quantity: 1000 + i,
-      price: 10,
-      fee: 1,
+      quantity: String(1000 + i),
+      price: '10',
+      fee: '1',
       note: `sell ${i}`,
       executedAt: `2026-06-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`,
     }));
@@ -857,9 +864,9 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     const nasty = trade({
       id: 'nasty',
       symbol: 'ESC',
-      quantity: 2,
-      price: 5,
-      fee: 0,
+      quantity: '2',
+      price: '5',
+      fee: '0',
       note: 'a,b "quoted"\nnext',
       executedAt: '2026-02-03T10:00:00Z',
     });
@@ -879,8 +886,8 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     restorers.push(dl.restore);
 
     const items = [
-      trade({ id: 'usd', symbol: 'AAPL', currency: 'USD', quantity: 3, price: 188.5, fee: 1.25, note: 'n1', executedAt: '2026-03-02T10:00:00Z' }),
-      trade({ id: 'none', symbol: 'OLD', currency: null, quantity: 2, price: 5, fee: 0, note: null, executedAt: '2026-03-01T10:00:00Z' }),
+      trade({ id: 'usd', symbol: 'AAPL', currency: 'USD', quantity: '3', price: '188.5', fee: '1.25', note: 'n1', executedAt: '2026-03-02T10:00:00Z' }),
+      trade({ id: 'none', symbol: 'OLD', currency: null, quantity: '2', price: '5', fee: '0', note: null, executedAt: '2026-03-01T10:00:00Z' }),
     ];
     const fetchMock = scriptedFetch(() => success(page({ items, totalElements: 2, totalPages: 1 })));
     await mountApiTrades(fetchMock);
@@ -1280,7 +1287,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await mountApiTrades(fetchMock);
 
     refetched = true;
-    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'NEWSYM' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'new-trade', symbol: 'NEWSYM' })));
     await flushAsync();
 
     expect(rows()).toHaveLength(2);
@@ -1296,7 +1303,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     await mountApiTrades(fetchMock);
 
     // D-03 允許補登,新交易不保證在第 0 頁,甚至可能不符當前篩選。
-    notifyTradeCreated(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' })));
     await flushAsync();
 
     const note = requireTestid('trades-not-in-current-view');
@@ -1325,7 +1332,7 @@ describe('Trades — D-11 重讀規則與「不在檢視範圍」提示(04-12)',
     })));
     await mountApiTrades(fetchMock);
 
-    notifyTradeCreated(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'not-in-view', symbol: 'ZZZ' })));
     await flushAsync();
     expect(testid('trades-not-in-current-view')).not.toBeNull();
 
@@ -1348,7 +1355,7 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
     await mountApiTrades(fetchMock);
     expect(freshRow()).toHaveLength(0);
 
-    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'new-trade', symbol: 'AAPL' })));
     await flushAsync();
 
     expect(rows()[0].classList.contains('fresh')).toBe(true);
@@ -1376,7 +1383,7 @@ describe('Trades — D-13 fresh 高亮(04-12 / U-12)', () => {
     ];
     await nextTick();
 
-    notifyTradeCreated(tradeDto({ id: 'api-only', symbol: 'AAA' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'api-only', symbol: 'AAA' })));
     await nextTick();
 
     expect(freshRow()).toHaveLength(0);
@@ -1412,7 +1419,7 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 21:變更排序後「新」標記與 apiLastFill 一併清除,不得把另一筆舊交易標成新', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'new-trade', symbol: 'AAPL' })));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
@@ -1428,7 +1435,7 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 22:換頁同樣清除「新」標記', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'new-trade', symbol: 'AAPL' })));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
@@ -1442,7 +1449,7 @@ describe('Trades — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () => {
   it('Test 23:頁面 unmount 時清除「新」標記(壽命由 unmount 界定,不用 setTimeout)', async () => {
     const fetchMock = scriptedFetch(twoAapl);
     await mountApiTrades(fetchMock);
-    notifyTradeCreated(tradeDto({ id: 'new-trade', symbol: 'AAPL' }));
+    notifyTradeCreated(toTradeRecord(tradeDto({ id: 'new-trade', symbol: 'AAPL' })));
     await flushAsync();
     expect(freshRow()).toHaveLength(1);
 
@@ -1477,7 +1484,7 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
 
   function mixedItems(): PortfolioActivityDto[] {
     return [
-      trade({ id: UUIDS.buy, symbol: 'NVDA', type: 'BUY', quantity: 3, price: 100, fee: 1, executedAt: '2026-10-31T09:30:00Z' }),
+      trade({ id: UUIDS.buy, symbol: 'NVDA', type: 'BUY', quantity: '3', price: '100', fee: '1', executedAt: '2026-10-31T09:30:00Z' }),
       activity({
         id: UUIDS.cash,
         kind: 'CASH_DIVIDEND',

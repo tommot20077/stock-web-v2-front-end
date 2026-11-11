@@ -291,9 +291,10 @@
               <!-- D-28:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
               <span v-if="tr.currency" class="ccy-tag" data-testid="overview-trade-ccy-tag">{{ tr.currency }}</span>
             </td>
-            <td class="num" style="text-align:right">{{ tr.quantity }}</td>
+            <!-- Phase 5 D-08:數量 / 價格為 Decimal;股數以一般記號原值顯示(去尾零,與改字串前的 number 相同),總額在 Decimal 內相乘 -->
+            <td class="num" style="text-align:right">{{ toWire(tr.quantity) }}</td>
             <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
-            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity * tr.price, tr.currency, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity.times(tr.price), tr.currency, 0) }}</td>
           </tr>
         </tbody>
       </table>
@@ -446,8 +447,8 @@ import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { AssetDto, PortfolioSummary, TradeDto } from '../services/apiTypes';
-import { ZERO, toChartNumber } from '../services/decimal';
+import type { AssetDto, PortfolioSummary, TradeRecord } from '../services/apiTypes';
+import { ZERO, toChartNumber, toWire } from '../services/decimal';
 import type { WatchlistDto } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
@@ -493,7 +494,7 @@ type BlockState<T> =
   | { status: 'error'; error: BlockError };
 
 const summaryState = ref<BlockState<PortfolioSummary>>({ status: 'loading' });
-const tradesState = ref<BlockState<TradeDto[]>>({ status: 'loading' });
+const tradesState = ref<BlockState<TradeRecord[]>>({ status: 'loading' });
 
 const summaryLoading = computed(() => summaryState.value.status === 'loading');
 const summaryError = computed(() => (summaryState.value.status === 'error' ? summaryState.value.error : null));
@@ -898,7 +899,7 @@ const allocNegativeCash = computed(() => !live && summary.value != null && summa
 const mockRecentTrades = computed(() => (live ? live.trades.slice(0, 5) : []));
 
 /** executedAt 是 ISO-8601,表格只顯示日期部分。 */
-function tradeDate(trade: TradeDto): string {
+function tradeDate(trade: TradeRecord): string {
   return trade.executedAt.slice(0, 10);
 }
 

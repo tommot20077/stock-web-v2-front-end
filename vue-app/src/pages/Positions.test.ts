@@ -19,7 +19,8 @@ import {
 } from '../services/portfolioRevision';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import OrderTicket from '../components/OrderTicket.vue';
-import type { AssetDto, HoldingDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import type { AssetDto, HoldingDto, PortfolioSummaryDto, TradeDto, TradeRecord } from '../services/apiTypes';
+import { toTradeRecord } from '../services/tradingApi';
 import type { DividendDto } from '../services/holdingEventApi';
 import { cleanupMounted, flushAsync, mountWithPinia, unmountAll } from '../testUtils';
 
@@ -146,20 +147,20 @@ function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryD
   };
 }
 
-/** D-13:成交事件的來源。`notifyTradeCreated` 只用得到其中四欄,其餘給合法佔位值。 */
-function freshTrade(symbol: string): TradeDto {
-  return {
+/** D-13:成交事件的來源。`notifyTradeCreated` 只用得到其中四欄,其餘給合法佔位值(05-19:wire 字串 → TradeRecord)。 */
+function freshTrade(symbol: string): TradeRecord {
+  return toTradeRecord({
     id: `trade-${symbol}`,
     symbol,
     type: 'BUY',
-    quantity: 1,
-    price: 1,
-    fee: 0,
+    quantity: '1',
+    price: '1',
+    fee: '0',
     note: null,
     currency: 'USD',
     executedAt: '2026-08-15T10:30:00+08:00',
     createdAt: '2026-08-15T10:30:05+08:00',
-  };
+  });
 }
 
 /** 與 Positions.vue 的 fmtDateTime 同語意的獨立實作(本地時區短格式),避免測試綁死時區。 */
@@ -1020,9 +1021,9 @@ const TICKET_RECORDED: TradeDto = {
   id: '6f1c2b7e-1a2b-4c3d-8e9f-0123456789ab',
   symbol: 'AAPL',
   type: 'BUY',
-  quantity: 7,
-  price: 188.88,
-  fee: 1.5,
+  quantity: '7.00000000',
+  price: '188.88000000',
+  fee: '1.50000000',
   note: null,
   currency: 'USD',
   executedAt: '2026-08-15T10:30:00+08:00',

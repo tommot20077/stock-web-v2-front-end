@@ -170,9 +170,10 @@ function trade(
   const day = String(24 - index).padStart(2, '0');
   return {
     id: `11111111-1111-4111-8111-1111111111${String(index).padStart(2, '0')}`,
-    quantity: 123456,
-    price: 1234.56,
-    fee: 1234.5,
+    // 05-19(Phase 5 D-05):TradeDto 的 BigDecimal 欄位是 JSON 字串(後端 setScale(8) 帶尾零)。
+    quantity: '123456.00000000',
+    price: '1234.56000000',
+    fee: '1234.50000000',
     note: null,
     executedAt: `2026-10-${day}T10:00:00+08:00`,
     createdAt: `2026-10-${day}T10:00:05+08:00`,
@@ -184,7 +185,7 @@ const TRADES: TradeDto[] = [
   trade(0, { symbol: '2330.TW', type: 'BUY', currency: 'TWD', note: LONG_NOTE }),
   trade(1, { symbol: 'AAPL', type: 'SELL', currency: 'USD' }),
   trade(2, { symbol: 'SAP.DE', type: 'BUY', currency: 'EUR' }),
-  trade(3, { symbol: '7203.T', type: 'BUY', currency: 'JPY', price: 2987654.32 }),
+  trade(3, { symbol: '7203.T', type: 'BUY', currency: 'JPY', price: '2987654.32000000' }),
   trade(4, { symbol: 'BTC-USD', type: 'BUY', currency: 'USD', note: 'long note with spaces '.repeat(10) }),
   trade(5, { symbol: '2317.TW', type: 'SELL', currency: 'TWD' }),
   trade(6, { symbol: 'AAPL', type: 'BUY', currency: 'USD' }),
