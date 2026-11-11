@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { effectScope, ref, shallowRef, type EffectScope, type Ref } from 'vue';
 import type { Asset } from '../services/apiTypes';
-import { isDecimal, parseNullableDecimal, toWire, type Decimal } from '../services/decimal';
+import { isDecimal, numberToWire, parseDecimal, parseNullableDecimal, toWire, type Decimal } from '../services/decimal';
 import type { LiveTick, QuoteStream, QuoteStreamStatus } from '../services/quoteStream';
 import { useLiveQuotes } from './useLiveQuotes';
 
@@ -49,9 +49,11 @@ function fakeStream(initialStatus: QuoteStreamStatus = 'live') {
     reconnect: () => {},
     dispose: () => {},
   };
-  function pushTick(symbol: string, price: number, receivedAt = 1000) {
+  /** 價格可給 number(測試便利,經 numberToWire 轉換)或 wire 字串(與後端 TICK 同形,超過 number 精度時用) */
+  function pushTick(symbol: string, price: number | string, receivedAt = 1000) {
     const next = new Map(ticks.value);
-    next.set(symbol, { symbol, price, time: '2026-10-31T01:23:45.678Z', receivedAt });
+    const decimal = parseDecimal(typeof price === 'string' ? price : numberToWire(price));
+    next.set(symbol, { symbol, price: decimal, time: '2026-10-31T01:23:45.678Z', receivedAt });
     ticks.value = next;
   }
   return { stream, status, ticks, pushTick };

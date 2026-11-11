@@ -1,6 +1,6 @@
 import { computed, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
 import type { Asset } from '../services/apiTypes';
-import { numberToWire, parseDecimal, ROUND_HALF_UP, ZERO } from '../services/decimal';
+import { parseDecimal, ROUND_HALF_UP, ZERO } from '../services/decimal';
 import type { LiveTick, QuoteStream } from '../services/quoteStream';
 
 /**
@@ -33,9 +33,8 @@ const CHANGE_PERCENT_DIGITS = 2;
 const HUNDRED = parseDecimal('100');
 
 function overlayTick(row: Asset, tick: LiveTick): Asset {
-  // 05-22 → 05-23 交接點(05-16 規約):LiveTick.price 仍是 number,只在這一處轉成 Decimal(方向 number → Decimal)。
-  // 05-23 LiveTick 轉 Decimal 時刪除這一行與 numberToWire import,並以 grep 驗證 useLiveQuotes.ts 不再引用。
-  const price = parseDecimal(numberToWire(tick.price));
+  // LiveTick.price 已是 Decimal(quoteStream.parseTickData 由 wire 字串解析),疊加全程在 Decimal 內計算。
+  const price = tick.price;
   let change = row.change;
   let changePercent = row.changePercent;
   if (row.latestPrice !== null && row.change !== null) {
