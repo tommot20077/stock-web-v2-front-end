@@ -123,39 +123,41 @@ const SUMMARY: PortfolioSummaryDto = {
   dividendTaxWithheld: '30864197.28',
 };
 
+/** holdings fixture:BigDecimal 欄位為 wire 字串(Phase 5 D-05,後端 `HoldingDto` 的 `@DecimalString`)。 */
 function holding(
   index: number,
   overrides: Partial<HoldingDto> & Pick<HoldingDto, 'symbol' | 'assetName' | 'currency'>,
 ): HoldingDto {
   return {
     assetId: `00000000-0000-4000-8000-00000000000${index}`,
-    totalQuantity: 123456 + index,
-    avgCost: 1234.56,
-    costBasis: 152407263.36,
-    marketPrice: 1456.78,
-    marketValue: 179842345.68,
-    realizedPnl: 1234567.89,
-    unrealizedPnl: -2345678.12,
-    roi: 0.0123,
+    totalQuantity: String(123456 + index),
+    avgCost: '1234.56',
+    costBasis: '152407263.36',
+    marketPrice: '1456.78',
+    marketValue: '179842345.68',
+    realizedPnl: '1234567.89',
+    unrealizedPnl: '-2345678.12',
+    roi: '0.0123',
     priceTime: '2026-10-24T05:30:00Z',
     lastUpdated: '2026-10-24T05:30:05Z',
     assetType: 'STOCK',
     sector: 'Technology',
     market: 'TW',
     baseCurrency: 'TWD',
-    marketValueInBase: 179842345.68,
-    unrealizedPnlInBase: -2345678.12,
-    previousClose: 1440.12,
-    dayPricePnl: 2056789.01,
-    dayPricePnlRatio: 0.0116,
+    marketValueInBase: '179842345.68',
+    unrealizedPnlInBase: '-2345678.12',
+    previousClose: '1440.12',
+    dayPricePnl: '2056789.01',
+    dayPricePnlRatio: '0.0116',
+    dayPnlBasis: '177785556.67',
     ...overrides,
   };
 }
 
 const HOLDINGS: HoldingDto[] = [
   holding(1, { symbol: '2330.TW', assetName: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)', currency: 'TWD' }),
-  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', market: 'US', marketValueInBase: 5800000000, unrealizedPnlInBase: -76043912.31 }),
-  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', market: 'DE', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
+  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', market: 'US', marketValueInBase: '5800000000', unrealizedPnlInBase: '-76043912.31' }),
+  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', market: 'DE', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null, dayPnlBasis: null }),
   holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', market: 'JP', marketValueInBase: null, unrealizedPnlInBase: null }),
   holding(5, { symbol: 'BTC-USD', assetName: 'Bitcoin', currency: 'USD', assetType: 'CRYPTO', sector: null, market: 'CRYPTO' }),
   holding(6, { symbol: '2317.TW', assetName: 'Hon Hai Precision Industry', currency: 'TWD', sector: null }),

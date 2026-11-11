@@ -188,10 +188,10 @@
           </div>
         </div>
         <div style="text-align:right">
-          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
+          <div class="num" style="font-size:13px;font-weight:500" :style="{ color: m.up ? 'var(--up-text)' : 'var(--dn)' }">
             {{ fmtSignedMoney(m.pnl, m.ccy, 0) }}
           </div>
-          <div class="num" style="font-size:11px" :style="{ color: m.pnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">{{ fmtPct(m.pct) }}</div>
+          <div class="num" style="font-size:11px" :style="{ color: m.up ? 'var(--up-text)' : 'var(--dn)' }">{{ m.pctText }}</div>
         </div>
       </div>
       <div v-if="moversFxExcluded > 0" data-testid="positions-movers-fx-excluded" class="movers-note">
@@ -384,7 +384,8 @@
               >{{ t(lang, 'freshBadge') }}</span>
             </td>
             <td style="color:var(--fg-dim)">{{ h.assetName }}</td>
-            <td class="num" style="text-align:right">{{ h.totalQuantity }}</td>
+            <!-- 股數:Decimal 一般記號(與改字串前的 number 顯示同形,去尾零、無千分位;Phase 5 D-08) -->
+            <td class="num" style="text-align:right">{{ h.totalQuantity.toFixed() }}</td>
             <td class="num" style="text-align:right;color:var(--fg-dim)">{{ fmtMoneyAmount(h.avgCost, h.currency, 2) }}</td>
             <td class="num" style="text-align:right">
               {{ fmtMoneyAmount(h.marketPrice, h.currency, 2) }}
@@ -392,9 +393,9 @@
               <div class="scrub-cmp" data-testid="positions-price-time" :title="t(lang, 'priceAsOf')">{{ fmtDateTime(h.priceTime) }}</div>
             </td>
             <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(h.marketValue, h.currency, 0) }}</td>
-            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl >= 0 ? 'var(--up-text)' : 'var(--dn)' }">
+            <td class="num" style="text-align:right" :style="{ color: h.unrealizedPnl.gte(ZERO) ? 'var(--up-text)' : 'var(--dn)' }">
               <div>{{ fmtSignedMoneyAmount(h.unrealizedPnl, h.currency, 0) }}</div>
-              <div style="font-size:12px">{{ fmtPct(h.roi * 100) }}</div>
+              <div style="font-size:12px">{{ fmtRoiPct(h.roi) }}</div>
             </td>
             <!--
               04.1-16(D-14 / D-17 / D-26、U-13):單檔今日損益是原幣價格損益,沒有匯率參與,
@@ -458,8 +459,8 @@ import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAm
 import { genSeries, fmtNum, fmtPct } from '../data';
 import type { Lang, Position } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { HoldingDto, PortfolioSummary } from '../services/apiTypes';
-import { numberToWire, parseDecimal, ROUND_HALF_UP, toChartNumber, ZERO, type Decimal } from '../services/decimal';
+import type { Holding, PortfolioSummary } from '../services/apiTypes';
+import { parseDecimal, ROUND_HALF_UP, toChartNumber, ZERO, type Decimal } from '../services/decimal';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
   apiLastFill,
@@ -501,7 +502,7 @@ type BlockState<T> =
   | { status: 'error'; error: BlockError };
 
 const summaryState = ref<BlockState<PortfolioSummary>>({ status: 'loading' });
-const holdingsState = ref<BlockState<HoldingDto[]>>({ status: 'loading' });
+const holdingsState = ref<BlockState<Holding[]>>({ status: 'loading' });
 
 // 模板不做型別窄化(vue-tsc 對模板內 union 窄化支援不穩),一律先投影成 computed。
 const summaryLoading = computed(() => summaryState.value.status === 'loading');
@@ -643,8 +644,9 @@ const holdingEventTarget = ref<{ symbol: string; holding: HoldingEventHolding } 
 /**
  * 對話框只顯示、不計算持倉(Phase 3 D-04);幣別缺值不猜測(對話框以 — 代替)。
  * quick-261107-1j4 E2:`assetType` / `market` 原樣帶入,對話框以此決定除權日的市場今天(不再另查 searchAssets)。
+ * Phase 5 D-08:`totalQuantity` 原樣傳出 domain Decimal(對話框只經 fmtQuantity 顯示)。
  */
-function apiHoldingOf(h: HoldingDto): HoldingEventHolding {
+function apiHoldingOf(h: Holding): HoldingEventHolding {
   return {
     totalQuantity: h.totalQuantity,
     currency: h.currency ?? undefined,
@@ -697,31 +699,27 @@ function fmtRoiPct(roi: Decimal): string {
  * 前端不知道匯率(D-21),只做比值。
  * 回傳 0..1 的比值(Decimal,div 後 round(8, HALF_UP),Phase 5 D-08);summary 未載入、分母為 0、
  * 或 marketValueInBase 為 null(缺匯率)→ null,呈現為破折號而非編造 0.0%。
- *
- * 型別閉包交接點(05-17 → 05-18):分母 `summary.totalMarketValue` 已是 Decimal,分子 `marketValueInBase`
- * 屬 HoldingDto,05-18 才轉 Decimal;在此之前只在這一處把既有 number 轉成 Decimal(方向一律 number → Decimal)。
- * 05-18 持倉轉 Decimal 時刪除此轉換(並以 grep 驗證 Positions.vue 不再出現 numberToWire)。
+ * 分子分母皆為 domain Decimal(05-18 收回 05-17 的 number → Decimal 交接點),全程不經 JS number。
  */
-function holdingWeight(holding: HoldingDto): Decimal | null {
+function holdingWeight(holding: Holding): Decimal | null {
   const s = summary.value;
   if (!s || s.totalMarketValue.eq(ZERO)) return null;
-  if (holding.marketValueInBase === null || !Number.isFinite(holding.marketValueInBase)) return null;
-  const marketValueInBase = parseDecimal(numberToWire(holding.marketValueInBase));
-  return marketValueInBase.div(s.totalMarketValue).round(8, ROUND_HALF_UP);
+  if (holding.marketValueInBase === null) return null;
+  return holding.marketValueInBase.div(s.totalMarketValue).round(8, ROUND_HALF_UP);
 }
 
 /** 今日損益格的色彩 class:null → fg-dim;其餘依正負(0 視為 up,與同列 P&L 一致)。 */
-function dayPnlClass(holding: HoldingDto): string {
+function dayPnlClass(holding: Holding): string {
   if (holding.dayPricePnl === null) return 'day-na';
-  return holding.dayPricePnl >= 0 ? 'day-up' : 'day-dn';
+  return holding.dayPricePnl.gte(ZERO) ? 'day-up' : 'day-dn';
 }
 
-function holdingWeightLabel(holding: HoldingDto): string {
+function holdingWeightLabel(holding: Holding): string {
   return fmtWeightPct(holdingWeight(holding));
 }
 
 /** 權重 bar 的 CSS 寬度:視覺近似值,Decimal → number 只在這個顯示出口發生。 */
-function holdingWeightWidth(holding: HoldingDto): string {
+function holdingWeightWidth(holding: Holding): string {
   const w = holdingWeight(holding);
   return `${w === null ? 0 : Math.max(0, Math.min(100, toChartNumber(w.times(HUNDRED))))}%`;
 }
@@ -866,13 +864,27 @@ function dividendIncomeNote(s: PortfolioSummary): string {
 
 const statCards = computed(() => (live ? mockStats.value : apiStats.value));
 
+/**
+ * Top movers 一列的顯示形狀(mock 與 API 共用模板)。`pnl` 只交給 moneyFormat(接受 Decimal | number);
+ * 正負色彩與百分比文字由各自的路徑先算好,模板不對金額做比較運算(Decimal 不支援 `>=`)。
+ */
+interface MoverRow {
+  sym: string;
+  name: string;
+  pnl: Decimal | number;
+  up: boolean;
+  pctText: string;
+  ccy: string;
+}
+
 // Top movers (P&L abs) — top 4
 // mock 宇宙單一幣別:金額代碼取 MOCK_POSITION_CURRENCY(與對話框一致),不再寫死 `$`。
-const mockTopMovers = computed(() => {
+const mockTopMovers = computed<MoverRow[]>(() => {
   return [...mockPositions.value]
     .map(p => ({ sym: p.sym, name: p.name, pnl: pnl(p), pct: pnlPct(p), ccy: MOCK_POSITION_CURRENCY }))
     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
-    .slice(0, 4);
+    .slice(0, 4)
+    .map(({ pct, ...m }) => ({ ...m, up: m.pnl >= 0, pctText: fmtPct(pct) }));
 });
 
 /**
@@ -880,16 +892,24 @@ const mockTopMovers = computed(() => {
  * quick-261106-fbs:以**基準幣**未實現損益排序 —— 原幣 unrealizedPnl 跨幣別直接比大小是錯的(同 04.1 D-05)。
  * 前端不換匯(D-21):unrealizedPnlInBase 為 null(缺匯率)的持倉不進榜,檔數另以 moversFxExcluded 提示。
  */
-function hasBasePnl(x: HoldingDto): x is HoldingDto & { unrealizedPnlInBase: number } {
-  return x.unrealizedPnlInBase !== null && Number.isFinite(x.unrealizedPnlInBase);
+function hasBasePnl(x: Holding): x is Holding & { unrealizedPnlInBase: Decimal } {
+  return x.unrealizedPnlInBase !== null;
 }
 
-const apiTopMovers = computed(() => {
+/** API 路徑:以 Decimal 絕對值排序(cmp,降冪),不經 JS number(Phase 5 D-08)。 */
+const apiTopMovers = computed<MoverRow[]>(() => {
   return holdings.value
     .filter(hasBasePnl)
-    .map(x => ({ sym: x.symbol, name: x.assetName, pnl: x.unrealizedPnlInBase, pct: x.roi * 100, ccy: x.baseCurrency }))
-    .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl))
-    .slice(0, 4);
+    .sort((a, b) => b.unrealizedPnlInBase.abs().cmp(a.unrealizedPnlInBase.abs()))
+    .slice(0, 4)
+    .map(x => ({
+      sym: x.symbol,
+      name: x.assetName,
+      pnl: x.unrealizedPnlInBase,
+      up: x.unrealizedPnlInBase.gte(ZERO),
+      pctText: fmtRoiPct(x.roi),
+      ccy: x.baseCurrency,
+    }));
 });
 
 /** 因缺匯率而未列入 Top movers 的持倉檔數(mock 單一幣別恆為 0)。 */
@@ -1025,34 +1045,29 @@ const sortedHoldings = computed(() => {
   const dir = sortDir.value === 'asc' ? 1 : -1;
   const k = sortKey.value;
   rows.sort((a, b) => {
-    // 權重是 Decimal(05-17):以 cmp 比較;null(summary 未載入 / 缺匯率)不論升降冪一律排最後。
-    if (k === 'weight') {
-      const wa = holdingWeight(a);
-      const wb = holdingWeight(b);
-      if (wa === null || wb === null) return wa === wb ? 0 : wa === null ? 1 : -1;
-      return wa.cmp(wb) * dir;
-    }
-    let va: any, vb: any;
-    switch (k) {
-      case 'sym': va = a.symbol; vb = b.symbol; break;
-      case 'qty': va = a.totalQuantity; vb = b.totalQuantity; break;
-      case 'avg': va = a.avgCost; vb = b.avgCost; break;
-      case 'price': va = a.marketPrice; vb = b.marketPrice; break;
-      case 'value': va = a.marketValue; vb = b.marketValue; break;
-      case 'pnl': va = a.unrealizedPnl; vb = b.unrealizedPnl; break;
-      // 跨幣別可比的是比率,不是原幣金額;null(缺資料)不論升降冪一律排最後。
-      case 'dayPnl': va = a.dayPricePnlRatio; vb = b.dayPricePnlRatio; break;
-    }
-    if (k === 'dayPnl') {
-      const aMissing = va === null || !Number.isFinite(va);
-      const bMissing = vb === null || !Number.isFinite(vb);
-      if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1;
-    }
-    if (typeof va === 'number') return (va - vb) * dir;
-    return String(va).localeCompare(String(vb)) * dir;
+    if (k === 'sym') return a.symbol.localeCompare(b.symbol) * dir;
+    // 其餘欄位皆為 Decimal(Phase 5 D-08):以 cmp 比較,不經 JS number。
+    // null(權重:summary 未載入 / 缺匯率;今日損益:缺前收)不論升降冪一律排最後。
+    const va = holdingSortValue(a, k);
+    const vb = holdingSortValue(b, k);
+    if (va === null || vb === null) return va === vb ? 0 : va === null ? 1 : -1;
+    return va.cmp(vb) * dir;
   });
   return rows;
 });
+
+/** API 持倉表的 Decimal 排序值;跨幣別可比的今日損益是比率,不是原幣金額。 */
+function holdingSortValue(h: Holding, k: Exclude<SortKey, 'sym'>): Decimal | null {
+  switch (k) {
+    case 'qty': return h.totalQuantity;
+    case 'avg': return h.avgCost;
+    case 'price': return h.marketPrice;
+    case 'value': return h.marketValue;
+    case 'pnl': return h.unrealizedPnl;
+    case 'dayPnl': return h.dayPricePnlRatio;
+    case 'weight': return holdingWeight(h);
+  }
+}
 
 function sort(k: SortKey) {
   if (sortKey.value === k) {

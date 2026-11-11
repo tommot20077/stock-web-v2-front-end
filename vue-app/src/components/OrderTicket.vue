@@ -567,7 +567,7 @@ import { t } from '../i18n';
 // 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
 // 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
 import { fmtNum, fmtPct } from '../data';
-import { fmtMoney, minorUnits } from '../moneyFormat';
+import { fmtMoney, fmtQuantity, minorUnits } from '../moneyFormat';
 import LineChart from './LineChart.vue';
 import { ApiClientError } from '../services/apiClient';
 // closeSeries 是 KlineDto.close(JSON string)→ number[] 的**唯一**轉換點(04-06 已單測鎖住)。
@@ -583,7 +583,8 @@ import {
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
-import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
+import type { AssetDto, Holding, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
+import { numberToWire, parseDecimal, ZERO, type Decimal } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
@@ -916,7 +917,7 @@ const selectedMatchesQuery = computed(() =>
 // **預檢只是 UX,不是防護**(judgment §5)。後端 409 `TRADE_INSUFFICIENT_HOLDING`
 // 永遠是最終權威 —— 另一個分頁剛賣掉的併發情境,前端不可能知道。
 //
-// **只讀 `symbol` 與 `totalQuantity` 兩個欄位。** `HoldingDto` 其餘的成本、市值、
+// **只讀 `symbol` 與 `totalQuantity` 兩個欄位。** `Holding` 其餘的成本、市值、
 // 已實現/未實現損益與報酬率欄位**一律不得使用** —— 用它們算「賣出後的損益預估」
 // 會踩 Phase 3 D-04 與 judgment §7(前端絕不重算成本或損益)。
 //
@@ -926,7 +927,7 @@ const selectedMatchesQuery = computed(() =>
 type HoldingsState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'loaded'; data: HoldingDto[] }
+  | { status: 'loaded'; data: Holding[] }
   | { status: 'error' };
 
 const holdingsState = ref<HoldingsState>({ status: 'idle' });
@@ -947,7 +948,7 @@ async function loadSellableHoldings() {
 }
 
 // Q9.2 的取捨:只有 SELL 需要;一次拿全部,之後換 symbol 不必再打
-// (`HoldingDto[]` 對單一使用者是小陣列)。
+// (`Holding[]` 對單一使用者是小陣列)。
 watch(side, (value) => {
   if (value !== 'SELL') return;
   if (holdingsState.value.status !== 'idle') return;
@@ -964,12 +965,15 @@ watch(portfolioRevision, () => {
 const holdingsLoading = computed(() => holdingsState.value.status === 'loading');
 const holdingsFailed = computed(() => holdingsState.value.status === 'error');
 
-/** `null` = 還不知道(未載入 / 失敗 / 未選標的);`0` = 確定可賣 0。 */
-const sellableQty = computed<number | null>(() => {
+/**
+ * `null` = 還不知道(未載入 / 失敗 / 未選標的);`ZERO` = 確定可賣 0。
+ * Phase 5 D-08:持股數是 domain Decimal(後端 NUMERIC(_, 8) 的字串經 service mapper 轉換),不經 JS number(T-05-34)。
+ */
+const sellableQty = computed<Decimal | null>(() => {
   const state = holdingsState.value;
   if (state.status !== 'loaded' || !selected.value) return null;
   const match = state.data.find(item => item.symbol === selected.value!.symbol);
-  return match ? match.totalQuantity : 0;
+  return match ? match.totalQuantity : ZERO;
 });
 
 /**
@@ -979,12 +983,17 @@ const sellableQty = computed<number | null>(() => {
  */
 const sellableQtyText = computed(() => {
   const separator = props.lang === 'zh' ? ':' : ': ';
-  return `${t(props.lang, 'sellableQty')}${separator}${sellableQty.value ?? 0}`;
+  return `${t(props.lang, 'sellableQty')}${separator}${fmtQuantity(sellableQty.value ?? ZERO)}`;
 });
 
+/** 超賣檢查以 Decimal `gt` 比較(等於可賣數量不算超賣);後端 409 仍是最終權威(judgment §5)。 */
 const oversellError = computed(() => {
   if (side.value !== 'SELL' || sellableQty.value === null || qty.value <= 0) return '';
-  return qty.value > sellableQty.value ? t(props.lang, 'tradeErrOversell') : '';
+  if (!Number.isFinite(qty.value)) return '';
+  // 型別閉包交接點(05-18 → 05-19,同 05-16 規約):數量輸入在本 plan 仍是 `v-model.number`,只在這一處把
+  // number 轉成 Decimal(方向一律 number → Decimal)。05-19 數量改為文字輸入 + parseDecimalInput 時刪除此轉換。
+  const requested = parseDecimal(numberToWire(qty.value));
+  return requested.gt(sellableQty.value) ? t(props.lang, 'tradeErrOversell') : '';
 });
 
 /**

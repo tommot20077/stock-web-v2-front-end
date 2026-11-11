@@ -38,14 +38,14 @@ const TRUTH_HOLDING: HoldingDto = {
   assetId: 'asset-zza',
   symbol: 'ZZA',
   assetName: 'Zeta Alpha Corp.',
-  totalQuantity: 10,
-  avgCost: 20,
-  costBasis: 777,
-  marketPrice: 100,
-  marketValue: 999,
-  realizedPnl: 33,
-  unrealizedPnl: 555,
-  roi: 0.0117,
+  totalQuantity: '10',
+  avgCost: '20',
+  costBasis: '777',
+  marketPrice: '100',
+  marketValue: '999',
+  realizedPnl: '33',
+  unrealizedPnl: '555',
+  roi: '0.0117',
   priceTime: '2026-07-24T13:45:00Z',
   lastUpdated: '2026-07-24T13:46:00Z',
   // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設)
@@ -54,11 +54,12 @@ const TRUTH_HOLDING: HoldingDto = {
   sector: 'Tech',
   market: 'TW',
   baseCurrency: 'TWD',
-  marketValueInBase: 999,
-  unrealizedPnlInBase: 555,
-  previousClose: 90,
-  dayPricePnl: 100,
-  dayPricePnlRatio: 0.0111,
+  marketValueInBase: '999',
+  unrealizedPnlInBase: '555',
+  previousClose: '90',
+  dayPricePnl: '100',
+  dayPricePnlRatio: '0.0111',
+  dayPnlBasis: '900',
 };
 
 /**
@@ -94,14 +95,14 @@ function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
   return {
     assetId: `asset-${over.symbol}`,
     assetName: `${over.symbol} Corp.`,
-    totalQuantity: 1,
-    avgCost: 1,
-    costBasis: 1,
-    marketPrice: 1,
-    marketValue: 1,
-    realizedPnl: 0,
-    unrealizedPnl: 0,
-    roi: 0,
+    totalQuantity: '1',
+    avgCost: '1',
+    costBasis: '1',
+    marketPrice: '1',
+    marketValue: '1',
+    realizedPnl: '0',
+    unrealizedPnl: '0',
+    roi: '0',
     priceTime: '2026-07-24T13:45:00Z',
     lastUpdated: '2026-07-24T13:46:00Z',
     currency: 'TWD',
@@ -109,11 +110,12 @@ function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
     sector: 'Tech',
     market: 'TW',
     baseCurrency: 'TWD',
-    marketValueInBase: 1,
-    unrealizedPnlInBase: 0,
+    marketValueInBase: '1',
+    unrealizedPnlInBase: '0',
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
+    dayPnlBasis: null,
     ...over,
   };
 }
@@ -325,9 +327,9 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('weight 由 marketValueInBase / summary.totalMarketValue 衍生,不碰原幣 marketValue(RESEARCH Q1.4)', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'USD1', currency: 'USD', marketValue: 2000, marketValueInBase: 64836 }),
-        holding({ symbol: 'TWD1', currency: 'TWD', marketValue: 35164, marketValueInBase: 35164 }),
-        holding({ symbol: 'NOFX', currency: 'EUR', marketValue: 777, marketValueInBase: null }),
+        holding({ symbol: 'USD1', currency: 'USD', marketValue: '2000', marketValueInBase: '64836' }),
+        holding({ symbol: 'TWD1', currency: 'TWD', marketValue: '35164', marketValueInBase: '35164' }),
+        holding({ symbol: 'NOFX', currency: 'EUR', marketValue: '777', marketValueInBase: null }),
       ],
       summaryWith({ totalMarketValue: '100000', holdingCount: 3, fxExcludedCount: 1 }),
     );
@@ -348,7 +350,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
 
   it('權重以 Decimal 計算(Phase 5 D-08):totalMarketValue 字串為 0 / 尾零 0 時回 —;HALF_UP 到 1 位', async () => {
     await mountApiWith(
-      [holding({ symbol: 'ZERO', marketValueInBase: 5 })],
+      [holding({ symbol: 'ZERO', marketValueInBase: '5' })],
       summaryWith({ totalMarketValue: '0.00000000', holdingCount: 1 }),
     );
     expect(rows()[0].querySelector('[data-testid="positions-weight"]')!.textContent?.trim()).toBe('—');
@@ -359,8 +361,8 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     // (同一個值經 JS number:0.15.toFixed(1) === '0.1',binary 誤差會往下捨)
     await mountApiWith(
       [
-        holding({ symbol: 'ONE', marketValue: 3, marketValueInBase: 1 }),
-        holding({ symbol: 'TINY', marketValue: 2, marketValueInBase: 0.0045 }),
+        holding({ symbol: 'ONE', marketValue: '3', marketValueInBase: '1' }),
+        holding({ symbol: 'TINY', marketValue: '2', marketValueInBase: '0.0045' }),
       ],
       summaryWith({ totalMarketValue: '3', holdingCount: 2 }),
     );
@@ -372,7 +374,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
 
   it('標題列總市值以 Decimal 顯示超過 double 精度的金額', async () => {
     await mountApiWith(
-      [holding({ symbol: 'ZZA', marketValueInBase: 1 })],
+      [holding({ symbol: 'ZZA', marketValueInBase: '1' })],
       summaryWith({ totalMarketValue: '9007199254740993', holdingCount: 1 }),
     );
     const header = requireTestid('positions-header-summary');
@@ -384,9 +386,9 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('權重表頭排序用基準幣權重,null 不論升降冪都排最後', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'NOFX', marketValue: 900, marketValueInBase: null }),
-        holding({ symbol: 'BIG', marketValue: 5, marketValueInBase: 60000 }),
-        holding({ symbol: 'SML', marketValue: 4, marketValueInBase: 10000 }),
+        holding({ symbol: 'NOFX', marketValue: '900', marketValueInBase: null }),
+        holding({ symbol: 'BIG', marketValue: '5', marketValueInBase: '60000' }),
+        holding({ symbol: 'SML', marketValue: '4', marketValueInBase: '10000' }),
       ],
       summaryWith({ totalMarketValue: '100000', holdingCount: 3 }),
     );
@@ -503,11 +505,11 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('Top movers 依後端 unrealizedPnlInBase 絕對值排序取前 4,不看原幣 unrealizedPnl', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'ZA', unrealizedPnl: 99999, unrealizedPnlInBase: 10 }),
-        holding({ symbol: 'ZB', unrealizedPnl: 1, unrealizedPnlInBase: -900 }),
-        holding({ symbol: 'ZC', unrealizedPnl: 2, unrealizedPnlInBase: 300 }),
-        holding({ symbol: 'ZD', unrealizedPnl: 3, unrealizedPnlInBase: -50 }),
-        holding({ symbol: 'ZE', unrealizedPnl: -88888, unrealizedPnlInBase: 7 }),
+        holding({ symbol: 'ZA', unrealizedPnl: '99999', unrealizedPnlInBase: '10' }),
+        holding({ symbol: 'ZB', unrealizedPnl: '1', unrealizedPnlInBase: '-900' }),
+        holding({ symbol: 'ZC', unrealizedPnl: '2', unrealizedPnlInBase: '300' }),
+        holding({ symbol: 'ZD', unrealizedPnl: '3', unrealizedPnlInBase: '-50' }),
+        holding({ symbol: 'ZE', unrealizedPnl: '-88888', unrealizedPnlInBase: '7' }),
       ],
       summaryWith({ totalMarketValue: '5', holdingCount: 5 }),
     );
@@ -518,9 +520,9 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('T2.1 缺基準幣值的持倉不進榜、金額為「數字 + 基準幣 ISO」、顯示「N 檔未列入」提示', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'UP', currency: 'USD', unrealizedPnl: -3, unrealizedPnlInBase: 500, roi: 0.1 }),
-        holding({ symbol: 'DN', currency: 'USD', unrealizedPnl: 4, unrealizedPnlInBase: -1200, roi: -0.2 }),
-        holding({ symbol: 'NOFX', currency: 'EUR', unrealizedPnl: 999999, unrealizedPnlInBase: null, marketValueInBase: null }),
+        holding({ symbol: 'UP', currency: 'USD', unrealizedPnl: '-3', unrealizedPnlInBase: '500', roi: '0.1' }),
+        holding({ symbol: 'DN', currency: 'USD', unrealizedPnl: '4', unrealizedPnlInBase: '-1200', roi: '-0.2' }),
+        holding({ symbol: 'NOFX', currency: 'EUR', unrealizedPnl: '999999', unrealizedPnlInBase: null, marketValueInBase: null }),
       ],
       summaryWith({ totalMarketValue: '5', holdingCount: 3, fxExcludedCount: 1, unconvertedCurrencies: ['EUR'] }),
     );
@@ -551,7 +553,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
 
   it('沒有被排除的持倉時不顯示「未列入」提示', async () => {
     await mountApiWith(
-      [holding({ symbol: 'ZA', unrealizedPnlInBase: 10 })],
+      [holding({ symbol: 'ZA', unrealizedPnlInBase: '10' })],
       summaryWith({ totalMarketValue: '1', holdingCount: 1 }),
     );
 
@@ -562,9 +564,9 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('點 P&L 表頭以後端 unrealizedPnl 排序,再點一次反轉(client-side 排序保留)', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'AAA', marketValue: 30, unrealizedPnl: 100 }),
-        holding({ symbol: 'BBB', marketValue: 20, unrealizedPnl: -500 }),
-        holding({ symbol: 'CCC', marketValue: 10, unrealizedPnl: 300 }),
+        holding({ symbol: 'AAA', marketValue: '30', unrealizedPnl: '100' }),
+        holding({ symbol: 'BBB', marketValue: '20', unrealizedPnl: '-500' }),
+        holding({ symbol: 'CCC', marketValue: '10', unrealizedPnl: '300' }),
       ],
       summaryWith({ totalMarketValue: '60', holdingCount: 3 }),
     );
@@ -918,7 +920,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     expect(note.textContent).toContain(t('en', 'portfolioRefreshing'));
     expect(holdingsCard().getAttribute('aria-busy')).toBe('true');
 
-    gate.resolve(success([holding({ symbol: 'NEWSYM', marketValue: 10 })]));
+    gate.resolve(success([holding({ symbol: 'NEWSYM', marketValue: '10' })]));
     gate = null;
     await flushAsync();
 
@@ -970,7 +972,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
         ? failure('PORTFOLIO_SUMMARY_UNAVAILABLE', 'trace-summary-stale')
         : success(TRUTH_SUMMARY)),
       holdings: () => success(refetching
-        ? [holding({ symbol: 'NEWSYM', marketValue: 10 })]
+        ? [holding({ symbol: 'NEWSYM', marketValue: '10' })]
         : [TRUTH_HOLDING]),
     });
     await mountApiPositions(fetchMock);
@@ -1167,8 +1169,8 @@ describe('Positions — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () =
 /** 兩列:A 有今日損益(原幣 125、+4.35%),B 缺前收 → dayPricePnl null。 */
 function dayPnlFixture(): HoldingDto[] {
   return [
-    holding({ symbol: 'AAA', marketValue: 30, marketValueInBase: 30, dayPricePnl: 125, dayPricePnlRatio: 0.04347826 }),
-    holding({ symbol: 'BBB', marketValue: 20, marketValueInBase: 20, dayPricePnl: null, dayPricePnlRatio: null }),
+    holding({ symbol: 'AAA', marketValue: '30', marketValueInBase: '30', dayPricePnl: '125', dayPricePnlRatio: '0.04347826' }),
+    holding({ symbol: 'BBB', marketValue: '20', marketValueInBase: '20', dayPricePnl: null, dayPricePnlRatio: null }),
   ];
 }
 
@@ -1192,7 +1194,7 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
 
   it('負值帶 dn 色 class 與負號', async () => {
     await mountApiWith(
-      [holding({ symbol: 'NEG', dayPricePnl: -40, dayPricePnlRatio: -0.0123 })],
+      [holding({ symbol: 'NEG', dayPricePnl: '-40', dayPricePnlRatio: '-0.0123' })],
       summaryWith({ totalMarketValue: '1', holdingCount: 1 }),
     );
 
@@ -1218,9 +1220,9 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
   it('表頭可排序(依比率):升冪與降冪 null 列都在最後', async () => {
     await mountApiWith(
       [
-        holding({ symbol: 'NUL', marketValue: 40, dayPricePnl: null, dayPricePnlRatio: null }),
-        holding({ symbol: 'LOW', marketValue: 30, dayPricePnl: -10, dayPricePnlRatio: -0.02 }),
-        holding({ symbol: 'HIG', marketValue: 20, dayPricePnl: 50, dayPricePnlRatio: 0.05 }),
+        holding({ symbol: 'NUL', marketValue: '40', dayPricePnl: null, dayPricePnlRatio: null }),
+        holding({ symbol: 'LOW', marketValue: '30', dayPricePnl: '-10', dayPricePnlRatio: '-0.02' }),
+        holding({ symbol: 'HIG', marketValue: '20', dayPricePnl: '50', dayPricePnlRatio: '0.05' }),
       ],
       summaryWith({ totalMarketValue: '90', holdingCount: 3 }),
     );
@@ -1288,7 +1290,7 @@ describe('Positions — 幣別標籤與說明列(04.1-16 Task 2 / PORT-10)', () 
 
   it('currency 為 null:不渲染 ccy-tag,列內無 $,金額照常顯示裸數字(不猜幣別)', async () => {
     await mountApiWith(
-      [holding({ symbol: 'OLD', currency: null, marketValue: 1234, marketValueInBase: 1234 })],
+      [holding({ symbol: 'OLD', currency: null, marketValue: '1234', marketValueInBase: '1234' })],
       summaryWith({ totalMarketValue: '1234', holdingCount: 1 }),
     );
 
@@ -1533,7 +1535,7 @@ async function mountApiWithOrderSpy(fetchMock: ReturnType<typeof routedFetch>) {
 describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-11)', () => {
   it('populated(API):動作欄表頭只有 sr-only 的「動作」,每列一顆帶代號 aria-label 的 btn-ghost-sm', async () => {
     await mountApiWith(
-      [holding({ symbol: 'ZZA', marketValueInBase: 3 }), holding({ symbol: 'YYB', marketValueInBase: 1 })],
+      [holding({ symbol: 'ZZA', marketValueInBase: '3' }), holding({ symbol: 'YYB', marketValueInBase: '1' })],
       summaryWith({ totalMarketValue: '4', holdingCount: 2 }),
     );
 
@@ -1604,8 +1606,8 @@ describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-
     const fetchMock = routedFetch({
       summary: () => success(summaryWith({ totalMarketValue: '3', holdingCount: 2 })),
       holdings: () => success([
-        holding({ symbol: 'TWA', marketValueInBase: 2, market: 'TW' }),
-        holding({ symbol: 'NUL', marketValueInBase: 1, market: null }),
+        holding({ symbol: 'TWA', marketValueInBase: '2', market: 'TW' }),
+        holding({ symbol: 'NUL', marketValueInBase: '1', market: null }),
       ]),
     });
     await mountApiWithOrderSpy(fetchMock);
@@ -1812,5 +1814,112 @@ describe('Positions — 總損益卡股利收入附加列(04.2-21 Task 1 / DIV-0
     expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*font-weight:\s*400/);
     expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*color:\s*var\(--fg-dim\)/);
     expect(positionsSource).toMatch(/\.stat-note\s*\{[^}]*margin-top:\s*4px/);
+  });
+});
+
+/*
+ * 05-18(Phase 5 D-05 / D-08):holdings wire 為字串,經 portfolioApi.toHolding 轉成 Decimal domain;
+ * 持倉表 / 排序 / 今日損益色彩 / movers / 權重 全部以 Decimal 計算。下列 fixture 刻意使用超過 double 精度
+ * 或 1e-8 的值:任何一處回到 JS number,排序或正負判斷就會錯。
+ */
+describe('Positions — 持倉以 Decimal 計算(05-18 / D-08)', () => {
+  it('持倉表顯示超過 double 精度的市值與 8 位小數股數;setScale(8) 尾零的股數以一般記號顯示', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'BIG', marketValue: '9007199254740993.01', marketValueInBase: '9007199254740993.01', totalQuantity: '12.12345678' }),
+        holding({ symbol: 'TZ', marketValue: '1', marketValueInBase: '1', totalQuantity: '1000.00000000' }),
+      ],
+      summaryWith({ totalMarketValue: '9007199254740994.01', holdingCount: 2 }),
+    );
+
+    expect(rowSymbols()).toEqual(['BIG', 'TZ']);
+    const big = [...rows()[0].querySelectorAll('td')];
+    expect(big[2].textContent?.trim()).toBe('12.12345678');
+    expect(big[5].textContent?.trim()).toBe('9,007,199,254,740,993');
+    const tz = [...rows()[1].querySelectorAll('td')];
+    expect(tz[2].textContent?.trim()).toBe('1000');
+  });
+
+  it('表頭排序以 Decimal cmp 比較:double 無法區分的兩個市值仍排出正確順序', async () => {
+    await mountApiWith(
+      [
+        // 兩者轉成 JS number 都是 9007199254740992;number 比較會判為相等並保留輸入順序(LOW 在前)。
+        holding({ symbol: 'LOW', marketValue: '9007199254740992', marketValueInBase: '1' }),
+        holding({ symbol: 'HIGH', marketValue: '9007199254740993', marketValueInBase: '1' }),
+      ],
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
+    );
+
+    // 預設依市值降冪
+    expect(rowSymbols()).toEqual(['HIGH', 'LOW']);
+    click(headerCell(t('en', 'mktValue')));
+    await nextTick();
+    expect(rowSymbols()).toEqual(['LOW', 'HIGH']);
+  });
+
+  it('Top movers 以 Decimal 絕對值排序,色彩依 Decimal 正負,百分比為 roi × 100(HALF_UP)', async () => {
+    await mountApiWith(
+      [
+        // |−9007199254740993| > |9007199254740992|,但兩者轉成 number 的絕對值相等。
+        holding({ symbol: 'POS', unrealizedPnlInBase: '9007199254740992', roi: '0.00125' }),
+        holding({ symbol: 'NEG', unrealizedPnlInBase: '-9007199254740993', roi: '-0.00125' }),
+      ],
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
+    );
+
+    expect(moverSymbols()).toEqual(['NEG', 'POS']);
+    const movers = [...document.body.querySelectorAll<HTMLElement>('.mover')];
+    expect(movers[0].textContent).toContain('-9,007,199,254,740,993');
+    expect(movers[0].textContent).toContain('-0.13%');
+    expect(movers[1].textContent).toContain('+9,007,199,254,740,992');
+    expect(movers[1].textContent).toContain('+0.13%');
+    const colorOf = (m: HTMLElement) => m.querySelector<HTMLElement>('.num')!.style.color;
+    expect(colorOf(movers[0])).toBe('var(--dn)');
+    expect(colorOf(movers[1])).toBe('var(--up-text)');
+  });
+
+  it('今日損益色彩與未實現損益色彩以 Decimal 判斷正負(-1e-8 為 dn、0 為 up)', async () => {
+    await mountApiWith(
+      [
+        holding({ symbol: 'TNY', marketValue: '2', unrealizedPnl: '-0.00000001', dayPricePnl: '-0.00000001', dayPricePnlRatio: '-0.00000001' }),
+        holding({ symbol: 'ZRO', marketValue: '1', unrealizedPnl: '0', dayPricePnl: '0', dayPricePnlRatio: '0' }),
+      ],
+      summaryWith({ totalMarketValue: '3', holdingCount: 2 }),
+    );
+
+    const [tiny, zero] = dayPnlCells();
+    expect(tiny.classList.contains('day-dn')).toBe(true);
+    expect(zero.classList.contains('day-up')).toBe(true);
+    const pnlColor = (i: number) => rows()[i].querySelectorAll<HTMLElement>('td')[6].style.color;
+    expect(pnlColor(0)).toBe('var(--dn)');
+    expect(pnlColor(1)).toBe('var(--up-text)');
+  });
+
+  it('權重分子直接用 domain Decimal(05-17 交接點已收回):999 / 4242 = 23.6%、null → —', async () => {
+    await mountApiWith(
+      [TRUTH_HOLDING, holding({ symbol: 'NOFX', marketValue: '1', marketValueInBase: null })],
+      TRUTH_SUMMARY,
+    );
+
+    const weightOf = (i: number) => rows()[i].querySelector('[data-testid="positions-weight"]')!.textContent?.trim();
+    expect(rowSymbols()).toEqual(['ZZA', 'NOFX']);
+    expect(weightOf(0)).toBe('23.6%');
+    expect(weightOf(1)).toBe('—');
+    // 源碼守門:Positions 不再有 number → Decimal 的轉換(05-24 會擴大為 pages / components 全面禁止)
+    const code = positionsSource.split('\n').filter(line => !/^\s*(\*|\/\/)/.test(line)).join('\n');
+    expect(code).not.toContain('numberToWire');
+  });
+
+  it('從持倉開啟對話框時傳出 Decimal 股數,目前持股以 fmtQuantity 顯示原值', async () => {
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({ totalMarketValue: '1', holdingCount: 1 })),
+      holdings: () => success([holding({ symbol: 'FRC', totalQuantity: '1234.12345678' })]),
+    });
+    await mountApiWithOrderSpy(fetchMock);
+
+    await clickAndFlush(holdingEventButtons()[0]);
+    await clickAndFlush(requireTestid('holding-event-mode-stock-dividend'));
+    expect(requireTestid('holding-event-current-qty').textContent?.trim())
+      .toBe(tf('en', 'holdingEventCurrentQty', { qty: '1,234.12345678' }));
   });
 });

@@ -7,6 +7,7 @@ import type {
   AllocationSliceDto,
   CashBalance,
   CashBalanceDto,
+  Holding,
   HoldingDto,
   PaginatedResponse,
   PortfolioActivityDto,
@@ -75,7 +76,8 @@ export interface PortfolioApi {
   mode: RuntimeDataMode;
   /** portfolio summary 的 domain 形狀(金額為 Decimal);http 與 mock 都經 {@link toPortfolioSummary}。 */
   getSummary(): Promise<PortfolioSummary>;
-  listHoldings(): Promise<HoldingDto[]>;
+  /** 持倉的 domain 形狀(股數 / 金額為 Decimal);http 與 mock 都經 {@link toHolding}。 */
+  listHoldings(): Promise<Holding[]>;
   listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
   /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
   listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivityDto>>;
@@ -137,6 +139,31 @@ export function toPortfolioSummary(wire: PortfolioSummaryDto): PortfolioSummary 
     cashBalances: (wire.cashBalances ?? []).map(toCashBalance),
     allocation: (wire.allocation ?? []).map(toAllocationSlice),
     sectorAllocation: (wire.sectorAllocation ?? []).map(toSectorAllocation),
+  };
+}
+
+/**
+ * wire → domain 的唯一持倉 mapper(http 與 mock adapter 共用,Phase 5 D-08)。
+ * 必填金額欄位若仍是 JSON number(或缺漏),`parseDecimal` 在這裡丟 TypeError;nullable 欄位缺漏(舊形狀 / 快取)
+ * 視為 null,畫面依既有 null 分支顯示 `—`。
+ */
+export function toHolding(wire: HoldingDto): Holding {
+  return {
+    ...wire,
+    totalQuantity: parseDecimal(wire.totalQuantity),
+    avgCost: parseDecimal(wire.avgCost),
+    costBasis: parseDecimal(wire.costBasis),
+    marketPrice: parseDecimal(wire.marketPrice),
+    marketValue: parseDecimal(wire.marketValue),
+    realizedPnl: parseDecimal(wire.realizedPnl),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+    roi: parseDecimal(wire.roi),
+    marketValueInBase: parseNullableDecimal(wire.marketValueInBase),
+    unrealizedPnlInBase: parseNullableDecimal(wire.unrealizedPnlInBase),
+    previousClose: parseNullableDecimal(wire.previousClose),
+    dayPricePnl: parseNullableDecimal(wire.dayPricePnl),
+    dayPricePnlRatio: parseNullableDecimal(wire.dayPricePnlRatio),
+    dayPnlBasis: parseNullableDecimal(wire.dayPnlBasis),
   };
 }
 
@@ -219,6 +246,10 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   };
 }
 
+/**
+ * mock 持倉 → holding wire DTO(與後端同形)。mock 宇宙的靜態資料是 number,先以 number 計算,
+ * 再經 `numberToWire` 投影成 wire 字串,最後與 http 走同一個 {@link toHolding}。
+ */
 function holdingFrom(position: Position): HoldingDto {
   const costBasis = position.qty * position.avg;
   const marketValue = position.qty * position.price;
@@ -227,14 +258,14 @@ function holdingFrom(position: Position): HoldingDto {
     assetId: `mock-asset-${position.sym}`,
     symbol: position.sym,
     assetName: position.name,
-    totalQuantity: position.qty,
-    avgCost: position.avg,
-    costBasis,
-    marketPrice: position.price,
-    marketValue,
-    realizedPnl: 0,
-    unrealizedPnl,
-    roi: costBasis === 0 ? 0 : unrealizedPnl / costBasis,
+    totalQuantity: numberToWire(position.qty),
+    avgCost: numberToWire(position.avg),
+    costBasis: numberToWire(costBasis),
+    marketPrice: numberToWire(position.price),
+    marketValue: numberToWire(marketValue),
+    realizedPnl: numberToWire(0),
+    unrealizedPnl: numberToWire(unrealizedPnl),
+    roi: numberToWire(costBasis === 0 ? 0 : unrealizedPnl / costBasis),
     priceTime: null,
     lastUpdated: null,
     currency: MOCK_CURRENCY,
@@ -243,12 +274,14 @@ function holdingFrom(position: Position): HoldingDto {
     sector: position.sector,
     market: position.market ?? null,
     baseCurrency: MOCK_CURRENCY,
-    marketValueInBase: marketValue,
+    marketValueInBase: numberToWire(marketValue),
     // mock 單一幣別(原幣 = 基準幣),基準幣未實現損益即原幣值,與 marketValueInBase 同做法。
-    unrealizedPnlInBase: unrealizedPnl,
+    unrealizedPnlInBase: numberToWire(unrealizedPnl),
+    // mock 沒有前收盤:今日損益相關欄位皆為 null。
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
+    dayPnlBasis: null,
   };
 }
 
@@ -394,7 +427,7 @@ export function createMockPortfolioApi(): PortfolioApi {
       return toPortfolioSummary(summaryFrom(useMockPortfolioStore().positions));
     },
     async listHoldings() {
-      return useMockPortfolioStore().positions.map(holdingFrom);
+      return useMockPortfolioStore().positions.map(position => toHolding(holdingFrom(position)));
     },
     async listTrades(params = {}) {
       const all = useMockPortfolioStore().trades.map(tradeDtoFrom);
@@ -435,7 +468,7 @@ export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
   return {
     mode: 'api',
     getSummary: async () => toPortfolioSummary(await apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`)),
-    listHoldings: () => apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`),
+    listHoldings: async () => (await apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`)).map(toHolding),
     listTrades: params => apiPaginatedRequest<TradeDto>(
       `${basePath}/trades${buildQueryString({
         symbol: params?.symbol,

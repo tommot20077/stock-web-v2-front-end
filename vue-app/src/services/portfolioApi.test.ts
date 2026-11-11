@@ -1,10 +1,10 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi, toPortfolioSummary } from './portfolioApi';
+import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi, toHolding, toPortfolioSummary } from './portfolioApi';
 import { createMockHoldingEventApi, resetMockHoldingEventsForTests } from './holdingEventApi';
 import { isDecimal, parseDecimal, toWire } from './decimal';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { PortfolioActivityDto, PortfolioSummary, PortfolioSummaryDto } from './apiTypes';
+import type { Holding, HoldingDto, PortfolioActivityDto, PortfolioSummary, PortfolioSummaryDto } from './apiTypes';
 import type { Trade } from '../types';
 
 /** 後端 PortfolioSummaryDto 的完整 wire 樣本(Phase 5 D-05:BigDecimal 欄位為字串,計數欄位為 number)。 */
@@ -61,23 +61,63 @@ function plainSummary(summary: PortfolioSummary): PortfolioSummaryDto {
   };
 }
 
-const HOLDINGS_PAYLOAD = [
-  {
-    assetId: 'a1',
-    symbol: 'AAPL',
-    assetName: 'Apple Inc.',
-    totalQuantity: 120,
-    avgCost: 178.2,
-    costBasis: 21384,
-    marketPrice: 218.4,
-    marketValue: 26208,
-    realizedPnl: 0,
-    unrealizedPnl: 4824,
-    roi: 0.2256,
-    priceTime: '2026-07-24T13:30:00Z',
-    lastUpdated: '2026-07-24T13:31:00Z',
-  },
-];
+/** 後端 HoldingDto 的完整 wire 樣本(Phase 5 D-05:14 個 BigDecimal 欄位為字串;沒有尾零,逐字往返)。 */
+const HOLDING_WIRE: HoldingDto = {
+  assetId: 'a1',
+  symbol: 'AAPL',
+  assetName: 'Apple Inc.',
+  totalQuantity: '120.5',
+  avgCost: '178.2',
+  costBasis: '21473.1',
+  marketPrice: '218.4',
+  marketValue: '26317.2',
+  realizedPnl: '-12.34',
+  unrealizedPnl: '4844.1',
+  roi: '0.22559108',
+  priceTime: '2026-07-24T13:30:00Z',
+  lastUpdated: '2026-07-24T13:31:00Z',
+  currency: 'USD',
+  assetType: 'STOCK',
+  sector: 'Tech',
+  market: 'US',
+  baseCurrency: 'TWD',
+  marketValueInBase: '123456789012.12345678',
+  unrealizedPnlInBase: '9007199254740993.01',
+  previousClose: '215',
+  dayPricePnl: '409.7',
+  dayPricePnlRatio: '0.01581395',
+  dayPnlBasis: '25907.5',
+};
+
+const HOLDINGS_PAYLOAD: HoldingDto[] = [HOLDING_WIRE];
+
+/** {@link HoldingDto} 的 14 個 BigDecimal 欄位(與 apiTypes 的 HoldingDecimalKey 同一份清單)。 */
+const HOLDING_DECIMAL_KEYS = [
+  'totalQuantity',
+  'avgCost',
+  'costBasis',
+  'marketPrice',
+  'marketValue',
+  'realizedPnl',
+  'unrealizedPnl',
+  'roi',
+  'marketValueInBase',
+  'unrealizedPnlInBase',
+  'previousClose',
+  'dayPricePnl',
+  'dayPricePnlRatio',
+  'dayPnlBasis',
+] as const;
+
+/** domain holding → wire 形狀(Decimal 以 `toWire` 投影,null 保持 null),讓測試以 toEqual 比較。 */
+function plainHolding(holding: Holding): HoldingDto {
+  const wire = { ...holding } as unknown as Record<string, unknown>;
+  for (const key of HOLDING_DECIMAL_KEYS) {
+    const value = holding[key];
+    wire[key] = value === null ? null : toWire(value);
+  }
+  return wire as unknown as HoldingDto;
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -144,7 +184,7 @@ describe('portfolioApi http adapter', () => {
       dividendIncome: '0',
       dividendTaxWithheld: '0',
     });
-    expect(holdings).toEqual(HOLDINGS_PAYLOAD);
+    expect(holdings.map(plainHolding)).toEqual(HOLDINGS_PAYLOAD);
     expect(fetch).toHaveBeenCalledWith('/api/v1/portfolio/summary', expect.any(Object));
     expect(fetch).toHaveBeenCalledWith('/api/v1/portfolio/holdings', expect.any(Object));
     expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ credentials: 'include' });
@@ -226,6 +266,69 @@ describe('portfolioApi http adapter', () => {
 
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ success: true, data: drifted, error: null, meta: { traceId: 't' } })));
     await expect(createHttpPortfolioApi('/api/v1').getSummary()).rejects.toThrow(TypeError);
+  });
+
+  it('maps holding wire strings to Decimal and round-trips every money field verbatim (D-05 / D-08)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ success: true, data: [HOLDING_WIRE], error: null, meta: { traceId: 't' } })));
+
+    const [holding] = await createHttpPortfolioApi('/api/v1').listHoldings();
+
+    for (const key of HOLDING_DECIMAL_KEYS) {
+      const value = holding[key];
+      expect(value === null ? null : isDecimal(value), key).toBe(true);
+      expect(value === null ? null : toWire(value), key).toBe(HOLDING_WIRE[key]);
+    }
+    // 超過 double 精度的值原值保留(JS number 會變成 123456789012.12346 / 9007199254740992)
+    expect(toWire(holding.marketValueInBase!)).toBe('123456789012.12345678');
+    expect(toWire(holding.unrealizedPnlInBase!)).toBe('9007199254740993.01');
+    // 字串欄位原樣
+    expect(holding).toMatchObject({ assetId: 'a1', symbol: 'AAPL', currency: 'USD', baseCurrency: 'TWD', market: 'US' });
+  });
+
+  it('keeps nullable holding money fields null (missing FX / previous close)', () => {
+    const holding = toHolding({
+      ...HOLDING_WIRE,
+      marketValueInBase: null,
+      unrealizedPnlInBase: null,
+      previousClose: null,
+      dayPricePnl: null,
+      dayPricePnlRatio: null,
+      dayPnlBasis: null,
+    });
+
+    expect(holding.marketValueInBase).toBeNull();
+    expect(holding.unrealizedPnlInBase).toBeNull();
+    expect(holding.previousClose).toBeNull();
+    expect(holding.dayPricePnl).toBeNull();
+    expect(holding.dayPricePnlRatio).toBeNull();
+    expect(holding.dayPnlBasis).toBeNull();
+    expect(toWire(holding.totalQuantity)).toBe('120.5');
+  });
+
+  it('treats a missing dayPnlBasis (older backend shape) as null', () => {
+    const legacy = { ...HOLDING_WIRE } as Partial<HoldingDto>;
+    delete legacy.dayPnlBasis;
+
+    expect(toHolding(legacy as HoldingDto).dayPnlBasis).toBeNull();
+  });
+
+  it('normalises trailing zeros of setScale(8) holding values (numeric equality, not literal)', () => {
+    const holding = toHolding({ ...HOLDING_WIRE, totalQuantity: '1000.00000000', roi: '0E-8' });
+
+    expect(holding.totalQuantity.eq(parseDecimal('1000'))).toBe(true);
+    expect(toWire(holding.totalQuantity)).toBe('1000');
+    expect(holding.roi.eq(parseDecimal('0'))).toBe(true);
+  });
+
+  it('fails loudly when a holding money field is still a JSON number (contract drift)', async () => {
+    const drifted = { ...HOLDING_WIRE, totalQuantity: 120 } as unknown as HoldingDto;
+    expect(() => toHolding(drifted)).toThrow(TypeError);
+
+    const driftedNullable = { ...HOLDING_WIRE, marketValueInBase: 999 } as unknown as HoldingDto;
+    expect(() => toHolding(driftedNullable)).toThrow(TypeError);
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ success: true, data: [drifted], error: null, meta: { traceId: 't' } })));
+    await expect(createHttpPortfolioApi('/api/v1').listHoldings()).rejects.toThrow(TypeError);
   });
 
   it('builds the listTrades query string from every contract parameter', async () => {
@@ -441,28 +544,31 @@ describe('portfolioApi mock adapter reads', () => {
     const holdings = await api.listHoldings();
 
     expect(holdings).toHaveLength(1);
-    expect(holdings[0]).toMatchObject({
+    // Phase 5 D-08:mock 也回 domain(先以 numberToWire 組 wire,再走同一個 toHolding);以 toWire 比較數值。
+    expect(isDecimal(holdings[0].totalQuantity)).toBe(true);
+    expect(plainHolding(holdings[0])).toMatchObject({
       symbol: 'AAA',
       assetName: 'Alpha',
-      totalQuantity: 10,
-      avgCost: 80,
-      costBasis: 800,
-      marketPrice: 100,
-      marketValue: 1000,
-      realizedPnl: 0,
-      unrealizedPnl: 200,
-      roi: 0.25,
+      totalQuantity: '10',
+      avgCost: '80',
+      costBasis: '800',
+      marketPrice: '100',
+      marketValue: '1000',
+      realizedPnl: '0',
+      unrealizedPnl: '200',
+      roi: '0.25',
       // 04.1-11:Phase 04.1 新增的 8 個欄位(mock 宇宙為美股報價 → USD)
       currency: 'USD',
       assetType: 'STOCK',
       sector: 'Tech',
       baseCurrency: 'USD',
-      marketValueInBase: 1000,
+      marketValueInBase: '1000',
       // quick-261106-fbs:mock 單一幣別,基準幣未實現損益 = 原幣 unrealizedPnl(與 marketValueInBase 同做法)
-      unrealizedPnlInBase: 200,
+      unrealizedPnlInBase: '200',
       previousClose: null,
       dayPricePnl: null,
       dayPricePnlRatio: null,
+      dayPnlBasis: null,
     });
   });
 

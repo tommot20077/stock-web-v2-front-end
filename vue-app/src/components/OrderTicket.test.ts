@@ -1005,7 +1005,8 @@ function stubUuids() {
   return randomUUID;
 }
 
-function holding(symbol: string, totalQuantity: number): HoldingDto {
+/** `totalQuantity` 是 wire 字串(後端 BigDecimal → JSON 字串,Phase 5 D-05)。 */
+function holding(symbol: string, totalQuantity: string): HoldingDto {
   return {
     assetId: `asset-${symbol.toLowerCase()}`,
     symbol,
@@ -1013,13 +1014,13 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     totalQuantity,
     // 以下七欄是 D-15 **明文禁止**元件讀取的(Phase 3 D-04 / judgment §7);
     // 刻意給荒謬值,任何前端損益重算都會產生一眼可辨的數字。
-    avgCost: -999,
-    costBasis: -999,
-    marketPrice: -999,
-    marketValue: -999,
-    realizedPnl: -999,
-    unrealizedPnl: -999,
-    roi: -999,
+    avgCost: '-999',
+    costBasis: '-999',
+    marketPrice: '-999',
+    marketValue: '-999',
+    realizedPnl: '-999',
+    unrealizedPnl: '-999',
+    roi: '-999',
     priceTime: null,
     lastUpdated: null,
     // Phase 04.1 欄位:只補型別(OrderTicket 不讀;斷言改寫屬 04.1-14)
@@ -1033,6 +1034,7 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
+    dayPnlBasis: null,
   };
 }
 
@@ -1659,7 +1661,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     stubUuids();
     const fetchImpl = ticketFetch({
       assets: () => assetPageResponse([CONTRADICTORY, MSFT]),
-      holdings: () => holdingsResponse([holding('AAPL', 12), holding('MSFT', 34)]),
+      holdings: () => holdingsResponse([holding('AAPL', '12'), holding('MSFT', '34')]),
     });
     await mountSubmitTicket(fetchImpl);
 
@@ -1702,7 +1704,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     await mountSubmitTicket(ticketFetch({
       // 後端 SQL 有 `total_quantity > 0` 過濾(JdbcTradingRepository.java:210),
       // 「從未持有」與「已全數賣出」在回應裡不可分 —— 所以只能說 0,不能說「未持有」。
-      holdings: () => holdingsResponse([holding('MSFT', 5)]),
+      holdings: () => holdingsResponse([holding('MSFT', '5')]),
     }));
     await switchToSell();
 
@@ -1715,7 +1717,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 47(超量):qty 大於可賣數量時顯示 tradeErrOversell 且送出鈕 disabled', async () => {
     stubUuids();
     await mountSubmitTicket(ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 5)]),
+      holdings: () => holdingsResponse([holding('AAPL', '5')]),
     }));
     await switchToSell();
 
@@ -1728,7 +1730,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 48(judgment §5 的實質驗收):預檢通過仍可能被後端 409 拒絕', async () => {
     stubUuids();
     await mountSubmitTicket(ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+      holdings: () => holdingsResponse([holding('AAPL', '100')]),
       trades: () => tradeFailure('TRADE_INSUFFICIENT_HOLDING', { status: 409 }),
     }));
     await switchToSell();
@@ -1745,7 +1747,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 49(快取失效):一筆交易成功後,下次切 SELL 會重新讀 holdings', async () => {
     stubUuids();
     const fetchImpl = ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+      holdings: () => holdingsResponse([holding('AAPL', '100')]),
     });
     await mountSubmitTicket(fetchImpl);
     await switchToSell();
@@ -1896,7 +1898,7 @@ describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
     expect(bodyText()).toContain(t('en', 'tradeIrreversibleNote'));
 
     // holdings 此時才回來:可賣 5,preset 的 qty 是 10 → oversell 在 review 步驟才成立。
-    pending.resolve(holdingsResponse([holding('AAPL', 5)]));
+    pending.resolve(holdingsResponse([holding('AAPL', '5')]));
     await flushAsync(16);
 
     const alert = requireTestid('ticket-review-error');

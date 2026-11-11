@@ -213,20 +213,25 @@ export type PortfolioSummary = Omit<
   sectorAllocation: SectorAllocation[];
 };
 
-/** 對應後端 HoldingResponse。 */
+/**
+ * 對應後端 HoldingDto(`stock-module-trading/.../api/HoldingDto.java`);逐欄同形,勿增刪欄位(judgment §4)。
+ *
+ * 股數 / 價格 / 金額 / 比值欄位是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `portfolioApi.toHolding` 轉成 {@link Holding}(Decimal)。nullable 欄位缺值時為 null,前端不得猜測。
+ */
 export interface HoldingDto {
   assetId: string;
   symbol: string;
   assetName: string;
-  totalQuantity: number;
-  avgCost: number;
-  costBasis: number;
-  marketPrice: number;
-  marketValue: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
+  totalQuantity: string;
+  avgCost: string;
+  costBasis: string;
+  marketPrice: string;
+  marketValue: string;
+  realizedPnl: string;
+  unrealizedPnl: string;
   /** 比值(非百分比),同 PortfolioSummaryDto.roi。 */
-  roi: number;
+  roi: string;
   /** ISO-8601;行情時間,D-03 要顯示。 */
   priceTime: string | null;
   lastUpdated: string | null;
@@ -244,19 +249,47 @@ export interface HoldingDto {
   /** Phase 04.1:基準幣 ISO 代碼,與 PortfolioSummaryDto.baseCurrency 同值。 */
   baseCurrency: string;
   /** Phase 04.1:市值換算為基準幣的金額;缺匯率時為 null(該列不計入 summary 總額)。 */
-  marketValueInBase: number | null;
+  marketValueInBase: string | null;
   /**
    * quick-261106-fbs:未實現損益(unrealizedPnl,原幣)以目前匯率換算為基準幣的金額;缺匯率時為 null
    * (與 marketValueInBase 同條件),該列不進任何基準幣排行(例如 Positions 的 Top movers)。
    */
-  unrealizedPnlInBase: number | null;
+  unrealizedPnlInBase: string | null;
   /** Phase 04.1:前收盤價(原幣);無資料時為 null。 */
-  previousClose: number | null;
+  previousClose: string | null;
   /** Phase 04.1:今日價差損益(原幣);無前收盤時為 null。 */
-  dayPricePnl: number | null;
+  dayPricePnl: string | null;
   /** Phase 04.1:今日價差損益比值(非百分比);無前收盤時為 null。 */
-  dayPricePnlRatio: number | null;
+  dayPricePnlRatio: string | null;
+  /**
+   * Phase 5(D-05):今日損益比率的分母(原幣)= 前收時市值 + 今日買入成本(後端 `HoldingDto.dayPnlBasis`);
+   * 供後端 summary 折算總額比率用。前端不以它重算比率(D-04),只為與後端逐欄同形;缺值時為 null。
+   */
+  dayPnlBasis: string | null;
 }
+
+/** {@link HoldingDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type HoldingDecimalKey =
+  | 'totalQuantity'
+  | 'avgCost'
+  | 'costBasis'
+  | 'marketPrice'
+  | 'marketValue'
+  | 'realizedPnl'
+  | 'unrealizedPnl'
+  | 'roi'
+  | 'marketValueInBase'
+  | 'unrealizedPnlInBase'
+  | 'previousClose'
+  | 'dayPricePnl'
+  | 'dayPricePnlRatio'
+  | 'dayPnlBasis';
+
+/**
+ * domain:單一持倉(由 `portfolioApi.toHolding` 產生)。股數 / 價格 / 金額 / 比值為 Decimal(nullable 欄位維持
+ * nullable),其餘字串欄位原樣;頁面與元件只拿這個型別,不拿 wire DTO(Phase 5 D-08)。
+ */
+export type Holding = DecimalFields<HoldingDto, HoldingDecimalKey>;
 
 /** 對應後端 TradeResponse。 */
 export interface TradeDto {

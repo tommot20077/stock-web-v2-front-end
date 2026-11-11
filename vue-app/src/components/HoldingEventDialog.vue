@@ -577,6 +577,7 @@ import type { MarketDayRule } from '../marketDate';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
 import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
+import type { Decimal } from '../services/decimal';
 import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
@@ -585,12 +586,16 @@ export type HoldingEventMode = 'cashDividend' | 'stockDividend' | 'split';
 
 /** 從持倉開啟時開啟者傳入的持倉摘要。 */
 export interface HoldingEventHolding {
-  totalQuantity: number;
+  /**
+   * 目前持股;API 路徑是 domain `Holding.totalQuantity`(Decimal,Phase 5 D-08)、mock 路徑是 `Position.qty`(number)。
+   * 對話框只經 `fmtQuantity` 顯示、不做任何運算(Phase 3 D-04),兩種型別顯示規則相同。
+   */
+  totalQuantity: Decimal | number;
   currency?: string;
   name?: string;
-  /** `HoldingDto.assetType`(大寫字串);可缺。 */
+  /** `Holding.assetType`(大寫字串);可缺。 */
   assetType?: string | null;
-  /** `HoldingDto.market`(後端 2026-11-07 新增);null / 缺值 / 無法辨識 → UTC fallback。 */
+  /** `Holding.market`(後端 2026-11-07 新增);null / 缺值 / 無法辨識 → UTC fallback。 */
   market?: string | null;
 }
 
@@ -601,7 +606,7 @@ const props = withDefaults(defineProps<{
   symbol?: string | null;
   /**
    * 開啟者已知的持倉;只顯示、不計算(Phase 3 D-04)。
-   * `assetType` / `market` 取自 `HoldingDto`(quick-261107-1j4 E2),只用來決定除權日的「市場今天」;缺值 → UTC fallback。
+   * `assetType` / `market` 取自 `Holding`(quick-261107-1j4 E2),只用來決定除權日的「市場今天」;缺值 → UTC fallback。
    */
   holding?: HoldingEventHolding | null;
   initialMode?: HoldingEventMode;
