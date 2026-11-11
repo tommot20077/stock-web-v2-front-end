@@ -691,6 +691,76 @@ describe('CashEntryDialog — 出金超額提示(D-01 / U-16:資訊,不阻擋)',
   });
 });
 
+// Phase 5 D-08:表單輸入 → parseDecimalInput → Decimal → adapter toWire → 請求字串,全程不經 JS number。
+describe('CashEntryDialog — 金額以 Decimal 送出字串(D-05 / D-08)', () => {
+  it('sendsAFullPrecisionAmountVerbatimAsAJsonString', async () => {
+    const { fetchImpl } = await mountDialog();
+
+    await typeAmount('123456789012.12345678');
+    await submit();
+
+    const body = entryBodies(fetchImpl)[0];
+    expect(body.amount).toBe("123456789012.12345678");
+    // 原始 body 也必須是字串字面,不是 JSON number。
+    expect(String(entryCalls(fetchImpl)[0][1]?.body)).toContain('"amount":"123456789012.12345678"');
+  });
+
+  it('sendsTheSmallestUnitInPlainNotation', async () => {
+    const { fetchImpl } = await mountDialog();
+
+    await typeAmount('0.00000001');
+    await submit();
+
+    expect(entryBodies(fetchImpl)[0].amount).toBe('0.00000001');
+  });
+
+  it('retriesWithTheSameKeyAndAByteIdenticalPayload', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => {
+          calls += 1;
+          return calls === 1 ? entryFailure('INTERNAL_ERROR', { status: 500 }) : entryResponse();
+        },
+      }),
+    });
+
+    await typeAmount('123456789012.12345678');
+    await submit();
+    await submit();
+
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+    const raw = entryCalls(fetchImpl).map(([, init]) => String(init?.body));
+    expect(raw[1]).toBe(raw[0]);
+  });
+
+  it('reversesATinyOriginalAmountWithoutScientificNotation', async () => {
+    const tiny = { ...ORIGINAL, amount: '0.00000001' };
+    const { fetchImpl } = await mountDialog({ props: { reversalOf: toCashEntry(tiny) } });
+
+    await submit();
+
+    expect(entryBodies(fetchImpl)[0].amount).toBe('0.00000001');
+    expect(cashEntryDialogSource).toContain('toWire(original.amount)');
+    expect(cashEntryDialogSource).not.toContain('String(original.amount)');
+  });
+
+  it('comparesAFractionalWithdrawalAgainstTheBalanceWithDecimal', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: [{ currency: 'USD', amount: 100 }] } });
+
+    await typeAmount('100.00000000');
+    expect(testid('cash-withdraw-over-balance'), '尾零不改變值:等於餘額不算超額').toBeNull();
+    await typeAmount('100.00000001');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+  });
+
+  it('parsesTheAmountWithParseDecimalInputInsteadOfNumber', () => {
+    expect(cashEntryDialogSource).toContain('parseDecimalInput(amount.value)');
+    expect(cashEntryDialogSource).not.toMatch(/Number\(amount\.value/);
+  });
+});
+
 describe('CashEntryDialog — 無障礙與初始狀態(§Accessibility Contract)', () => {
   it('focusesTheAmountOnOpenAndLabelsTheDialog', async () => {
     await mountDialog();

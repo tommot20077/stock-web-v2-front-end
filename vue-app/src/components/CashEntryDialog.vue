@@ -200,7 +200,7 @@
           >{{ t(lang, 'recordingTrade') }}</p>
         </div>
 
-        <!-- RESULT:只渲染後端回傳的 CashEntryDto,不顯示表單值(D-09) -->
+        <!-- RESULT:只渲染後端回傳的分錄(CashEntryDto 經 toCashEntry),不顯示表單值(D-09) -->
         <div v-else class="body result" data-testid="cash-result">
           <div class="check" aria-hidden="true">✓</div>
           <h2 ref="resultTitle" class="result-ttl" tabindex="-1">{{ resultTitleText }}</h2>
@@ -302,7 +302,7 @@ import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
 import type { CashEntry, CashEntryType } from '../services/cashApi';
-import { numberToWire, parseDecimal } from '../services/decimal';
+import { numberToWire, parseDecimal, parseDecimalInput, toWire, ZERO } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = withDefaults(defineProps<{
@@ -389,7 +389,8 @@ function resetForm() {
   // 方向相反、幣別與金額照原紀錄:DB 層會擋不一致,UI 自動帶值讓它不可能送出不一致的組合(D-25)。
   type.value = original ? (original.type === 'DEPOSIT' ? 'WITHDRAWAL' : 'DEPOSIT') : props.initialType;
   currency.value = original ? original.currency : props.initialCurrency;
-  amount.value = original ? String(original.amount) : '';
+  // 沖銷預填以 toWire 轉字串(一般記號):String(Decimal) 在極小值會出現 1e-8 這種科學記號。
+  amount.value = original ? toWire(original.amount) : '';
   note.value = '';
   // 預設 = 現在(上限本身由 useNow 驅動的 computed 提供,這裡只寫輸入值)。
   occurredAt.value = toLocalInputValue(new Date(Date.now()));
@@ -457,19 +458,21 @@ const resultSubText = computed(() => {
 // =================== 前端自檢(UI-SPEC §3 欄位契約) ===================
 // 後端 `@DecimalMax` / `@Digits` 才是權威;這裡只是在送出前把「必定被拒」的輸入擋下並說明原因。
 // 上限與小數位數與 `cashErrAmount` 的靜態文案一致(文案不從錯誤訊息解析)。
-const AMOUNT_MAX = 1_000_000_000_000;
+// Phase 5 D-08:金額輸入直接解析成 Decimal(`parseDecimalInput`),比較與位數檢查都在 Decimal 內做,
+// 送出時由 adapter 以 toWire 轉成字串 —— 全程不經 JS number,`123456789012.12345678` 原樣送出。
+const AMOUNT_MAX = parseDecimal('1000000000000');
 const AMOUNT_MAX_DECIMALS = 8;
+// 只收一般記號的正數字面:big.js 本身也接受 `1e5` / `-1`,這兩種輸入在這個欄位一律視為錯誤。
 const AMOUNT_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
 
-const parsedAmount = computed(() => Number(amount.value.trim()));
+const parsedAmount = computed(() => parseDecimalInput(amount.value));
 
 const amountValid = computed(() => {
-  const text = amount.value.trim();
-  if (!AMOUNT_PATTERN.test(text)) return false;
-  const decimals = text.includes('.') ? text.split('.')[1].length : 0;
-  if (decimals > AMOUNT_MAX_DECIMALS) return false;
-  const value = Number(text);
-  return Number.isFinite(value) && value > 0 && value <= AMOUNT_MAX;
+  const value = parsedAmount.value;
+  if (value === null || !AMOUNT_PATTERN.test(amount.value.trim())) return false;
+  // 小數位數:捨入到 8 位後仍相等 ⇔ 有效小數位 ≤ 8(尾零不算,與 BigDecimal compareTo 語意一致)。
+  if (!value.round(AMOUNT_MAX_DECIMALS).eq(value)) return false;
+  return value.gt(ZERO) && value.lte(AMOUNT_MAX);
 });
 
 /**
@@ -498,8 +501,12 @@ const canSubmit = computed(() => {
 /** 出金超過該幣別目前餘額 —— 只決定提示是否顯示,不顯示差額,前端不做會計。 */
 const overBalance = computed(() => {
   if (isReversal.value || type.value !== 'WITHDRAWAL' || !props.balances || !amountValid.value) return false;
-  const balance = props.balances.find(b => b.currency === currency.value)?.amount ?? 0;
-  return parsedAmount.value > balance;
+  const amountValue = parsedAmount.value;
+  if (amountValue === null) return false;
+  // 型別閉包交接點(05-16 → 05-17):餘額 `CashBalanceDto.amount` 屬 summary,05-17 才轉 Decimal;
+  // 在此之前只在這一處把既有 number 轉成 Decimal 比較(方向一律 number → Decimal)。05-17 刪除此轉換。
+  const balance = parseDecimal(numberToWire(props.balances.find(b => b.currency === currency.value)?.amount ?? 0));
+  return amountValue.gt(balance);
 });
 
 // =================== 欄位級錯誤(後端 fields + 前端自檢共用同一組節點) ===================
@@ -595,7 +602,9 @@ function ensureIdempotencyKey(): string {
 async function submitEntry() {
   if (submitting.value) return;
   submitError.value = null;
-  if (!canSubmit.value || (!isReversal.value && !isOccurredAtValidNow())) {
+  // 沖銷直接沿用原紀錄的 Decimal,不經字串往返;一般入出金取解析後的輸入。adapter 以 toWire 送出。
+  const entryAmount = props.reversalOf ? props.reversalOf.amount : parsedAmount.value;
+  if (!canSubmit.value || entryAmount === null || (!isReversal.value && !isOccurredAtValidNow())) {
     // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時讓欄位錯誤可見,不得靜默。
     touched.amount = true;
     touched.occurredAt = true;
@@ -607,8 +616,7 @@ async function submitEntry() {
     const entry = await getRuntimeApiClients().cash.createEntry({
       type: type.value,
       currency: currency.value,
-      // 沖銷直接沿用原紀錄的 Decimal,不經字串往返;adapter 以 toWire 送出(一般記號)。
-      amount: props.reversalOf ? props.reversalOf.amount : parseDecimal(numberToWire(parsedAmount.value)),
+      amount: entryAmount,
       note: note.value ? note.value : null,
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       // 沖銷不送發生時間(U-04):由後端帶 now()。

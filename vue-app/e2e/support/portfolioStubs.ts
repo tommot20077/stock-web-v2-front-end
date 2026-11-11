@@ -49,27 +49,30 @@ function entry(
   };
 }
 
-/** 12 筆入出金:含 1 筆已沖銷的原紀錄、1 筆沖銷紀錄、1 筆 500 字備註(落在第一頁)。 */
+/**
+ * 12 筆入出金:含 1 筆已沖銷的原紀錄、1 筆沖銷紀錄、1 筆 500 字備註(落在第一頁)。
+ * 金額為十進位字串(Phase 5 D-05 / D-08:後端 BigDecimal 以字串序列化,前端 mapper 遇 number 會丟錯)。
+ */
 export const CASH_ENTRIES: CashEntryDto[] = [
-  entry(0, { type: 'DEPOSIT', currency: 'TWD', amount: 123456789, note: 'Initial deposit' }),
+  entry(0, { type: 'DEPOSIT', currency: 'TWD', amount: '123456789', note: 'Initial deposit' }),
   entry(1, {
     type: 'DEPOSIT',
     currency: 'TWD',
-    amount: 500000,
+    amount: '500000',
     note: 'Reversal of mistaken withdrawal',
     reversalOfId: 'layout-cash-4',
     reversalOfOccurredAt: '2026-10-25T09:00:00+08:00',
   }),
-  entry(2, { type: 'WITHDRAWAL', currency: 'USD', amount: 20000, note: LONG_NOTE }),
-  entry(3, { type: 'WITHDRAWAL', currency: 'TWD', amount: 500000, note: 'Mistaken withdrawal', reversed: true }),
-  entry(4, { type: 'DEPOSIT', currency: 'EUR', amount: 1200.5, note: '歐元入金' }),
-  entry(5, { type: 'DEPOSIT', currency: 'JPY', amount: 3000000, note: null }),
-  entry(6, { type: 'WITHDRAWAL', currency: 'JPY', amount: 150000, note: 'Rent' }),
-  entry(7, { type: 'DEPOSIT', currency: 'USD', amount: 8800.25, note: 'Salary' }),
-  entry(8, { type: 'WITHDRAWAL', currency: 'EUR', amount: 300, note: null }),
-  entry(9, { type: 'DEPOSIT', currency: 'TWD', amount: 42, note: 'Tiny' }),
-  entry(10, { type: 'DEPOSIT', currency: 'USD', amount: 100, note: 'Older deposit' }),
-  entry(11, { type: 'WITHDRAWAL', currency: 'TWD', amount: 1000, note: 'Oldest' }),
+  entry(2, { type: 'WITHDRAWAL', currency: 'USD', amount: '20000', note: LONG_NOTE }),
+  entry(3, { type: 'WITHDRAWAL', currency: 'TWD', amount: '500000', note: 'Mistaken withdrawal', reversed: true }),
+  entry(4, { type: 'DEPOSIT', currency: 'EUR', amount: '1200.5', note: '歐元入金' }),
+  entry(5, { type: 'DEPOSIT', currency: 'JPY', amount: '3000000', note: null }),
+  entry(6, { type: 'WITHDRAWAL', currency: 'JPY', amount: '150000', note: 'Rent' }),
+  entry(7, { type: 'DEPOSIT', currency: 'USD', amount: '8800.25', note: 'Salary' }),
+  entry(8, { type: 'WITHDRAWAL', currency: 'EUR', amount: '300', note: null }),
+  entry(9, { type: 'DEPOSIT', currency: 'TWD', amount: '42', note: 'Tiny' }),
+  entry(10, { type: 'DEPOSIT', currency: 'USD', amount: '100', note: 'Older deposit' }),
+  entry(11, { type: 'WITHDRAWAL', currency: 'TWD', amount: '1000', note: 'Oldest' }),
 ];
 
 const CASH_BALANCES: CashBalanceDto[] = [
@@ -495,7 +498,7 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
       await options.cashPostGate;
       await route.fulfill({
         status: 201,
-        json: envelope(entry(0, { id: 'layout-cash-new', type: 'WITHDRAWAL', currency: 'TWD', amount: 1 })),
+        json: envelope(entry(0, { id: 'layout-cash-new', type: 'WITHDRAWAL', currency: 'TWD', amount: '1' })),
       });
       return;
     }
