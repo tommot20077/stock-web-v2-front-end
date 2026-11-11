@@ -346,6 +346,41 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
   });
 
+  it('權重以 Decimal 計算(Phase 5 D-08):totalMarketValue 字串為 0 / 尾零 0 時回 —;HALF_UP 到 1 位', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'ZERO', marketValueInBase: 5 })],
+      summaryWith({ totalMarketValue: '0.00000000', holdingCount: 1 }),
+    );
+    expect(rows()[0].querySelector('[data-testid="positions-weight"]')!.textContent?.trim()).toBe('—');
+    expect(parseFloat(rows()[0].querySelector<HTMLElement>('.bar-fill')!.style.width)).toBe(0);
+    unmountAll();
+
+    // 1 / 3 → round(8) = 0.33333333 → 33.3%;0.0045 / 3 = 0.0015 → 0.15% → HALF_UP 到 1 位 = 0.2%
+    // (同一個值經 JS number:0.15.toFixed(1) === '0.1',binary 誤差會往下捨)
+    await mountApiWith(
+      [
+        holding({ symbol: 'ONE', marketValue: 3, marketValueInBase: 1 }),
+        holding({ symbol: 'TINY', marketValue: 2, marketValueInBase: 0.0045 }),
+      ],
+      summaryWith({ totalMarketValue: '3', holdingCount: 2 }),
+    );
+    const weightOf = (i: number) => rows()[i].querySelector('[data-testid="positions-weight"]')!.textContent?.trim();
+    expect(weightOf(0)).toBe('33.3%');
+    expect(weightOf(1)).toBe('0.2%');
+    expect(parseFloat(rows()[0].querySelector<HTMLElement>('.bar-fill')!.style.width)).toBeCloseTo(33.333333, 5);
+  });
+
+  it('標題列總市值以 Decimal 顯示超過 double 精度的金額', async () => {
+    await mountApiWith(
+      [holding({ symbol: 'ZZA', marketValueInBase: 1 })],
+      summaryWith({ totalMarketValue: '9007199254740993', holdingCount: 1 }),
+    );
+    const header = requireTestid('positions-header-summary');
+    expect(header.textContent).toContain('9,007,199,254,740,993');
+    expect(header.querySelector('.stat-ccy')?.textContent).toBe('TWD');
+    expect(allTestids('positions-stat')[0].textContent).toContain('9,007,199,254,740,993');
+  });
+
   it('權重表頭排序用基準幣權重,null 不論升降冪都排最後', async () => {
     await mountApiWith(
       [
