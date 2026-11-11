@@ -76,51 +76,51 @@ export const CASH_ENTRIES: CashEntryDto[] = [
 ];
 
 const CASH_BALANCES: CashBalanceDto[] = [
-  { currency: 'TWD', amount: 987654321.5 },
-  { currency: 'USD', amount: 123456.78 },
-  { currency: 'EUR', amount: -4321.09 },
-  { currency: 'JPY', amount: 98765432 },
+  { currency: 'TWD', amount: '987654321.5' },
+  { currency: 'USD', amount: '123456.78' },
+  { currency: 'EUR', amount: '-4321.09' },
+  { currency: 'JPY', amount: '98765432' },
 ];
 
 const ALLOCATION: AllocationSliceDto[] = [
-  { category: 'STOCK', value: 600000000, weight: 0.4861 },
-  { category: 'CRYPTO', value: 250000000, weight: 0.2025 },
-  { category: 'FX', value: 120000000, weight: 0.0972 },
-  { category: 'BOND', value: 90000000, weight: 0.0729 },
-  { category: 'MYSTERY_CATEGORY_FROM_FUTURE_BACKEND', value: 80000000, weight: 0.0648 },
+  { category: 'STOCK', value: '600000000', weight: '0.4861' },
+  { category: 'CRYPTO', value: '250000000', weight: '0.2025' },
+  { category: 'FX', value: '120000000', weight: '0.0972' },
+  { category: 'BOND', value: '90000000', weight: '0.0729' },
+  { category: 'MYSTERY_CATEGORY_FROM_FUTURE_BACKEND', value: '80000000', weight: '0.0648' },
 ];
 
 const SECTOR_ALLOCATION: SectorAllocationDto[] = [
-  { sector: 'Semiconductors and Electronic Components Manufacturing', value: 300000000, weight: 0.243, holdingCount: 3, unrealizedPnl: 12345678.9 },
-  { sector: 'Financial Services', value: 200000000, weight: 0.162, holdingCount: 2, unrealizedPnl: -2345678.12 },
-  { sector: 'Technology', value: 150000000, weight: 0.121, holdingCount: 1, unrealizedPnl: 1000000 },
-  { sector: 'Energy', value: 100000000, weight: 0.081, holdingCount: 1, unrealizedPnl: 0 },
-  { sector: 'Consumer Staples', value: 50000000, weight: 0.04, holdingCount: 1, unrealizedPnl: 50000 },
-  { sector: null, value: 20000000, weight: 0.016, holdingCount: 1, unrealizedPnl: -10000 },
+  { sector: 'Semiconductors and Electronic Components Manufacturing', value: '300000000', weight: '0.243', holdingCount: 3, unrealizedPnl: '12345678.9' },
+  { sector: 'Financial Services', value: '200000000', weight: '0.162', holdingCount: 2, unrealizedPnl: '-2345678.12' },
+  { sector: 'Technology', value: '150000000', weight: '0.121', holdingCount: 1, unrealizedPnl: '1000000' },
+  { sector: 'Energy', value: '100000000', weight: '0.081', holdingCount: 1, unrealizedPnl: '0' },
+  { sector: 'Consumer Staples', value: '50000000', weight: '0.04', holdingCount: 1, unrealizedPnl: '50000' },
+  { sector: null, value: '20000000', weight: '0.016', holdingCount: 1, unrealizedPnl: '-10000' },
 ];
 
 const SUMMARY: PortfolioSummaryDto = {
-  totalMarketValue: 1140000000,
-  totalCostBasis: 1000000000,
-  realizedPnl: 12345678.9,
-  unrealizedPnl: 140000000,
-  totalPnl: 152345678.9,
-  roi: 0.1523,
+  totalMarketValue: '1140000000',
+  totalCostBasis: '1000000000',
+  realizedPnl: '12345678.9',
+  unrealizedPnl: '140000000',
+  totalPnl: '152345678.9',
+  roi: '0.1523',
   holdingCount: 6,
   baseCurrency: 'TWD',
   fxExcludedCount: 2,
   unconvertedCurrencies: ['EUR', 'JPY'],
-  dayPricePnl: -1234567.89,
-  dayPricePnlRatio: -0.0104,
+  dayPricePnl: '-1234567.89',
+  dayPricePnlRatio: '-0.0104',
   dayPnlExcludedCount: 3,
-  cash: 1087654321.5,
-  totalEquity: 1234567890.12,
+  cash: '1087654321.5',
+  totalEquity: '1234567890.12',
   cashBalances: CASH_BALANCES,
   allocation: ALLOCATION,
   sectorAllocation: SECTOR_ALLOCATION,
   // Phase 04.2(DIV-02):有股利收入且有預扣稅 → Overview KPI #4 / Positions 總損益卡都渲染最長的 dividendIncomeLineWithTax
-  dividendIncome: 123456789.12,
-  dividendTaxWithheld: 30864197.28,
+  dividendIncome: '123456789.12',
+  dividendTaxWithheld: '30864197.28',
 };
 
 function holding(

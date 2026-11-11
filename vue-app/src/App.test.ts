@@ -51,14 +51,28 @@ describe('App session shell', () => {
       // Phase 3(D-14):API mode 的 Overview KPI 來自 backend summary,不再有合成資料;
       // 「頁面內容有渲染」這個斷言因此需要 portfolio 端點的 fixture 才成立。
       if (path.includes('/portfolio/summary')) {
+        // Phase 5 D-05:BigDecimal 欄位是 JSON 字串;mapper 要求完整的後端形狀。
         return json(apiSuccess({
-          totalMarketValue: 1234567.89,
-          totalCostBasis: 1000000,
-          realizedPnl: 0,
-          unrealizedPnl: 234567.89,
-          totalPnl: 234567.89,
-          roi: 0.2345,
+          totalMarketValue: '1234567.89',
+          totalCostBasis: '1000000',
+          realizedPnl: '0',
+          unrealizedPnl: '234567.89',
+          totalPnl: '234567.89',
+          roi: '0.2345',
           holdingCount: 4,
+          baseCurrency: 'TWD',
+          fxExcludedCount: 0,
+          unconvertedCurrencies: [],
+          dayPricePnl: null,
+          dayPricePnlRatio: null,
+          dayPnlExcludedCount: 4,
+          cash: '0',
+          totalEquity: '1234567.89',
+          cashBalances: [],
+          allocation: [{ category: 'STOCK', value: '1234567.89', weight: '1' }],
+          sectorAllocation: [],
+          dividendIncome: '0',
+          dividendTaxWithheld: '0',
         }));
       }
       if (path.includes('/trades')) {
@@ -308,10 +322,10 @@ describe('App — 現金頁股利連結導到 Trades 股利頁籤(04.2-21 / U-11
     vi.stubEnv('VITE_DATA_MODE', 'api');
     resetRuntimeApiClientsForTests();
     const summary = {
-      totalMarketValue: 0, totalCostBasis: 0, realizedPnl: 0, unrealizedPnl: 0, totalPnl: 0, roi: 0, holdingCount: 0,
+      totalMarketValue: '0', totalCostBasis: '0', realizedPnl: '0', unrealizedPnl: '0', totalPnl: '0', roi: '0', holdingCount: 0,
       baseCurrency: 'TWD', fxExcludedCount: 0, unconvertedCurrencies: [], dayPricePnl: null, dayPricePnlRatio: null,
-      dayPnlExcludedCount: 0, cash: 0, totalEquity: 0, cashBalances: [], allocation: [], sectorAllocation: [],
-      dividendIncome: 0, dividendTaxWithheld: 0,
+      dayPnlExcludedCount: 0, cash: '0', totalEquity: '0', cashBalances: [], allocation: [], sectorAllocation: [],
+      dividendIncome: '0', dividendTaxWithheld: '0',
     };
     const emptyPage = { items: [], page: 0, size: 10, totalElements: 0, totalPages: 0 };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

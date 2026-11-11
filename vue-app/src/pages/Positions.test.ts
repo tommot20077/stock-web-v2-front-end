@@ -8,6 +8,7 @@ import { fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, fmtSignedMoneyAmount } from '../moneyFormat';
 import { t, tf } from '../i18n';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
+import { parseDecimal } from '../services/decimal';
 import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
@@ -65,28 +66,28 @@ const TRUTH_HOLDING: HoldingDto = {
  * holdingCount = 7 但只有一筆持倉列 —— 標題列若改用 holdings.length 就會紅。
  */
 const TRUTH_SUMMARY: PortfolioSummaryDto = {
-  totalMarketValue: 4242,
-  totalCostBasis: 3131,
-  realizedPnl: 222,
-  unrealizedPnl: 1111,
-  totalPnl: 1333,
-  roi: 0.4258,
+  totalMarketValue: '4242',
+  totalCostBasis: '3131',
+  realizedPnl: '222',
+  unrealizedPnl: '1111',
+  totalPnl: '1333',
+  roi: '0.4258',
   holdingCount: 7,
   // Phase 04.1 欄位(04.1-11 只補型別;值刻意不等於 mock 預設,讓後續 plan 的「資料來自 API」斷言可沿用)
   baseCurrency: 'TWD',
   fxExcludedCount: 0,
   unconvertedCurrencies: [],
-  dayPricePnl: 4321,
-  dayPricePnlRatio: 0.0104,
+  dayPricePnl: '4321',
+  dayPricePnlRatio: '0.0104',
   dayPnlExcludedCount: 0,
-  cash: 84210.5,
-  totalEquity: 4242,
-  cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
-  allocation: [{ category: 'STOCK', value: 4242, weight: 1 }],
-  sectorAllocation: [{ sector: 'Tech', value: 4242, weight: 1, holdingCount: 1, unrealizedPnl: 1111 }],
+  cash: '84210.5',
+  totalEquity: '4242',
+  cashBalances: [{ currency: 'TWD', amount: '84210.5' }],
+  allocation: [{ category: 'STOCK', value: '4242', weight: '1' }],
+  sectorAllocation: [{ sector: 'Tech', value: '4242', weight: '1', holdingCount: 1, unrealizedPnl: '1111' }],
   // Phase 04.2 欄位(04.2-16 只補型別)
-  dividendIncome: 0,
-  dividendTaxWithheld: 0,
+  dividendIncome: '0',
+  dividendTaxWithheld: '0',
 };
 
 function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
@@ -119,12 +120,12 @@ function holding(over: Partial<HoldingDto> & { symbol: string }): HoldingDto {
 
 function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryDto {
   return {
-    totalMarketValue: 0,
-    totalCostBasis: 0,
-    realizedPnl: 0,
-    unrealizedPnl: 0,
-    totalPnl: 0,
-    roi: 0,
+    totalMarketValue: '0',
+    totalCostBasis: '0',
+    realizedPnl: '0',
+    unrealizedPnl: '0',
+    totalPnl: '0',
+    roi: '0',
     holdingCount: 0,
     baseCurrency: 'TWD',
     fxExcludedCount: 0,
@@ -132,13 +133,13 @@ function summaryWith(over: Partial<PortfolioSummaryDto> = {}): PortfolioSummaryD
     dayPricePnl: null,
     dayPricePnlRatio: null,
     dayPnlExcludedCount: 0,
-    cash: 0,
-    totalEquity: 0,
+    cash: '0',
+    totalEquity: '0',
     cashBalances: [],
     allocation: [],
     sectorAllocation: [],
-    dividendIncome: 0,
-    dividendTaxWithheld: 0,
+    dividendIncome: '0',
+    dividendTaxWithheld: '0',
     ...over,
   };
 }
@@ -328,7 +329,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'TWD1', currency: 'TWD', marketValue: 35164, marketValueInBase: 35164 }),
         holding({ symbol: 'NOFX', currency: 'EUR', marketValue: 777, marketValueInBase: null }),
       ],
-      summaryWith({ totalMarketValue: 100000, holdingCount: 3, fxExcludedCount: 1 }),
+      summaryWith({ totalMarketValue: '100000', holdingCount: 3, fxExcludedCount: 1 }),
     );
 
     // 預設依 marketValue 降序:TWD1(35164)、USD1(2000)、NOFX(777)
@@ -352,7 +353,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'BIG', marketValue: 5, marketValueInBase: 60000 }),
         holding({ symbol: 'SML', marketValue: 4, marketValueInBase: 10000 }),
       ],
-      summaryWith({ totalMarketValue: 100000, holdingCount: 3 }),
+      summaryWith({ totalMarketValue: '100000', holdingCount: 3 }),
     );
 
     click(headerCell(t('en', 'weight')));
@@ -370,7 +371,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'AAA', priceTime: '2026-07-24T13:45:00Z' }),
         holding({ symbol: 'BBB', priceTime: null }),
       ],
-      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
     );
 
     const stamps = allTestids('positions-price-time');
@@ -392,23 +393,23 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
     // 舊:`$4,242` / `+$1,111` / `+$222` / `+$1,333` / `$3,131`;新:裸數字 + summary.baseCurrency 代碼。
     const ccyOf = (i: number) => stats[i].querySelector('.stat-ccy')?.textContent;
     expect(text[0]).toContain(t('en', 'mktValue'));
-    expect(text[0]).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
+    expect(text[0]).toContain(fmtMoneyAmount(parseDecimal(TRUTH_SUMMARY.totalMarketValue), 'TWD', 0));
     expect(ccyOf(0)).toBe('TWD');
     expect(text[1]).toContain(t('en', 'unrealized'));
-    expect(text[1]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.unrealizedPnl, 'TWD', 0));
+    expect(text[1]).toContain(fmtSignedMoneyAmount(parseDecimal(TRUTH_SUMMARY.unrealizedPnl), 'TWD', 0));
     expect(ccyOf(1)).toBe('TWD');
     expect(text[2]).toContain(t('en', 'roi'));
     // roi 是比值,×100 純屬顯示格式化(D-04 允許);比率卡沒有幣別
-    expect(text[2]).toContain(fmtPct(TRUTH_SUMMARY.roi * 100));
+    expect(text[2]).toContain(fmtPct(0.4258 * 100)); // TRUTH_SUMMARY.roi = '0.4258'
     expect(ccyOf(2)).toBeUndefined();
     expect(text[3]).toContain(t('en', 'realizedPnl'));
-    expect(text[3]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.realizedPnl, 'TWD', 0));
+    expect(text[3]).toContain(fmtSignedMoneyAmount(parseDecimal(TRUTH_SUMMARY.realizedPnl), 'TWD', 0));
     expect(ccyOf(3)).toBe('TWD');
     expect(text[4]).toContain(t('en', 'totalPnlLabel'));
-    expect(text[4]).toContain(fmtSignedMoneyAmount(TRUTH_SUMMARY.totalPnl, 'TWD', 0));
+    expect(text[4]).toContain(fmtSignedMoneyAmount(parseDecimal(TRUTH_SUMMARY.totalPnl), 'TWD', 0));
     expect(ccyOf(4)).toBe('TWD');
     expect(text[5]).toContain(t('en', 'costBasis'));
-    expect(text[5]).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalCostBasis, 'TWD', 0));
+    expect(text[5]).toContain(fmtMoneyAmount(parseDecimal(TRUTH_SUMMARY.totalCostBasis), 'TWD', 0));
     expect(ccyOf(5)).toBe('TWD');
     for (const card of text) expect(card).not.toContain('$');
 
@@ -435,7 +436,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
       [TRUTH_HOLDING],
       {
         ...TRUTH_SUMMARY,
-        sectorAllocation: [{ sector: 'Semiconductors-API', value: 4242, weight: 1, holdingCount: 1, unrealizedPnl: 1111 }],
+        sectorAllocation: [{ sector: 'Semiconductors-API', value: '4242', weight: '1', holdingCount: 1, unrealizedPnl: '1111' }],
       },
     );
 
@@ -473,7 +474,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'ZD', unrealizedPnl: 3, unrealizedPnlInBase: -50 }),
         holding({ symbol: 'ZE', unrealizedPnl: -88888, unrealizedPnlInBase: 7 }),
       ],
-      summaryWith({ totalMarketValue: 5, holdingCount: 5 }),
+      summaryWith({ totalMarketValue: '5', holdingCount: 5 }),
     );
 
     expect(moverSymbols()).toEqual(['ZB', 'ZC', 'ZD', 'ZA']);
@@ -486,7 +487,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'DN', currency: 'USD', unrealizedPnl: 4, unrealizedPnlInBase: -1200, roi: -0.2 }),
         holding({ symbol: 'NOFX', currency: 'EUR', unrealizedPnl: 999999, unrealizedPnlInBase: null, marketValueInBase: null }),
       ],
-      summaryWith({ totalMarketValue: 5, holdingCount: 3, fxExcludedCount: 1, unconvertedCurrencies: ['EUR'] }),
+      summaryWith({ totalMarketValue: '5', holdingCount: 3, fxExcludedCount: 1, unconvertedCurrencies: ['EUR'] }),
     );
 
     expect(moverSymbols()).toEqual(['DN', 'UP']);
@@ -504,7 +505,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'NA', currency: 'EUR', unrealizedPnlInBase: null, marketValueInBase: null }),
         holding({ symbol: 'NB', currency: 'JPY', unrealizedPnlInBase: null, marketValueInBase: null }),
       ],
-      summaryWith({ totalMarketValue: 0, holdingCount: 2, fxExcludedCount: 2, unconvertedCurrencies: ['EUR', 'JPY'] }),
+      summaryWith({ totalMarketValue: '0', holdingCount: 2, fxExcludedCount: 2, unconvertedCurrencies: ['EUR', 'JPY'] }),
     );
 
     expect(document.body.textContent).toContain(t('en', 'topMovers'));
@@ -516,7 +517,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('沒有被排除的持倉時不顯示「未列入」提示', async () => {
     await mountApiWith(
       [holding({ symbol: 'ZA', unrealizedPnlInBase: 10 })],
-      summaryWith({ totalMarketValue: 1, holdingCount: 1 }),
+      summaryWith({ totalMarketValue: '1', holdingCount: 1 }),
     );
 
     expect(moverSymbols()).toEqual(['ZA']);
@@ -530,7 +531,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
         holding({ symbol: 'BBB', marketValue: 20, unrealizedPnl: -500 }),
         holding({ symbol: 'CCC', marketValue: 10, unrealizedPnl: 300 }),
       ],
-      summaryWith({ totalMarketValue: 60, holdingCount: 3 }),
+      summaryWith({ totalMarketValue: '60', holdingCount: 3 }),
     );
 
     // 預設依 marketValue 降序
@@ -551,7 +552,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
 
     const headerEl = requireTestid('positions-header-summary');
     const header = headerEl.textContent ?? '';
-    expect(header).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
+    expect(header).toContain(fmtMoneyAmount(parseDecimal(TRUTH_SUMMARY.totalMarketValue), 'TWD', 0));
     expect(headerEl.querySelector('.stat-ccy')?.textContent).toBe('TWD');
     expect(header).not.toContain('$');
     // holdingCount = 7,而畫面只有 1 列 —— 證明讀後端而非 holdings.length
@@ -569,7 +570,7 @@ describe('Positions — API mode 讀後端真相(D-04 / D-03 / D-01 / D-16)', ()
   it('API mode 持倉列依 apiLastFill 帶 fresh 高亮(Phase 4 D-13,反轉 Phase 3 的鎖定)', async () => {
     await mountApiWith(
       [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
-      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
     );
 
     expect(rows()).toHaveLength(2);
@@ -947,7 +948,7 @@ describe('Positions — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', 
     expect(testid('positions-summary-error')).toBeNull();
     expect(allTestids('positions-stat')).toHaveLength(6);
     // DP-10(04.1-16):舊 `$4,242` → 基準幣裸數字(代碼在獨立 span)
-    expect(allTestids('positions-stat')[0].textContent).toContain(fmtMoneyAmount(TRUTH_SUMMARY.totalMarketValue, 'TWD', 0));
+    expect(allTestids('positions-stat')[0].textContent).toContain(fmtMoneyAmount(parseDecimal(TRUTH_SUMMARY.totalMarketValue), 'TWD', 0));
     expect(requireTestid('positions-refresh-error-code').textContent).toContain('PORTFOLIO_SUMMARY_UNAVAILABLE');
 
     // holdings 區塊:拿到新資料,完全不受 summary 失敗影響
@@ -1051,7 +1052,7 @@ describe('Positions — D-13 fresh 高亮(04-12 / U-12)', () => {
   it('Test 19(U-12):高亮列有非顏色線索的「新」標記', async () => {
     await mountApiWith(
       [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
-      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
     );
 
     notifyTradeCreated(freshTrade('BBB'));
@@ -1108,7 +1109,7 @@ describe('Positions — 「新」標記的清除時機(F-2 / UI-SPEC §9)', () =
   it('Test 21:頁面 unmount 時清除 apiLastFill,重新 mount 不得再帶「新」', async () => {
     const mount = () => mountApiWith(
       [holding({ symbol: 'AAA' }), holding({ symbol: 'BBB' })],
-      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
     );
     await mount();
     notifyTradeCreated(freshTrade('BBB'));
@@ -1142,7 +1143,7 @@ function dayPnlCells(): HTMLElement[] {
 
 describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
   it('API mode 每列顯示原幣帶號金額 + 比率第二行,正值帶 up 色 class,無 $ 無代碼', async () => {
-    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: '50', holdingCount: 2 }));
 
     const cells = dayPnlCells();
     expect(cells).toHaveLength(2);
@@ -1157,7 +1158,7 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
   it('負值帶 dn 色 class 與負號', async () => {
     await mountApiWith(
       [holding({ symbol: 'NEG', dayPricePnl: -40, dayPricePnlRatio: -0.0123 })],
-      summaryWith({ totalMarketValue: 1, holdingCount: 1 }),
+      summaryWith({ totalMarketValue: '1', holdingCount: 1 }),
     );
 
     const cell = dayPnlCells()[0];
@@ -1166,7 +1167,7 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
   });
 
   it('dayPricePnl 為 null:— 為 aria-hidden,螢幕閱讀器讀「未計入」文字,色 fg-dim,不渲染比率行', async () => {
-    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: '50', holdingCount: 2 }));
 
     const cell = dayPnlCells()[1];
     const dash = cell.querySelector('[aria-hidden="true"]');
@@ -1186,7 +1187,7 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
         holding({ symbol: 'LOW', marketValue: 30, dayPricePnl: -10, dayPricePnlRatio: -0.02 }),
         holding({ symbol: 'HIG', marketValue: 20, dayPricePnl: 50, dayPricePnlRatio: 0.05 }),
       ],
-      summaryWith({ totalMarketValue: 90, holdingCount: 3 }),
+      summaryWith({ totalMarketValue: '90', holdingCount: 3 }),
     );
 
     click(headerCell(t('en', 'todayPnl')));
@@ -1214,7 +1215,7 @@ describe('Positions — 今日損益欄(04.1-16 Task 1 / PORT-11)', () => {
   });
 
   it('API mode:表頭 10 欄、每列 td 10 個,今日損益在 P&L 與權重之間,動作欄在最右(04.2-21)', async () => {
-    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: 50, holdingCount: 2 }));
+    await mountApiWith(dayPnlFixture(), summaryWith({ totalMarketValue: '50', holdingCount: 2 }));
 
     const heads = [...document.body.querySelectorAll('thead th')].map(th => th.textContent?.trim() ?? '');
     expect(heads).toHaveLength(10);
@@ -1237,7 +1238,7 @@ describe('Positions — 幣別標籤與說明列(04.1-16 Task 2 / PORT-10)', () 
         holding({ symbol: 'AAA', currency: 'USD' }),
         holding({ symbol: 'BBB', currency: 'JPY' }),
       ],
-      summaryWith({ totalMarketValue: 2, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '2', holdingCount: 2 }),
     );
     notifyTradeCreated(freshTrade('BBB'));
     await flushAsync();
@@ -1253,7 +1254,7 @@ describe('Positions — 幣別標籤與說明列(04.1-16 Task 2 / PORT-10)', () 
   it('currency 為 null:不渲染 ccy-tag,列內無 $,金額照常顯示裸數字(不猜幣別)', async () => {
     await mountApiWith(
       [holding({ symbol: 'OLD', currency: null, marketValue: 1234, marketValueInBase: 1234 })],
-      summaryWith({ totalMarketValue: 1234, holdingCount: 1 }),
+      summaryWith({ totalMarketValue: '1234', holdingCount: 1 }),
     );
 
     expect(allTestids('positions-ccy-tag')).toHaveLength(0);
@@ -1329,7 +1330,7 @@ const NBSP = '\u00a0';
 describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
   // quick-261106-fbs 2e(04.1 IN-04 / T2.8):summary 缺 sectorAllocation(舊後端 / 欄位遺失)時頁面不炸,產業卡為空狀態。
   it('T2.8 summary 缺 sectorAllocation 時頁面不炸、產業卡顯示空狀態', async () => {
-    const legacy = summaryWith({ totalMarketValue: 1, holdingCount: 1 }) as Partial<PortfolioSummaryDto>;
+    const legacy = summaryWith({ totalMarketValue: '1', holdingCount: 1 }) as Partial<PortfolioSummaryDto>;
     delete legacy.sectorAllocation;
     await mountApiWith([holding({ symbol: 'ZZA' })], legacy as PortfolioSummaryDto);
 
@@ -1338,13 +1339,13 @@ describe('Positions — 產業分布卡(04.1-16 Task 3)', () => {
   });
 
   const SECTOR_SUMMARY = summaryWith({
-    totalMarketValue: 100000,
+    totalMarketValue: '100000',
     holdingCount: 4,
     sectorAllocation: [
       // 後端已排序(value 降冪、null 最後);第一組刻意放 null 且最大,驗證前端仍把未分類擺最後
-      { sector: null, value: 70000, weight: 0.7, holdingCount: 1, unrealizedPnl: -500 },
-      { sector: 'Semiconductors-API', value: 20000, weight: 0.2, holdingCount: 2, unrealizedPnl: 1200 },
-      { sector: 'Banks-API', value: 10000, weight: 0.1, holdingCount: 1, unrealizedPnl: 0 },
+      { sector: null, value: '70000', weight: '0.7', holdingCount: 1, unrealizedPnl: '-500' },
+      { sector: 'Semiconductors-API', value: '20000', weight: '0.2', holdingCount: 2, unrealizedPnl: '1200' },
+      { sector: 'Banks-API', value: '10000', weight: '0.1', holdingCount: 1, unrealizedPnl: '0' },
     ],
   });
 
@@ -1498,7 +1499,7 @@ describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-
   it('populated(API):動作欄表頭只有 sr-only 的「動作」,每列一顆帶代號 aria-label 的 btn-ghost-sm', async () => {
     await mountApiWith(
       [holding({ symbol: 'ZZA', marketValueInBase: 3 }), holding({ symbol: 'YYB', marketValueInBase: 1 })],
-      summaryWith({ totalMarketValue: 4, holdingCount: 2 }),
+      summaryWith({ totalMarketValue: '4', holdingCount: 2 }),
     );
 
     const lastTh = [...document.body.querySelectorAll<HTMLElement>('thead th')].pop()!;
@@ -1526,7 +1527,7 @@ describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-
 
   it('populated(API):點動作鈕開啟標的鎖定、預設現金股利的對話框,且不觸發列的下單(@click.stop)', async () => {
     const onOrder = await mountApiWithOrderSpy(routedFetch({
-      summary: () => success(summaryWith({ totalMarketValue: 999, holdingCount: 1 })),
+      summary: () => success(summaryWith({ totalMarketValue: '999', holdingCount: 1 })),
       holdings: () => success([TRUTH_HOLDING]),
     }));
     expect(testid('holding-event-dialog')).toBeNull();
@@ -1566,7 +1567,7 @@ describe('Positions — 列動作「股利與股數調整」(04.2-21 Task 1 / D-
 
   it('E2(API):對話框直接用該列 HoldingDto 的 market / assetType 算市場日期,不額外打 /assets', async () => {
     const fetchMock = routedFetch({
-      summary: () => success(summaryWith({ totalMarketValue: 3, holdingCount: 2 })),
+      summary: () => success(summaryWith({ totalMarketValue: '3', holdingCount: 2 })),
       holdings: () => success([
         holding({ symbol: 'TWA', marketValueInBase: 2, market: 'TW' }),
         holding({ symbol: 'NUL', marketValueInBase: 1, market: null }),
@@ -1627,8 +1628,8 @@ describe('Positions — 股利 / 股數調整寫入後依 cause 重讀(04.2-21 T
     let dividendRecorded = false;
     const fetchMock = routedFetch({
       summary: () => success(dividendRecorded
-        ? summaryWith({ totalPnl: 5000, dividendIncome: 3840, dividendTaxWithheld: 960 })
-        : summaryWith({ totalPnl: 1160 })),
+        ? summaryWith({ totalPnl: '5000', dividendIncome: '3840', dividendTaxWithheld: '960' })
+        : summaryWith({ totalPnl: '1160' })),
       holdings: () => success([TRUTH_HOLDING]),
       dividends: () => {
         dividendRecorded = true;
@@ -1739,7 +1740,7 @@ describe('Positions — 總損益卡股利收入附加列(04.2-21 Task 1 / DIV-0
   }
 
   it('populated:有預扣稅 → dividendIncomeLineWithTax({amount} 帶號、{tax} 不帶號)', async () => {
-    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' }));
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: '3840', dividendTaxWithheld: '960', baseCurrency: 'TWD' }));
 
     const note = requireTestid('positions-stat-dividend-income');
     expect(totalPnlCard().contains(note)).toBe(true);
@@ -1750,14 +1751,14 @@ describe('Positions — 總損益卡股利收入附加列(04.2-21 Task 1 / DIV-0
   });
 
   it('populated:預扣稅 0 → dividendIncomeLine', async () => {
-    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'TWD' }));
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: '3840', dividendTaxWithheld: '0', baseCurrency: 'TWD' }));
 
     expect(requireTestid('positions-stat-dividend-income').textContent?.trim())
       .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'TWD', 0) }));
   });
 
   it('empty:股利收入與預扣稅皆 0 → 不渲染', async () => {
-    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: 0, dividendTaxWithheld: 0 }));
+    await mountApiWith([TRUTH_HOLDING], summaryWith({ dividendIncome: '0', dividendTaxWithheld: '0' }));
 
     expect(allTestids('positions-stat')).toHaveLength(6);
     expect(testid('positions-stat-dividend-income')).toBeNull();

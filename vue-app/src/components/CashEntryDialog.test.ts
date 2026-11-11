@@ -17,7 +17,7 @@ import {
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { toCashEntry, type CashEntry, type CashEntryDto } from '../services/cashApi';
-import { toWire } from '../services/decimal';
+import { parseDecimal, toWire } from '../services/decimal';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -656,7 +656,8 @@ describe('CashEntryDialog — 錯誤分派(UI-SPEC §Copywriting 錯誤狀態)',
 });
 
 describe('CashEntryDialog — 出金超額提示(D-01 / U-16:資訊,不阻擋)', () => {
-  const USD_100 = [{ currency: 'USD', amount: 100 }];
+  // 餘額是 domain CashBalance(Decimal,05-17);fixture 由 wire 字串建構。
+  const USD_100 = [{ currency: 'USD', amount: parseDecimal('100') }];
 
   it('showsAnInformationalHintWhenAWithdrawalExceedsTheBalance', async () => {
     await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: USD_100 } });
@@ -747,7 +748,7 @@ describe('CashEntryDialog — 金額以 Decimal 送出字串(D-05 / D-08)', () =
   });
 
   it('comparesAFractionalWithdrawalAgainstTheBalanceWithDecimal', async () => {
-    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: [{ currency: 'USD', amount: 100 }] } });
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: [{ currency: 'USD', amount: parseDecimal('100.00000000') }] } });
 
     await typeAmount('100.00000000');
     expect(testid('cash-withdraw-over-balance'), '尾零不改變值:等於餘額不算超額').toBeNull();
@@ -975,7 +976,7 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
     await mountDialog({
       props: {
         reversalOf: toCashEntry({ ...ORIGINAL, type: 'DEPOSIT' }),
-        balances: [{ currency: 'USD', amount: 1 }],
+        balances: [{ currency: 'USD', amount: parseDecimal('1') }],
       },
     });
 

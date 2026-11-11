@@ -300,9 +300,9 @@ import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
-import type { CashBalanceDto } from '../services/apiTypes';
+import type { CashBalance } from '../services/apiTypes';
 import type { CashEntry, CashEntryType } from '../services/cashApi';
-import { numberToWire, parseDecimal, parseDecimalInput, toWire, ZERO } from '../services/decimal';
+import { parseDecimal, parseDecimalInput, toWire, ZERO } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = withDefaults(defineProps<{
@@ -310,7 +310,7 @@ const props = withDefaults(defineProps<{
   lang: Lang;
   initialType?: CashEntryType;
   initialCurrency?: string;
-  balances?: CashBalanceDto[] | null;
+  balances?: CashBalance[] | null;
   reversalOf?: CashEntry | null;
 }>(), {
   initialType: 'DEPOSIT',
@@ -503,9 +503,8 @@ const overBalance = computed(() => {
   if (isReversal.value || type.value !== 'WITHDRAWAL' || !props.balances || !amountValid.value) return false;
   const amountValue = parsedAmount.value;
   if (amountValue === null) return false;
-  // 型別閉包交接點(05-16 → 05-17):餘額 `CashBalanceDto.amount` 屬 summary,05-17 才轉 Decimal;
-  // 在此之前只在這一處把既有 number 轉成 Decimal 比較(方向一律 number → Decimal)。05-17 刪除此轉換。
-  const balance = parseDecimal(numberToWire(props.balances.find(b => b.currency === currency.value)?.amount ?? 0));
+  // 餘額是 domain CashBalance(Decimal,05-17);該幣別沒有餘額視為 0。
+  const balance = props.balances.find(b => b.currency === currency.value)?.amount ?? ZERO;
   return amountValue.gt(balance);
 });
 

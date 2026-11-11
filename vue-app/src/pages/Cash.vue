@@ -229,7 +229,7 @@ import CashEntryDialog from '../components/CashEntryDialog.vue';
 import { t, tf } from '../i18n';
 import { fmtMoney, minorUnits } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
-import type { PaginatedResponse, PortfolioSummaryDto } from '../services/apiTypes';
+import type { PaginatedResponse, PortfolioSummary } from '../services/apiTypes';
 import type { CashEntry, CashEntryType } from '../services/cashApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
@@ -381,7 +381,7 @@ const notInView = computed(() => {
 // =============== 頁首餘額列(API mode) ===============
 type SummaryState =
   | { status: 'loading' }
-  | { status: 'loaded'; data: PortfolioSummaryDto }
+  | { status: 'loaded'; data: PortfolioSummary }
   | { status: 'error'; error: BlockError };
 
 const summaryState = ref<SummaryState>({ status: 'loading' });

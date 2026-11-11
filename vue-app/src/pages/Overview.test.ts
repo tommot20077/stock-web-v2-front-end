@@ -7,6 +7,7 @@ import overviewSource from './Overview.vue?raw';
 import { t, tf } from '../i18n';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtWeightPct } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
+import { parseDecimal } from '../services/decimal';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   bumpPortfolioRevision,
@@ -29,29 +30,29 @@ import type { WatchlistDto } from '../services/watchlistApi';
 // 四態與 traceId 見 D-11 / D-12,全域 banner 邊界見 D-13。mock mode 必須與 Phase 3 之前完全一致。
 
 const SUMMARY: PortfolioSummaryDto = {
-  totalMarketValue: 1234567.89,
-  totalCostBasis: 1098765.43,
-  realizedPnl: 12345.67,
-  unrealizedPnl: 123456.79,
-  totalPnl: 135802.46,
-  roi: 0.1234,
+  totalMarketValue: '1234567.89',
+  totalCostBasis: '1098765.43',
+  realizedPnl: '12345.67',
+  unrealizedPnl: '123456.79',
+  totalPnl: '135802.46',
+  roi: '0.1234',
   holdingCount: 3,
   // Phase 04.1 欄位:值刻意不等於 mock 值(+$12,481 / $84,210 / 約 1,000,000),
   // 「資料來自 API 而非 mock」的斷言才有意義(T-04.1-55)。
   baseCurrency: 'TWD',
   fxExcludedCount: 0,
   unconvertedCurrencies: [],
-  dayPricePnl: 12345,
-  dayPricePnlRatio: 0.0104,
+  dayPricePnl: '12345',
+  dayPricePnlRatio: '0.0104',
   dayPnlExcludedCount: 0,
-  cash: 84210.5,
-  totalEquity: 7654321,
-  cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
-  allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
-  sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
+  cash: '84210.5',
+  totalEquity: '7654321',
+  cashBalances: [{ currency: 'TWD', amount: '84210.5' }],
+  allocation: [{ category: 'STOCK', value: '1234567.89', weight: '1' }],
+  sectorAllocation: [{ sector: 'Tech', value: '1234567.89', weight: '1', holdingCount: 1, unrealizedPnl: '123456.79' }],
   // Phase 04.2 欄位(04.2-16 只補型別)
-  dividendIncome: 0,
-  dividendTaxWithheld: 0,
+  dividendIncome: '0',
+  dividendTaxWithheld: '0',
 };
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。
@@ -229,7 +230,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(ratio, 'ratio row').toBeTruthy();
     expect(ratio!.textContent).toContain('↗');
     expect(ratio!.textContent).toContain('+1.04%');
-    expect(ratio!.textContent).toContain(fmtRatioPct(SUMMARY.dayPricePnlRatio)!);
+    expect(ratio!.textContent).toContain(fmtRatioPct(parseDecimal(SUMMARY.dayPricePnlRatio!))!);
     expect(ratio!.querySelector('[aria-hidden="true"]')?.textContent).toBe('↗');
     expect(ratio!.getAttribute('style')).toContain('var(--up-text)');
     // 數值本身維持 --fg(不上色)
@@ -247,12 +248,35 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
 
     // 卡 4:總報酬率 = roi × 100(D-04 允許的格式化縮放),副標為帶號總損益 + 代碼
     expect(totalReturn.textContent).toContain(t('en', 'totalReturn'));
-    expect(kpiValue(totalReturn)).toBe(fmtRatioPct(SUMMARY.roi));
+    expect(kpiValue(totalReturn)).toBe(fmtRatioPct(parseDecimal(SUMMARY.roi)));
     expect(kpiValue(totalReturn)).toBe('+12.34%');
     expect(totalReturn.textContent).toContain(t('en', 'totalPnlLabel'));
-    expect(totalReturn.textContent).toContain(fmtSignedMoney(SUMMARY.totalPnl, 'TWD', 0));
+    expect(totalReturn.textContent).toContain(fmtSignedMoney(parseDecimal(SUMMARY.totalPnl), 'TWD', 0));
     expect(totalReturn.textContent).toContain('+135,802');
     expect(totalReturn.textContent).not.toContain(t('en', 'annualized'));
+  });
+
+  it('KPI 與資產配置以 Decimal 呈現超過 double 精度的金額(Phase 5 D-08)', async () => {
+    // 9007199254740993 經 JS number 會變成 ...992;顯示必須是後端原值。
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({
+        totalEquity: '9007199254740993',
+        cash: '0.00000000',
+        dayPricePnl: '-0.4',
+        allocation: [{ category: 'STOCK', value: '9007199254740993', weight: '1.00000000' }],
+      })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    const [totalAssets, dayPnl, cash] = allTestids('overview-kpi');
+    expect(kpiValue(totalAssets)).toBe('9,007,199,254,740,993');
+    expect(kpiValue(cash)).toBe('0');
+    // HALF_UP 到 0 位:-0.4 → -0(帶號規則同 moneyFormat 對 number 的處理)
+    expect(kpiValue(dayPnl)).toBe(fmtSignedMoney(parseDecimal('-0.4'), 'TWD', 0).replace(/\s*TWD$/, ''));
+    const row = allTestids('overview-allocation-row')[0];
+    expect(row.textContent).toContain('9,007,199,254,740,993');
+    expect(row.textContent).toContain('100.0%');
   });
 
   it('基準幣代碼來自 summary.baseCurrency,不寫死 TWD', async () => {
@@ -314,7 +338,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     });
 
     it('真實為零:0 TWD,無號、無箭頭、無比率列,與 null 的 — 不同', async () => {
-      const card = await mountWith({ dayPricePnl: 0, dayPricePnlRatio: null, dayPnlExcludedCount: 0 });
+      const card = await mountWith({ dayPricePnl: '0', dayPricePnlRatio: null, dayPnlExcludedCount: 0 });
       expect(kpiValue(card)).toBe('0');
       expect(kpiCcy(card)).toBe('TWD');
       expect(kpiValue(card)).not.toContain('+');
@@ -326,7 +350,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     });
 
     it('負值:- 號、↘、dn 色,數值本身不上色', async () => {
-      const card = await mountWith({ dayPricePnl: -3200, dayPricePnlRatio: -0.0215 });
+      const card = await mountWith({ dayPricePnl: '-3200', dayPricePnlRatio: '-0.0215' });
       expect(kpiValue(card)).toBe('-3,200');
       const ratio = requireTestid('overview-kpi-day-pnl-ratio');
       expect(ratio.textContent).toContain('↘');
@@ -338,7 +362,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
 
   it('總報酬率為負時副標帶 - 號並用 dn 色', async () => {
     const fetchMock = routedFetch({
-      summary: () => success(summaryWith({ roi: -0.05, totalPnl: -50000 })),
+      summary: () => success(summaryWith({ roi: '-0.05', totalPnl: '-50000' })),
       trades: () => tradePage(API_TRADES),
     });
     await mountApiOverview(fetchMock);
@@ -1052,9 +1076,9 @@ describe('Overview — 基準幣工具列(D-03,API mode)', () => {
 
 describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () => {
   const MIXED = [
-    { currency: 'USD', amount: -1200 },
-    { currency: 'TWD', amount: 50000 },
-    { currency: 'JPY', amount: 0 },
+    { currency: 'USD', amount: '-1200' },
+    { currency: 'TWD', amount: '50000' },
+    { currency: 'JPY', amount: '0' },
   ];
 
   async function mountCash(overrides: Partial<PortfolioSummaryDto>, props: Record<string, unknown> = {}) {
@@ -1077,20 +1101,20 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
 
   it('JPY 餘額 0 位小數、EUR 排在 USD 之後', async () => {
     const { card } = await mountCash({
-      cashBalances: [{ currency: 'JPY', amount: 1500 }, { currency: 'EUR', amount: 10.5 }, { currency: 'USD', amount: 3 }],
+      cashBalances: [{ currency: 'JPY', amount: '1500' }, { currency: 'EUR', amount: '10.5' }, { currency: 'USD', amount: '3' }],
     });
     expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')!.textContent?.trim())
       .toBe('USD 3.00 · EUR 10.50 · JPY 1,500');
   });
 
   it('全為 0:不渲染各幣別餘額列', async () => {
-    const { card } = await mountCash({ cashBalances: [{ currency: 'TWD', amount: 0 }, { currency: 'USD', amount: 0 }] });
+    const { card } = await mountCash({ cashBalances: [{ currency: 'TWD', amount: '0' }, { currency: 'USD', amount: '0' }] });
     expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')).toBeNull();
     expect(card.querySelector('[data-testid="overview-kpi-cash-negative"]')).toBeNull();
   });
 
   it('任一幣別為負:顯示「USD cash is negative…」,⚠ aria-hidden,數值不變紅;總額為正仍提示', async () => {
-    const { card } = await mountCash({ cash: 84210.5, cashBalances: MIXED });
+    const { card } = await mountCash({ cash: '84210.5', cashBalances: MIXED });
     const negative = requireTestid('overview-kpi-cash-negative');
     expect(negative.textContent).toContain(tf('en', 'cashNegativeHint', { codes: 'USD' }));
     expect(negative.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚠');
@@ -1101,7 +1125,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('多個負值幣別以 ", " 連接(zh 為「、」)', async () => {
-    const cashBalances = [{ currency: 'USD', amount: -5 }, { currency: 'TWD', amount: -9 }];
+    const cashBalances = [{ currency: 'USD', amount: '-5' }, { currency: 'TWD', amount: '-9' }];
     const en = await mountCash({ cashBalances });
     expect(requireTestid('overview-kpi-cash-negative').textContent)
       .toContain(tf('en', 'cashNegativeHint', { codes: 'TWD, USD' }));
@@ -1114,14 +1138,14 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('總額為負(已折算)也顯示帶 - 號的數值,不夾成 0', async () => {
-    const { card } = await mountCash({ cash: -1200, cashBalances: [{ currency: 'USD', amount: -1200 }] });
+    const { card } = await mountCash({ cash: '-1200', cashBalances: [{ currency: 'USD', amount: '-1200' }] });
     expect(kpiValue(card)).toBe('-1,200');
   });
 
   it('現金幣別缺匯率:顯示 cashFxExcludedHint;該幣別餘額為 0 時不提示', async () => {
     const { card } = await mountCash({
       unconvertedCurrencies: ['EUR'],
-      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 20 }],
+      cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'EUR', amount: '20' }],
     });
     expect(card.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')!.textContent)
       .toContain(tf('en', 'cashFxExcludedHint', { codes: 'EUR', base: 'TWD' }));
@@ -1129,7 +1153,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
 
     const { card: other } = await mountCash({
       unconvertedCurrencies: ['EUR'],
-      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 0 }],
+      cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'EUR', amount: '0' }],
     });
     expect(other.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')).toBeNull();
   });
@@ -1145,7 +1169,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('入金鈕:沒有負值幣別時預設基準幣', async () => {
-    await mountCash({ baseCurrency: 'EUR', cashBalances: [{ currency: 'TWD', amount: 10 }] });
+    await mountCash({ baseCurrency: 'EUR', cashBalances: [{ currency: 'TWD', amount: '10' }] });
     click(button('overview-cash-deposit'));
     await flushAsync();
 
@@ -1153,7 +1177,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('出金鈕:預設類型 WITHDRAWAL、幣別為基準幣,並把 cashBalances 傳給對話框(超額提示)', async () => {
-    await mountCash({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: 100 }, { currency: 'TWD', amount: -50 }] });
+    await mountCash({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: '100' }, { currency: 'TWD', amount: '-50' }] });
     click(button('overview-cash-withdraw'));
     await flushAsync();
 
@@ -1290,9 +1314,9 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
 // =====================================================================================
 
 const ALLOCATION = [
-  { category: 'CASH', value: 35164, weight: 0.35164 },
-  { category: 'CRYPTO', value: 32418, weight: 0.32418 },
-  { category: 'STOCK', value: 32418, weight: 0.32418 },
+  { category: 'CASH', value: '35164', weight: '0.35164' },
+  { category: 'CRYPTO', value: '32418', weight: '0.32418' },
+  { category: 'STOCK', value: '32418', weight: '0.32418' },
 ];
 
 function allocationCard(): HTMLElement {
@@ -1315,7 +1339,7 @@ async function mountAllocation(overrides: Partial<PortfolioSummaryDto>) {
 
 describe('Overview — 資產配置(D-18,API mode)', () => {
   it('以 summary.allocation 渲染:ul / li 三列,每列可讀出類別、金額、權重', async () => {
-    await mountAllocation({ baseCurrency: 'TWD', cash: 35164, allocation: ALLOCATION });
+    await mountAllocation({ baseCurrency: 'TWD', cash: '35164', allocation: ALLOCATION });
 
     const card = allocationCard();
     expect(card.textContent).toContain(t('en', 'allocation'));
@@ -1349,7 +1373,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('金額帶 summary.baseCurrency,不寫死 TWD', async () => {
-    await mountAllocation({ baseCurrency: 'JPY', allocation: [{ category: 'STOCK', value: 1500000, weight: 1 }] });
+    await mountAllocation({ baseCurrency: 'JPY', allocation: [{ category: 'STOCK', value: '1500000', weight: '1' }] });
     const row = requireTestid('overview-allocation-row');
     expect(plain(row.textContent)).toBe('Stocks 1,500,000 JPY 100.0%');
   });
@@ -1361,7 +1385,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
     ['BOND', 'Bonds', '#f59e0b'],
     ['CASH', 'Cash', '#94a3b8'],
   ])('已知類別 %s → 標籤 %s、色 %s', async (category, label, color) => {
-    await mountAllocation({ allocation: [{ category, value: 100, weight: 1 }] });
+    await mountAllocation({ allocation: [{ category, value: '100', weight: '1' }] });
     const row = requireTestid('overview-allocation-row');
     expect(plain(row.textContent)).toContain(label);
     expect(row.querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe(color);
@@ -1369,7 +1393,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
 
   it('未知類別(WARRANT):標籤 assetTypeOther、色 --fg-dim,不崩潰也不外露原始字串', async () => {
     await mountAllocation({
-      allocation: [{ category: 'WARRANT', value: 500, weight: 0.5 }, { category: 'STOCK', value: 500, weight: 0.5 }],
+      allocation: [{ category: 'WARRANT', value: '500', weight: '0.5' }, { category: 'STOCK', value: '500', weight: '0.5' }],
     });
     const rows = allTestids('overview-allocation-row');
     expect(rows).toHaveLength(2);
@@ -1379,7 +1403,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('只有一類:donut 單色環 + legend 一列', async () => {
-    await mountAllocation({ allocation: [{ category: 'STOCK', value: 100, weight: 1 }] });
+    await mountAllocation({ allocation: [{ category: 'STOCK', value: '100', weight: '1' }] });
     expect(allTestids('overview-allocation-row')).toHaveLength(1);
     expect(allocationCard().querySelectorAll('svg circle').length).toBe(2); // 軌道 + 一段
   });
@@ -1400,9 +1424,9 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
 
   it('cash < 0:legend 下方顯示 allocationNegativeCash', async () => {
     await mountAllocation({
-      cash: -1200,
-      cashBalances: [{ currency: 'TWD', amount: -1200 }],
-      allocation: [{ category: 'STOCK', value: 100, weight: 1 }],
+      cash: '-1200',
+      cashBalances: [{ currency: 'TWD', amount: '-1200' }],
+      allocation: [{ category: 'STOCK', value: '100', weight: '1' }],
     });
     expect(requireTestid('overview-allocation-negative-cash').textContent)
       .toContain(t('en', 'allocationNegativeCash'));
@@ -1410,7 +1434,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('cash < 0 且 allocation 為空:兩個提示都在', async () => {
-    await mountAllocation({ cash: -5, allocation: [] });
+    await mountAllocation({ cash: '-5', allocation: [] });
     expect(testid('overview-allocation-empty')).not.toBeNull();
     expect(testid('overview-allocation-negative-cash')).not.toBeNull();
   });
@@ -1441,7 +1465,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
     await mountApiOverview(fetchMock);
     expect(allTestids('overview-allocation-row')).toHaveLength(3);
 
-    allocation = [{ category: 'STOCK', value: 1, weight: 1 }];
+    allocation = [{ category: 'STOCK', value: '1', weight: '1' }];
     bumpPortfolioRevision('trade');
     await flushAsync();
     expect(allTestids('overview-allocation-row')).toHaveLength(1);
@@ -1827,7 +1851,7 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   }
 
   it('dividendIncome 3840 + 預扣稅 960 → dividendIncomeLineWithTax,位在總報酬率卡、總損益副標之後', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' });
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '960', baseCurrency: 'TWD' });
 
     const line = requireTestid('overview-kpi-dividend-income');
     expect(line.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
@@ -1844,13 +1868,13 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   });
 
   it('預扣稅 0 → dividendIncomeLine(不列稅)', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'USD' });
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '0', baseCurrency: 'USD' });
     expect(requireTestid('overview-kpi-dividend-income').textContent?.trim())
       .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'USD', 0) }));
   });
 
   it('股利收入 0 但有預扣稅 → 仍渲染(只有兩者皆 0 才不渲染)', async () => {
-    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 960 });
+    await mountDividend({ dividendIncome: '0', dividendTaxWithheld: '960' });
     expect(requireTestid('overview-kpi-dividend-income').textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
       amount: fmtSignedMoney(0, 'TWD', 0),
       tax: fmtMoney(960, 'TWD', 0),
@@ -1858,13 +1882,13 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   });
 
   it('兩者皆 0 → 不渲染', async () => {
-    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 0 });
+    await mountDividend({ dividendIncome: '0', dividendTaxWithheld: '0' });
     expect(allTestids('overview-kpi')).toHaveLength(4);
     expect(testid('overview-kpi-dividend-income')).toBeNull();
   });
 
   it('今日損益說明 = dayPnlNote(不含匯差與股利);總報酬率顯示後端 roi、不重算不加註', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, roi: 0.1567 }, 'zh');
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '960', roi: '0.1567' }, 'zh');
     const note = requireTestid('overview-kpi-day-pnl-note');
     expect(note.textContent?.trim()).toBe(t('zh', 'dayPnlNote'));
     expect(note.textContent).toContain('不含匯差與股利');

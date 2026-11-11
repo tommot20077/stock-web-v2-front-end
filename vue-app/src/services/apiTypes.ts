@@ -1,3 +1,5 @@
+import type { Decimal } from './decimal';
+
 export type RuntimeDataMode = 'mock' | 'api';
 
 /** 對應後端 stock-common 的 ApiMeta(traceId + timestamp)。 */
@@ -41,15 +43,19 @@ export interface PaginatedResponse<T> {
 
 /**
  * 對應後端 PortfolioSummaryResponse;逐欄同形,勿增刪欄位(信封/契約權威是後端,judgment §4)。
+ *
+ * 金額 / 比值欄位是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `portfolioApi.toPortfolioSummary` 轉成 {@link PortfolioSummary}(Decimal)。整數計數欄位(`holdingCount`、
+ * `fxExcludedCount`、`dayPnlExcludedCount`)仍是 JSON number。
  */
 export interface PortfolioSummaryDto {
-  totalMarketValue: number;
-  totalCostBasis: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
-  totalPnl: number;
+  totalMarketValue: string;
+  totalCostBasis: string;
+  realizedPnl: string;
+  unrealizedPnl: string;
+  totalPnl: string;
   /** 比值(非百分比):0.0117 = 1.17%。顯示時 ×100,那是格式化不是重算(D-04)。 */
-  roi: number;
+  roi: string;
   holdingCount: number;
   /** Phase 04.1:基準幣 ISO 代碼(預設 `TWD`);本 DTO 所有金額欄位(除 cashBalances)皆為此幣別。 */
   baseCurrency: string;
@@ -58,15 +64,15 @@ export interface PortfolioSummaryDto {
   /** Phase 04.1:缺匯率的原幣代碼清單(`fxExcludedCount` > 0 時才有值)。 */
   unconvertedCurrencies: string[];
   /** Phase 04.1:今日價差損益(基準幣);無前收盤可比時為 null。 */
-  dayPricePnl: number | null;
+  dayPricePnl: string | null;
   /** Phase 04.1:今日價差損益比值(非百分比,0.0104 = 1.04%);無可比基準時為 null。 */
-  dayPricePnlRatio: number | null;
+  dayPricePnlRatio: string | null;
   /** Phase 04.1:因缺前收盤而未納入今日損益的持倉數。 */
   dayPnlExcludedCount: number;
   /** Phase 04.1:現金合計(基準幣);可為負(D-08,不得被夾成 0)。 */
-  cash: number;
+  cash: string;
   /** Phase 04.1:總權益(基準幣)= 持倉市值 + 現金。 */
-  totalEquity: number;
+  totalEquity: string;
   /** Phase 04.1:各幣別現金餘額(原幣,非基準幣)。 */
   cashBalances: CashBalanceDto[];
   /** Phase 04.1:依資產類別的配置(基準幣金額 + 權重比值)。 */
@@ -77,9 +83,9 @@ export interface PortfolioSummaryDto {
    * Phase 04.2(DIV-02):現金股利收入(基準幣)= Σ 實領淨額(沖銷反號)× 目前匯率;沒有股利時為 0。
    * 自 04.2 起 `totalPnl` = realizedPnl + unrealizedPnl + dividendIncome,`roi` 因此**含股利**(D-01)。
    */
-  dividendIncome: number;
+  dividendIncome: string;
   /** Phase 04.2(DIV-02):預扣稅合計(基準幣);僅供顯示,**不**計入 `totalPnl`(`amount` 已是扣稅後實領)。 */
-  dividendTaxWithheld: number;
+  dividendTaxWithheld: string;
 }
 
 /** Phase 04.2(PORT-13):`GET /api/v1/portfolio/activities` 的 `kind`。 */
@@ -132,31 +138,80 @@ export interface PortfolioActivityDto {
 export interface CashBalanceDto {
   /** ISO 4217 代碼,宣告為 string:後端新增幣別不應讓前端型別檢查變紅。 */
   currency: string;
-  amount: number;
+  /** BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  amount: string;
 }
 
 /** 對應後端 AllocationSliceDto:資產類別配置的一塊。 */
 export interface AllocationSliceDto {
   /** 資產類別(enum 型欄位宣告為 string,沿用 AssetDto 的既有裁決;RESEARCH Q10)。 */
   category: string;
-  /** 基準幣金額 */
-  value: number;
-  /** 比值(非百分比):0.52 = 52%。顯示時 ×100 是格式化不是重算。 */
-  weight: number;
+  /** 基準幣金額;BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  value: string;
+  /** 比值(非百分比):0.52 = 52%。顯示時 ×100 是格式化不是重算。BigDecimal → JSON 字串(D-05)。 */
+  weight: string;
 }
 
 /** 對應後端 SectorAllocationDto:產業配置的一塊。 */
 export interface SectorAllocationDto {
   /** 產業名稱;資產沒有產業資料時為 null(畫面以「未分類」呈現)。 */
   sector: string | null;
-  /** 基準幣金額 */
-  value: number;
-  /** 比值(非百分比),同 AllocationSliceDto.weight。 */
-  weight: number;
+  /** 基準幣金額;BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  value: string;
+  /** 比值(非百分比),同 AllocationSliceDto.weight;BigDecimal → JSON 字串(D-05)。 */
+  weight: string;
   holdingCount: number;
-  /** 該產業未實現損益(基準幣) */
-  unrealizedPnl: number;
+  /** 該產業未實現損益(基準幣);BigDecimal → JSON 字串(D-05)。 */
+  unrealizedPnl: string;
 }
+
+/**
+ * wire DTO → domain 型別的共用 mapped type(Phase 5 D-08):把 `K` 列出的 wire 字串欄位換成 `Decimal`,
+ * nullable 欄位維持 nullable(`string` → `Decimal`、`string | null` → `Decimal | null`),其餘欄位原樣保留。
+ *
+ * 用途:domain 型別一律由 wire DTO 派生,欄位清單只在這裡列一次;後端增刪欄位時 wire 與 domain 一起變,
+ * 不會漂移。05-18 之後的 domain(持倉、交易、股利…)沿用同一個 helper。
+ */
+export type DecimalFields<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]: null extends T[P] ? Decimal | null : Decimal;
+};
+
+/** domain:單一幣別現金餘額,`amount` 為 Decimal(由 `portfolioApi.toCashBalance` 產生)。 */
+export type CashBalance = DecimalFields<CashBalanceDto, 'amount'>;
+
+/** domain:資產類別配置的一塊,`value` / `weight` 為 Decimal。 */
+export type AllocationSlice = DecimalFields<AllocationSliceDto, 'value' | 'weight'>;
+
+/** domain:產業配置的一塊,`value` / `weight` / `unrealizedPnl` 為 Decimal;`holdingCount` 仍是 number。 */
+export type SectorAllocation = DecimalFields<SectorAllocationDto, 'value' | 'weight' | 'unrealizedPnl'>;
+
+/** {@link PortfolioSummaryDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type PortfolioSummaryDecimalKey =
+  | 'totalMarketValue'
+  | 'totalCostBasis'
+  | 'realizedPnl'
+  | 'unrealizedPnl'
+  | 'totalPnl'
+  | 'roi'
+  | 'dayPricePnl'
+  | 'dayPricePnlRatio'
+  | 'cash'
+  | 'totalEquity'
+  | 'dividendIncome'
+  | 'dividendTaxWithheld';
+
+/**
+ * domain:portfolio summary(由 `portfolioApi.toPortfolioSummary` 產生)。金額 / 比值為 Decimal,
+ * 巢狀的現金餘額與配置也是 domain 型別;頁面只拿這個型別,不拿 wire DTO。
+ */
+export type PortfolioSummary = Omit<
+  DecimalFields<PortfolioSummaryDto, PortfolioSummaryDecimalKey>,
+  'cashBalances' | 'allocation' | 'sectorAllocation'
+> & {
+  cashBalances: CashBalance[];
+  allocation: AllocationSlice[];
+  sectorAllocation: SectorAllocation[];
+};
 
 /** 對應後端 HoldingResponse。 */
 export interface HoldingDto {

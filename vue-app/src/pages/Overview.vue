@@ -446,7 +446,8 @@ import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { AssetDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
+import type { AssetDto, PortfolioSummary, TradeDto } from '../services/apiTypes';
+import { ZERO, toChartNumber } from '../services/decimal';
 import type { WatchlistDto } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
@@ -491,7 +492,7 @@ type BlockState<T> =
   | { status: 'loaded'; data: T }
   | { status: 'error'; error: BlockError };
 
-const summaryState = ref<BlockState<PortfolioSummaryDto>>({ status: 'loading' });
+const summaryState = ref<BlockState<PortfolioSummary>>({ status: 'loading' });
 const tradesState = ref<BlockState<TradeDto[]>>({ status: 'loading' });
 
 const summaryLoading = computed(() => summaryState.value.status === 'loading');
@@ -768,6 +769,7 @@ const mockKpis = computed<KpiCard[]>(() => [
 ]);
 
 // API mode:四張卡皆為後端值(D-14 / D-22)。前端唯一的算術是 ratio × 100 的格式化(D-04 / D-21),不換匯。
+// 金額是 Decimal(Phase 5 D-08):判斷用 Decimal 方法,顯示交給 moneyFormat。
 const apiKpis = computed<KpiCard[]>(() => {
   const s = summary.value;
   if (!s) return [];
@@ -775,7 +777,7 @@ const apiKpis = computed<KpiCard[]>(() => {
   const lang = props.lang;
 
   // 今日損益:null 是「全部被排除」,顯示 — 而非 0;真實為零才顯示 0(T-04.1-55)。
-  const hasDayPnl = s.dayPricePnl != null && Number.isFinite(s.dayPricePnl);
+  const hasDayPnl = s.dayPricePnl != null;
   const ratioText = hasDayPnl ? fmtRatioPct(s.dayPricePnlRatio) : null;
   const dayNotes = [{ testid: 'overview-kpi-day-pnl-note', text: t(lang, 'dayPnlNote') }];
   if (s.dayPnlExcludedCount > 0) {
@@ -825,12 +827,12 @@ const apiKpis = computed<KpiCard[]>(() => {
 });
 
 /** KPI #4 的股利收入 Hint(`--fg-dim`,中性):有預扣稅另列;金額為基準幣、0 位小數(UI-SPEC §4)。 */
-function dividendIncomeNotes(s: PortfolioSummaryDto): { testid: string; text: string }[] {
-  const income = s.dividendIncome ?? 0;
-  const tax = s.dividendTaxWithheld ?? 0;
-  if (income === 0 && tax === 0) return [];
+function dividendIncomeNotes(s: PortfolioSummary): { testid: string; text: string }[] {
+  const income = s.dividendIncome;
+  const tax = s.dividendTaxWithheld;
+  if (income.eq(ZERO) && tax.eq(ZERO)) return [];
   const amount = fmtSignedMoney(income, s.baseCurrency, 0);
-  const text = tax > 0
+  const text = tax.gt(ZERO)
     ? tf(props.lang, 'dividendIncomeLineWithTax', { amount, tax: fmtMoney(tax, s.baseCurrency, 0) })
     : tf(props.lang, 'dividendIncomeLine', { amount });
   return [{ testid: 'overview-kpi-dividend-income', text }];
@@ -874,14 +876,15 @@ const allocRows = computed<AllocRow[]>(() => {
   }
   const s = summary.value;
   if (!s) return [];
-  // 舊形狀 / 快取的 summary 可能沒有 allocation:視為空,不崩潰。
-  return (s.allocation ?? []).map(slice => {
+  // 舊形狀 / 快取的 summary 沒有 allocation 時,mapper(toPortfolioSummary)已補成空清單。
+  return s.allocation.map(slice => {
     const meta = ALLOCATION_CATEGORIES[slice.category] ?? UNKNOWN_CATEGORY;
     return {
       key: slice.category,
       label: t(props.lang, meta.labelKey),
       color: meta.color,
-      value: slice.value,
+      // Donut 只看比例,近似值即可:Decimal → number 只在這個圖表出口發生。
+      value: toChartNumber(slice.value),
       amount: fmtMoney(slice.value, s.baseCurrency, 0),
       weightText: fmtWeightPct(slice.weight),
     };
@@ -889,7 +892,7 @@ const allocRows = computed<AllocRow[]>(() => {
 });
 
 /** D-18:現金為負時後端不列 CASH 塊,legend 下方說明原因。 */
-const allocNegativeCash = computed(() => !live && summary.value != null && summary.value.cash < 0);
+const allocNegativeCash = computed(() => !live && summary.value != null && summary.value.cash.lt(ZERO));
 
 // getter 每次存取才解析 store,reactivity 由 computed 追蹤(03-02-SUMMARY 提醒 4)。
 const mockRecentTrades = computed(() => (live ? live.trades.slice(0, 5) : []));

@@ -8,17 +8,25 @@ import {
   unconvertedCashCurrencies,
 } from './cashBalanceView';
 import { fmtMoneyAmount } from './moneyFormat';
+import { parseDecimal } from './services/decimal';
+import type { CashBalance } from './services/apiTypes';
 import overviewSource from './pages/Overview.vue?raw';
 import cashSource from './pages/Cash.vue?raw';
 
 // quick-261106-fbs 2e(04.1 IN-02):Overview 與 Cash 共用的現金餘額檢視純函式;行為與原本兩頁各自的 computed 逐案相同。
+// Phase 5 D-08:餘額是 domain CashBalance(amount 為 Decimal);fixture 以 wire 字串建構。
+
+/** wire 字串 → domain CashBalance(測試用,與 portfolioApi.toCashBalance 同形)。 */
+function bal(currency: string, amount: string): CashBalance {
+  return { currency, amount: parseDecimal(amount) };
+}
 
 const MIXED = [
-  { currency: 'JPY', amount: 1000 },
-  { currency: 'HKD', amount: 5 },
-  { currency: 'USD', amount: -12.5 },
-  { currency: 'EUR', amount: 0 },
-  { currency: 'TWD', amount: 300 },
+  bal('JPY', '1000'),
+  bal('HKD', '5'),
+  bal('USD', '-12.5'),
+  bal('EUR', '0'),
+  bal('TWD', '300'),
 ];
 
 describe('cashBalanceView(T2.6)', () => {
@@ -60,14 +68,10 @@ describe('cashBalanceView(T2.6)', () => {
   });
 
   it('入金預設幣別:第一個負值幣別,否則基準幣;出金一律基準幣', () => {
-    const ordered = orderCashBalances([
-      { currency: 'JPY', amount: -1 },
-      { currency: 'USD', amount: -2 },
-      { currency: 'TWD', amount: 10 },
-    ]);
+    const ordered = orderCashBalances([bal('JPY', '-1'), bal('USD', '-2'), bal('TWD', '10')]);
     expect(defaultCashEntryCurrency('DEPOSIT', ordered, 'TWD')).toBe('USD');
     expect(defaultCashEntryCurrency('WITHDRAWAL', ordered, 'TWD')).toBe('TWD');
-    expect(defaultCashEntryCurrency('DEPOSIT', orderCashBalances([{ currency: 'TWD', amount: 5 }]), 'EUR')).toBe('EUR');
+    expect(defaultCashEntryCurrency('DEPOSIT', orderCashBalances([bal('TWD', '5')]), 'EUR')).toBe('EUR');
   });
 
   it('Overview 與 Cash 改用共用函式,不再各自定義排序與串接(IN-02)', () => {

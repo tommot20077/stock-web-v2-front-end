@@ -1,13 +1,19 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import { isMockHoldingEventTradeRow, listMockHoldingEvents } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { numberToWire, parseDecimal, parseNullableDecimal } from './decimal';
 import type {
+  AllocationSlice,
   AllocationSliceDto,
+  CashBalance,
+  CashBalanceDto,
   HoldingDto,
   PaginatedResponse,
   PortfolioActivityDto,
+  PortfolioSummary,
   PortfolioSummaryDto,
   RuntimeDataMode,
+  SectorAllocation,
   SectorAllocationDto,
   TradeDto,
 } from './apiTypes';
@@ -67,7 +73,8 @@ export interface PortfolioLiveMockData {
  */
 export interface PortfolioApi {
   mode: RuntimeDataMode;
-  getSummary(): Promise<PortfolioSummaryDto>;
+  /** portfolio summary 的 domain 形狀(金額為 Decimal);http 與 mock 都經 {@link toPortfolioSummary}。 */
+  getSummary(): Promise<PortfolioSummary>;
   listHoldings(): Promise<HoldingDto[]>;
   listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
   /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
@@ -86,9 +93,68 @@ const DEFAULT_SIZE = 20;
  */
 const MOCK_CURRENCY = 'USD';
 
-/** 依產業分組,value 降冪(同值以產業名稱穩定排序,不含亂數);權重加總為 1。 */
+/** wire → domain:單一幣別現金餘額(Phase 5 D-08;http 與 mock 共用)。 */
+export function toCashBalance(wire: CashBalanceDto): CashBalance {
+  return { ...wire, amount: parseDecimal(wire.amount) };
+}
+
+/** wire → domain:資產類別配置的一塊。 */
+export function toAllocationSlice(wire: AllocationSliceDto): AllocationSlice {
+  return { ...wire, value: parseDecimal(wire.value), weight: parseDecimal(wire.weight) };
+}
+
+/** wire → domain:產業配置的一塊(`holdingCount` 仍是 number)。 */
+export function toSectorAllocation(wire: SectorAllocationDto): SectorAllocation {
+  return {
+    ...wire,
+    value: parseDecimal(wire.value),
+    weight: parseDecimal(wire.weight),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+  };
+}
+
+/**
+ * wire → domain 的唯一 summary mapper(http 與 mock adapter 共用,Phase 5 D-08)。
+ * 金額 / 比值欄位若仍是 JSON number,`parseDecimal` 會在這裡丟 TypeError(契約違反在邊界大聲失敗)。
+ */
+export function toPortfolioSummary(wire: PortfolioSummaryDto): PortfolioSummary {
+  return {
+    ...wire,
+    totalMarketValue: parseDecimal(wire.totalMarketValue),
+    totalCostBasis: parseDecimal(wire.totalCostBasis),
+    realizedPnl: parseDecimal(wire.realizedPnl),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+    totalPnl: parseDecimal(wire.totalPnl),
+    roi: parseDecimal(wire.roi),
+    dayPricePnl: parseNullableDecimal(wire.dayPricePnl),
+    dayPricePnlRatio: parseNullableDecimal(wire.dayPricePnlRatio),
+    cash: parseDecimal(wire.cash),
+    totalEquity: parseDecimal(wire.totalEquity),
+    dividendIncome: parseDecimal(wire.dividendIncome),
+    dividendTaxWithheld: parseDecimal(wire.dividendTaxWithheld),
+    // 舊形狀 / 快取的 summary 可能缺少 Phase 04.1 的清單欄位:視為空清單(頁面原本的容錯行為移到邊界)。
+    unconvertedCurrencies: [...(wire.unconvertedCurrencies ?? [])],
+    cashBalances: (wire.cashBalances ?? []).map(toCashBalance),
+    allocation: (wire.allocation ?? []).map(toAllocationSlice),
+    sectorAllocation: (wire.sectorAllocation ?? []).map(toSectorAllocation),
+  };
+}
+
+/** mock 內部計算用(number);組 wire DTO 時才經 `numberToWire` 轉字串。 */
+interface MockSectorSlice {
+  sector: string;
+  value: number;
+  weight: number;
+  holdingCount: number;
+  unrealizedPnl: number;
+}
+
+/**
+ * 依產業分組,value 降冪(同值以產業名稱穩定排序,不含亂數);權重加總為 1。
+ * mock 宇宙的靜態資料是 number,計算後投影成 wire 字串,再與 http 走同一個 mapper。
+ */
 function sectorAllocationFrom(positions: Position[], totalMarketValue: number): SectorAllocationDto[] {
-  const bySector = new Map<string, SectorAllocationDto>();
+  const bySector = new Map<string, MockSectorSlice>();
   for (const position of positions) {
     const value = position.qty * position.price;
     const unrealizedPnl = value - position.qty * position.avg;
@@ -105,9 +171,18 @@ function sectorAllocationFrom(positions: Position[], totalMarketValue: number): 
   for (const slice of slices) {
     slice.weight = totalMarketValue === 0 ? 0 : slice.value / totalMarketValue;
   }
-  return slices.sort((a, b) => b.value - a.value || String(a.sector).localeCompare(String(b.sector)));
+  return slices
+    .sort((a, b) => b.value - a.value || String(a.sector).localeCompare(String(b.sector)))
+    .map(slice => ({
+      sector: slice.sector,
+      value: numberToWire(slice.value),
+      weight: numberToWire(slice.weight),
+      holdingCount: slice.holdingCount,
+      unrealizedPnl: numberToWire(slice.unrealizedPnl),
+    }));
 }
 
+/** mock 持倉 → summary wire DTO(與後端同形;金額欄位以 `numberToWire` 轉字串)。 */
 function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   const totalMarketValue = positions.reduce((sum, p) => sum + p.qty * p.price, 0);
   const totalCostBasis = positions.reduce((sum, p) => sum + p.qty * p.avg, 0);
@@ -116,12 +191,12 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   const realizedPnl = 0;
   const totalPnl = realizedPnl + unrealizedPnl;
   return {
-    totalMarketValue,
-    totalCostBasis,
-    realizedPnl,
-    unrealizedPnl,
-    totalPnl,
-    roi: totalCostBasis === 0 ? 0 : totalPnl / totalCostBasis,
+    totalMarketValue: numberToWire(totalMarketValue),
+    totalCostBasis: numberToWire(totalCostBasis),
+    realizedPnl: numberToWire(realizedPnl),
+    unrealizedPnl: numberToWire(unrealizedPnl),
+    totalPnl: numberToWire(totalPnl),
+    roi: numberToWire(totalCostBasis === 0 ? 0 : totalPnl / totalCostBasis),
     holdingCount: positions.length,
     baseCurrency: MOCK_CURRENCY,
     fxExcludedCount: 0,
@@ -131,15 +206,15 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
     dayPricePnlRatio: null,
     dayPnlExcludedCount: positions.length,
     // mock 沒有現金帳本。
-    cash: 0,
-    totalEquity: totalMarketValue,
+    cash: numberToWire(0),
+    totalEquity: numberToWire(totalMarketValue),
     cashBalances: [],
     // mock KPI 是寫死值、不隨 mock 股利變動;股利收入附加列在 mock 不渲染(UI-SPEC §Interaction 0)。
-    dividendIncome: 0,
-    dividendTaxWithheld: 0,
+    dividendIncome: numberToWire(0),
+    dividendTaxWithheld: numberToWire(0),
     allocation: positions.length === 0
       ? []
-      : ([{ category: 'STOCK', value: totalMarketValue, weight: 1 }] satisfies AllocationSliceDto[]),
+      : ([{ category: 'STOCK', value: numberToWire(totalMarketValue), weight: numberToWire(1) }] satisfies AllocationSliceDto[]),
     sectorAllocation: sectorAllocationFrom(positions, totalMarketValue),
   };
 }
@@ -316,7 +391,7 @@ export function createMockPortfolioApi(): PortfolioApi {
     mode: 'mock',
     live,
     async getSummary() {
-      return summaryFrom(useMockPortfolioStore().positions);
+      return toPortfolioSummary(summaryFrom(useMockPortfolioStore().positions));
     },
     async listHoldings() {
       return useMockPortfolioStore().positions.map(holdingFrom);
@@ -359,7 +434,7 @@ export function createMockPortfolioApi(): PortfolioApi {
 export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
   return {
     mode: 'api',
-    getSummary: () => apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`),
+    getSummary: async () => toPortfolioSummary(await apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`)),
     listHoldings: () => apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`),
     listTrades: params => apiPaginatedRequest<TradeDto>(
       `${basePath}/trades${buildQueryString({

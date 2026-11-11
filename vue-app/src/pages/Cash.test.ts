@@ -110,15 +110,15 @@ interface CashRoutes {
   summary?: (call: number) => Response | Promise<Response>;
 }
 
-/** 頁首餘額列需要的 summary(其餘欄位對現金頁無意義,給中性值)。 */
+/** 頁首餘額列需要的 summary(其餘欄位對現金頁無意義,給中性值);BigDecimal 欄位是 wire 字串(Phase 5 D-05)。 */
 function summaryDto(over: Record<string, unknown> = {}) {
   return {
-    totalMarketValue: 0,
-    totalCostBasis: 0,
-    realizedPnl: 0,
-    unrealizedPnl: 0,
-    totalPnl: 0,
-    roi: 0,
+    totalMarketValue: '0',
+    totalCostBasis: '0',
+    realizedPnl: '0',
+    unrealizedPnl: '0',
+    totalPnl: '0',
+    roi: '0',
     holdingCount: 0,
     baseCurrency: 'TWD',
     fxExcludedCount: 0,
@@ -126,13 +126,13 @@ function summaryDto(over: Record<string, unknown> = {}) {
     dayPricePnl: null,
     dayPricePnlRatio: null,
     dayPnlExcludedCount: 0,
-    cash: 880000,
-    totalEquity: 880000,
-    cashBalances: [{ currency: 'TWD', amount: 880000 }],
+    cash: '880000',
+    totalEquity: '880000',
+    cashBalances: [{ currency: 'TWD', amount: '880000' }],
     allocation: [],
     sectorAllocation: [],
-    dividendIncome: 0,
-    dividendTaxWithheld: 0,
+    dividendIncome: '0',
+    dividendTaxWithheld: '0',
     ...over,
   };
 }
@@ -729,12 +729,12 @@ describe('Cash page — re-read rules by revision cause (U-10)', () => {
 
 describe('Cash page — balances row (API mode)', () => {
   const NEGATIVE_USD = summaryDto({
-    cash: 880000,
+    cash: '880000',
     cashBalances: [
-      { currency: 'USD', amount: -1200 },
-      { currency: 'TWD', amount: 50000 },
-      { currency: 'EUR', amount: 0 },
-      { currency: 'JPY', amount: 0 },
+      { currency: 'USD', amount: '-1200' },
+      { currency: 'TWD', amount: '50000' },
+      { currency: 'EUR', amount: '0' },
+      { currency: 'JPY', amount: '0' },
     ],
   });
 
@@ -764,7 +764,7 @@ describe('Cash page — balances row (API mode)', () => {
   it('shows the missing-rate hint for cash currencies the backend could not convert', async () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
       summary: () => success(summaryDto({
-        cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'USD', amount: 50 }],
+        cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'USD', amount: '50' }],
         unconvertedCurrencies: ['USD'],
       })),
     }));
@@ -814,7 +814,7 @@ describe('Cash page — 入金 / 出金 buttons', () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
       summary: () => success(summaryDto({
         baseCurrency: 'EUR',
-        cashBalances: [{ currency: 'TWD', amount: 10 }, { currency: 'USD', amount: -5 }, { currency: 'JPY', amount: -9 }],
+        cashBalances: [{ currency: 'TWD', amount: '10' }, { currency: 'USD', amount: '-5' }, { currency: 'JPY', amount: '-9' }],
       })),
     }));
 
@@ -831,7 +831,7 @@ describe('Cash page — 入金 / 出金 buttons', () => {
 
   it('opens the withdrawal dialog on the base currency and passes the balances so an overdraw is flagged', async () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
-      summary: () => success(summaryDto({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: 100 }] })),
+      summary: () => success(summaryDto({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: '100' }] })),
     }));
 
     await click(requireTestid('cash-page-withdraw'));

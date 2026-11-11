@@ -1,20 +1,65 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi } from './portfolioApi';
+import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi, toPortfolioSummary } from './portfolioApi';
 import { createMockHoldingEventApi, resetMockHoldingEventsForTests } from './holdingEventApi';
+import { isDecimal, parseDecimal, toWire } from './decimal';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { PortfolioActivityDto } from './apiTypes';
+import type { PortfolioActivityDto, PortfolioSummary, PortfolioSummaryDto } from './apiTypes';
 import type { Trade } from '../types';
 
-const SUMMARY_PAYLOAD = {
-  totalMarketValue: 1000,
-  totalCostBasis: 800,
-  realizedPnl: 50,
-  unrealizedPnl: 200,
-  totalPnl: 250,
-  roi: 0.3125,
+/** 後端 PortfolioSummaryDto 的完整 wire 樣本(Phase 5 D-05:BigDecimal 欄位為字串,計數欄位為 number)。 */
+const SUMMARY_PAYLOAD: PortfolioSummaryDto = {
+  totalMarketValue: '1000.00000000',
+  totalCostBasis: '800.00000000',
+  realizedPnl: '50.00000000',
+  unrealizedPnl: '200.00000000',
+  totalPnl: '250.00000000',
+  roi: '0.31250000',
   holdingCount: 3,
+  baseCurrency: 'TWD',
+  fxExcludedCount: 0,
+  unconvertedCurrencies: [],
+  dayPricePnl: '12.50000000',
+  dayPricePnlRatio: '0.01250000',
+  dayPnlExcludedCount: 0,
+  cash: '0.00000000',
+  totalEquity: '1000.00000000',
+  cashBalances: [{ currency: 'TWD', amount: '-0.00000001' }],
+  allocation: [{ category: 'STOCK', value: '1000.00000000', weight: '1.00000000' }],
+  sectorAllocation: [
+    { sector: 'Tech', value: '1000.00000000', weight: '1.00000000', holdingCount: 3, unrealizedPnl: '200.00000000' },
+  ],
+  dividendIncome: '0.00000000',
+  dividendTaxWithheld: '0.00000000',
 };
+
+/** domain summary → wire 形狀(Decimal 以 `toWire` 投影),讓測試以 toEqual 比較而不依賴 big.js 內部欄位。 */
+function plainSummary(summary: PortfolioSummary): PortfolioSummaryDto {
+  const nullable = (value: PortfolioSummary['dayPricePnl']) => (value === null ? null : toWire(value));
+  return {
+    ...summary,
+    totalMarketValue: toWire(summary.totalMarketValue),
+    totalCostBasis: toWire(summary.totalCostBasis),
+    realizedPnl: toWire(summary.realizedPnl),
+    unrealizedPnl: toWire(summary.unrealizedPnl),
+    totalPnl: toWire(summary.totalPnl),
+    roi: toWire(summary.roi),
+    dayPricePnl: nullable(summary.dayPricePnl),
+    dayPricePnlRatio: nullable(summary.dayPricePnlRatio),
+    cash: toWire(summary.cash),
+    totalEquity: toWire(summary.totalEquity),
+    dividendIncome: toWire(summary.dividendIncome),
+    dividendTaxWithheld: toWire(summary.dividendTaxWithheld),
+    cashBalances: summary.cashBalances.map(balance => ({ ...balance, amount: toWire(balance.amount) })),
+    allocation: summary.allocation.map(slice => ({ ...slice, value: toWire(slice.value), weight: toWire(slice.weight) })),
+    sectorAllocation: summary.sectorAllocation.map(slice => ({
+      ...slice,
+      value: toWire(slice.value),
+      weight: toWire(slice.weight),
+      unrealizedPnl: toWire(slice.unrealizedPnl),
+    })),
+  };
+}
 
 const HOLDINGS_PAYLOAD = [
   {
@@ -80,11 +125,107 @@ describe('portfolioApi http adapter', () => {
     const summary = await api.getSummary();
     const holdings = await api.listHoldings();
 
-    expect(summary).toEqual(SUMMARY_PAYLOAD);
+    // big.js 會正規化尾零(後端 setScale(8) 的 "1000.00000000" 與 "1000" 數值相等,compareTo 語意);
+    // 值以 toWire 的一般記號比較,欄位清單與非金額欄位必須逐欄相同。
+    expect(plainSummary(summary)).toEqual({
+      ...SUMMARY_PAYLOAD,
+      totalMarketValue: '1000',
+      totalCostBasis: '800',
+      realizedPnl: '50',
+      unrealizedPnl: '200',
+      totalPnl: '250',
+      roi: '0.3125',
+      dayPricePnl: '12.5',
+      dayPricePnlRatio: '0.0125',
+      cash: '0',
+      totalEquity: '1000',
+      allocation: [{ category: 'STOCK', value: '1000', weight: '1' }],
+      sectorAllocation: [{ sector: 'Tech', value: '1000', weight: '1', holdingCount: 3, unrealizedPnl: '200' }],
+      dividendIncome: '0',
+      dividendTaxWithheld: '0',
+    });
     expect(holdings).toEqual(HOLDINGS_PAYLOAD);
     expect(fetch).toHaveBeenCalledWith('/api/v1/portfolio/summary', expect.any(Object));
     expect(fetch).toHaveBeenCalledWith('/api/v1/portfolio/holdings', expect.any(Object));
     expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ credentials: 'include' });
+  });
+
+  it('maps summary wire strings to Decimal without losing precision (D-05 / D-08)', async () => {
+    const wire: PortfolioSummaryDto = {
+      ...SUMMARY_PAYLOAD,
+      cash: '0.00000000',
+      totalEquity: '123456789012.12345678',
+      dividendIncome: '1.5',
+      dividendTaxWithheld: '0.25',
+      dayPricePnl: null,
+      dayPricePnlRatio: null,
+      cashBalances: [{ currency: 'USD', amount: '9007199254740993.01' }],
+      allocation: [{ category: 'STOCK', value: '123456789012.12345678', weight: '0.33333333' }],
+      sectorAllocation: [
+        { sector: null, value: '1.00000001', weight: '0.00000001', holdingCount: 1, unrealizedPnl: '-0.00000001' },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ success: true, data: wire, error: null, meta: { traceId: 't' } })));
+
+    const summary = await createHttpPortfolioApi('/api/v1').getSummary();
+
+    expect(isDecimal(summary.cash)).toBe(true);
+    // 後端 ZERO.setScale(8) → "0.00000000";數值等於 0(尾零由 big.js 正規化)。
+    expect(summary.cash.eq(parseDecimal('0'))).toBe(true);
+    expect(toWire(summary.cash)).toBe('0');
+    expect(toWire(summary.totalEquity)).toBe('123456789012.12345678');
+    expect(summary.dayPricePnl).toBeNull();
+    expect(summary.dayPricePnlRatio).toBeNull();
+    expect(isDecimal(summary.cashBalances[0].amount)).toBe(true);
+    expect(toWire(summary.cashBalances[0].amount)).toBe('9007199254740993.01');
+    expect(isDecimal(summary.allocation[0].weight)).toBe(true);
+    expect(toWire(summary.allocation[0].value)).toBe('123456789012.12345678');
+    expect(isDecimal(summary.sectorAllocation[0].unrealizedPnl)).toBe(true);
+    // 1e-8 不得輸出科學記號
+    expect(toWire(summary.sectorAllocation[0].weight)).toBe('0.00000001');
+    expect(toWire(summary.sectorAllocation[0].unrealizedPnl)).toBe('-0.00000001');
+    expect(summary.sectorAllocation[0].holdingCount).toBe(1);
+    expect(summary.holdingCount).toBe(3);
+    // 沒有尾零的欄位逐字往返
+    expect(plainSummary(summary)).toEqual({
+      ...wire,
+      totalMarketValue: '1000',
+      totalCostBasis: '800',
+      realizedPnl: '50',
+      unrealizedPnl: '200',
+      totalPnl: '250',
+      roi: '0.3125',
+      cash: '0',
+    });
+  });
+
+  it('treats missing Phase 04.1 list fields (old / cached shape) as empty lists', () => {
+    const legacy = { ...SUMMARY_PAYLOAD } as Partial<PortfolioSummaryDto>;
+    delete legacy.allocation;
+    delete legacy.sectorAllocation;
+    delete legacy.cashBalances;
+    delete legacy.unconvertedCurrencies;
+
+    const summary = toPortfolioSummary(legacy as PortfolioSummaryDto);
+
+    expect(summary.allocation).toEqual([]);
+    expect(summary.sectorAllocation).toEqual([]);
+    expect(summary.cashBalances).toEqual([]);
+    expect(summary.unconvertedCurrencies).toEqual([]);
+  });
+
+  it('fails loudly when a summary money field is still a JSON number (contract drift)', async () => {
+    const drifted = { ...SUMMARY_PAYLOAD, totalEquity: 1000 } as unknown as PortfolioSummaryDto;
+    expect(() => toPortfolioSummary(drifted)).toThrow(TypeError);
+
+    const driftedNested = {
+      ...SUMMARY_PAYLOAD,
+      cashBalances: [{ currency: 'TWD', amount: 5 }],
+    } as unknown as PortfolioSummaryDto;
+    expect(() => toPortfolioSummary(driftedNested)).toThrow(TypeError);
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ success: true, data: drifted, error: null, meta: { traceId: 't' } })));
+    await expect(createHttpPortfolioApi('/api/v1').getSummary()).rejects.toThrow(TypeError);
   });
 
   it('builds the listTrades query string from every contract parameter', async () => {
@@ -216,13 +357,13 @@ describe('portfolioApi mock adapter reads', () => {
 
     const summary = await api.getSummary();
 
-    expect(summary).toEqual({
-      totalMarketValue: 1300,
-      totalCostBasis: 1000,
-      realizedPnl: 0,
-      unrealizedPnl: 300,
-      totalPnl: 300,
-      roi: 0.3,
+    expect(plainSummary(summary)).toEqual({
+      totalMarketValue: '1300',
+      totalCostBasis: '1000',
+      realizedPnl: '0',
+      unrealizedPnl: '300',
+      totalPnl: '300',
+      roi: '0.3',
       holdingCount: 2,
       // 04.1-11:Phase 04.1 新增的 11 個欄位(mock 自洽值,不含亂數)
       baseCurrency: 'USD',
@@ -231,15 +372,18 @@ describe('portfolioApi mock adapter reads', () => {
       dayPricePnl: null,
       dayPricePnlRatio: null,
       dayPnlExcludedCount: 2,
-      cash: 0,
-      totalEquity: 1300,
+      cash: '0',
+      totalEquity: '1300',
       cashBalances: [],
-      allocation: [{ category: 'STOCK', value: 1300, weight: 1 }],
-      sectorAllocation: [{ sector: 'Tech', value: 1300, weight: 1, holdingCount: 2, unrealizedPnl: 300 }],
+      allocation: [{ category: 'STOCK', value: '1300', weight: '1' }],
+      sectorAllocation: [{ sector: 'Tech', value: '1300', weight: '1', holdingCount: 2, unrealizedPnl: '300' }],
       // 04.2-16:mock KPI 是寫死值、不隨 mock 股利變動(UI-SPEC §Interaction 0 股利附加列在 mock 不渲染),故為 0。
-      dividendIncome: 0,
-      dividendTaxWithheld: 0,
+      dividendIncome: '0',
+      dividendTaxWithheld: '0',
     });
+    // mock 與 http 走同一個 mapper:金額欄位是 Decimal
+    expect(isDecimal(summary.totalMarketValue)).toBe(true);
+    expect(isDecimal(summary.sectorAllocation[0].value)).toBe(true);
   });
 
   it('groups sectorAllocation by position sector: weights sum to 1, sorted by value descending', async () => {
@@ -253,12 +397,13 @@ describe('portfolioApi mock adapter reads', () => {
     const summary = await api.getSummary();
 
     expect(summary.sectorAllocation.map(slice => slice.sector)).toEqual(['Tech', 'Crypto']);
-    expect(summary.sectorAllocation[0]).toMatchObject({ value: 1300, holdingCount: 2, unrealizedPnl: 300 });
-    expect(summary.sectorAllocation[1]).toMatchObject({ value: 500, holdingCount: 1, unrealizedPnl: 100 });
-    const weightSum = summary.sectorAllocation.reduce((sum, slice) => sum + slice.weight, 0);
-    expect(weightSum).toBeCloseTo(1, 10);
-    expect(summary.allocation).toEqual([{ category: 'STOCK', value: 1800, weight: 1 }]);
-    expect(summary.totalEquity).toBe(summary.totalMarketValue);
+    const wire = plainSummary(summary);
+    expect(wire.sectorAllocation[0]).toMatchObject({ value: '1300', holdingCount: 2, unrealizedPnl: '300' });
+    expect(wire.sectorAllocation[1]).toMatchObject({ value: '500', holdingCount: 1, unrealizedPnl: '100' });
+    const weightSum = summary.sectorAllocation.reduce((sum, slice) => sum.plus(slice.weight), parseDecimal('0'));
+    expect(weightSum.minus(parseDecimal('1')).abs().lt(parseDecimal('1e-10'))).toBe(true);
+    expect(wire.allocation).toEqual([{ category: 'STOCK', value: '1800', weight: '1' }]);
+    expect(summary.totalEquity.eq(summary.totalMarketValue)).toBe(true);
     expect(summary.dayPnlExcludedCount).toBe(summary.holdingCount);
   });
 
@@ -284,8 +429,8 @@ describe('portfolioApi mock adapter reads', () => {
     expect(first.sectorAllocation).not.toBe(second.sectorAllocation);
     expect(first.cashBalances).not.toBe(second.cashBalances);
     expect(first.unconvertedCurrencies).not.toBe(second.unconvertedCurrencies);
-    first.sectorAllocation[0].value = 999;
-    expect((await api.getSummary()).sectorAllocation[0].value).toBe(2);
+    first.sectorAllocation[0].value = parseDecimal('999');
+    expect(toWire((await api.getSummary()).sectorAllocation[0].value)).toBe('2');
   });
 
   it('derives holding DTOs from live store positions', async () => {
