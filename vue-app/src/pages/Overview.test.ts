@@ -1542,6 +1542,29 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
     expect(rows[0].textContent).not.toContain('null');
   });
 
+  it('05-19(D-08):近期交易以 TradeRecord 顯示 —— 尾零正規化、8 位小數股數原值、總額在 Decimal 內相乘', async () => {
+    const rows = await mountTrades([
+      // 後端 setScale(8) 的尾零:渲染文字與改字串前的 number 相同(10 / 12.50 / 125)。
+      trade({ id: 'z', symbol: 'ZZA', currency: 'USD', quantity: '10.00000000', price: '12.50000000', fee: '0E-8' }),
+      trade({ id: 'f', symbol: 'ZZF', currency: 'USD', quantity: '0.12345678', price: '100' }),
+      // 9007199254740993 超過 double 的精確整數範圍(number 會變成 …992)。
+      trade({ id: 'b', symbol: 'ZZB', currency: 'TWD', quantity: '9007199254740993', price: '1' }),
+    ]);
+
+    const cells = rows.map(row => [...row.querySelectorAll('td')].map(td => td.textContent?.trim()));
+    expect(cells[0].slice(3)).toEqual(['10', '12.50', '125']);
+    expect(cells[1].slice(3)).toEqual(['0.12345678', '100.00', '12']);
+    expect(cells[2][3]).toBe('9007199254740993');
+    expect(cells[2][5]).toBe('9,007,199,254,740,993');
+  });
+
+  it('05-19:近期交易的頁面原始碼不對金額用算術運算子,也不 import wire TradeDto', () => {
+    const tbody = overviewSource.slice(overviewSource.indexOf('<tbody v-else'), overviewSource.indexOf('</tbody>', overviewSource.indexOf('<tbody v-else')));
+    expect(tbody).not.toMatch(/tr\.quantity \* tr\.price/);
+    expect(tbody).toContain('tr.quantity.times(tr.price)');
+    expect(overviewSource).not.toMatch(/^import .*\bTradeDto\b/m);
+  });
+
   it('API tbody 的原始碼不再有 `${{`(不寫死 $)', () => {
     const tbody = overviewSource.slice(overviewSource.indexOf('<tbody v-else'), overviewSource.indexOf('</tbody>', overviewSource.indexOf('<tbody v-else')));
     expect(tbody).not.toMatch(/\$\{\{/);
