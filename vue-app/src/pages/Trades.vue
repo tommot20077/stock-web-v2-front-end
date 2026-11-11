@@ -204,7 +204,7 @@
             </td>
             <!-- 數量:交易沿用原值;股數調整帶號(拆股 / 合股另附比例行);現金股利不適用 -->
             <td class="num" style="text-align:right">
-              <template v-if="isTrade(tr)">{{ tr.quantity }}</template>
+              <template v-if="isTrade(tr)">{{ plainNumber(tr.quantity) }}</template>
               <template v-else-if="tr.kind === 'CASH_DIVIDEND'"><span class="na" aria-hidden="true">—</span></template>
               <template v-else>
                 <span :class="{ 'is-reversed': tr.reversed }">{{ fmtSignedQuantity(tr.quantity) }}</span>
@@ -219,7 +219,7 @@
               <template v-if="isTrade(tr)">{{ fmtMoneyAmount(tradeTotal(tr), tr.currency, 0) }}</template>
               <template v-else-if="tr.kind === 'CASH_DIVIDEND'">
                 <span :class="{ 'is-reversed': tr.reversed }">{{ fmtMoneyAmount(tr.amount, tr.currency) }}</span>
-                <div v-if="(tr.withholdingTax ?? 0) > 0" class="cell-hint" data-testid="trades-tax-line">
+                <div v-if="hasWithholdingTax(tr)" class="cell-hint" data-testid="trades-tax-line">
                   {{ tf(lang, 'tradesTaxLine', { amount: fmtMoneyAmount(tr.withholdingTax, tr.currency) }) }}
                 </div>
               </template>
@@ -315,7 +315,8 @@ import { t, tf } from '../i18n';
 import { fmtNum } from '../data';
 import { fmtMoneyAmount, fmtSignedQuantity } from '../moneyFormat';
 import { ApiClientError } from '../services/apiClient';
-import type { PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
+import type { PaginatedResponse, PortfolioActivity } from '../services/apiTypes';
+import { toWire, ZERO, type Decimal } from '../services/decimal';
 import type { ActivityListParams } from '../services/portfolioApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import {
@@ -424,13 +425,13 @@ type BlockState<T> =
   | { status: 'loaded'; data: T }
   | { status: 'error'; error: BlockError };
 
-const tradesState = ref<BlockState<PaginatedResponse<PortfolioActivityDto>>>({ status: 'loading' });
+const tradesState = ref<BlockState<PaginatedResponse<PortfolioActivity>>>({ status: 'loading' });
 
 // 模板不做型別窄化(vue-tsc 對模板內 union 窄化支援不穩),一律先投影成 computed。
 const tradesLoading = computed(() => tradesState.value.status === 'loading');
 const tradesError = computed(() => (tradesState.value.status === 'error' ? tradesState.value.error : null));
 const tradesPage = computed(() => (tradesState.value.status === 'loaded' ? tradesState.value.data : null));
-const apiTrades = computed<PortfolioActivityDto[]>(() => tradesPage.value?.items ?? []);
+const apiTrades = computed<PortfolioActivity[]>(() => tradesPage.value?.items ?? []);
 const totalPages = computed(() => tradesPage.value?.totalPages ?? 0);
 
 /**
@@ -506,7 +507,7 @@ const staleText = computed(() => {
 const mockEventsVersion = ref(0);
 
 /** 活動列 tbody 的資料:API = 後端當前頁;mock = 本 session 的 mock 事件(依當前頁籤篩選,最新在前)。 */
-const activityRows = computed<PortfolioActivityDto[]>(() => (live ? mockEventRows.value : apiTrades.value));
+const activityRows = computed<PortfolioActivity[]>(() => (live ? mockEventRows.value : apiTrades.value));
 
 /**
  * 股利 / 股數調整新紀錄是否不在目前的結果集內(判定只比 id,理由同 {@link inResultSet})。
@@ -526,7 +527,7 @@ const notInCurrentView = computed(() => eventNotInView.value || (!live && !trade
  * 「新」標記:股利 / 股數調整只比 `lastCreatedHoldingEventId`;交易沿用 D-13 的第 0 列 + lastFill 規則
  * (只套在交易列,事件列不會因為同代號而被標成新)。
  */
-function isActivityFresh(row: PortfolioActivityDto, index: number): boolean {
+function isActivityFresh(row: PortfolioActivity, index: number): boolean {
   const created = lastCreatedHoldingEventId.value;
   if (created !== null && row.id === created) return true;
   const fill = effectiveLastFill.value;
@@ -699,7 +700,7 @@ type RecordMode = 'cashDividend' | 'stockDividend';
 
 const dialogOpen = ref(false);
 const dialogMode = ref<RecordMode>('cashDividend');
-const dialogReversal = ref<PortfolioActivityDto | null>(null);
+const dialogReversal = ref<PortfolioActivity | null>(null);
 const tableCard = ref<HTMLElement | null>(null);
 let openerEl: HTMLElement | null = null;
 let openedFromRow = false;
@@ -722,7 +723,7 @@ function openRecordDialog(mode: RecordMode, event: Event) {
 }
 
 /** 「沖銷這筆」:只帶 reversalOf,值全取自該列(D-13)。 */
-function openReversal(row: PortfolioActivityDto, event: Event) {
+function openReversal(row: PortfolioActivity, event: Event) {
   beginDialog(event, true);
   dialogReversal.value = row;
   dialogOpen.value = true;
@@ -752,12 +753,12 @@ async function onDialogClose() {
 }
 
 /** UI-SPEC §Interaction 3:`沖銷這筆` 的顯示條件(reversible 由後端判定;股數調整只有該標的最新一筆為 true)。 */
-function canReverse(row: PortfolioActivityDto): boolean {
+function canReverse(row: PortfolioActivity): boolean {
   const isEvent = row.kind === 'CASH_DIVIDEND' || row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT';
   return isEvent && row.reversible && !row.reversed && row.reversalOfId == null;
 }
 
-function reverseAria(row: PortfolioActivityDto): string {
+function reverseAria(row: PortfolioActivity): string {
   return tf(props.lang, 'tradesReverseAria', { date: activityDate(row), symbol: row.symbol ?? '—', type: kindLabel(row) });
 }
 
@@ -785,20 +786,20 @@ function localDateTime(iso: string): string {
  * 日期欄(UI-SPEC §Interaction 3):交易列沿用 occurredAt(= executedAt)前 10 碼(既有行為);
  * 現金股利為本機 `YYYY-MM-DD HH:mm`;股數調整為 effectiveDate 原字串(除權日是日曆日,不做時區換算)。
  */
-function activityDate(row: PortfolioActivityDto): string {
+function activityDate(row: PortfolioActivity): string {
   if (row.kind === 'CASH_DIVIDEND') return localDateTime(row.occurredAt);
   if (row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT') return row.effectiveDate ?? row.occurredAt.slice(0, 10);
   return row.occurredAt.slice(0, 10);
 }
 
 /** 沖銷列指回的原紀錄日期:股利用 reversalOfOccurredAt 本機日期、股數調整用 reversalOfEffectiveDate(不輸出 uuid)。 */
-function reversalOfDate(row: PortfolioActivityDto): string {
+function reversalOfDate(row: PortfolioActivity): string {
   if (row.kind === 'CASH_DIVIDEND') return localDate(row.reversalOfOccurredAt);
   return row.reversalOfEffectiveDate ?? localDate(row.reversalOfOccurredAt);
 }
 
 /** 比例行 `{new} : {old}`(拆股 4 : 1、合股 1 : 2)。 */
-function ratioText(row: PortfolioActivityDto): string {
+function ratioText(row: PortfolioActivity): string {
   return `${row.ratioNew ?? '—'} : ${row.ratioOld ?? '—'}`;
 }
 
@@ -807,18 +808,31 @@ function mockKind(trade: Trade): PortfolioActivityKind {
   return trade.type === 'DIV' ? 'CASH_DIVIDEND' : trade.type;
 }
 
-function isTrade(row: PortfolioActivityDto): boolean {
+function isTrade(row: PortfolioActivity): boolean {
   return row.kind === 'BUY' || row.kind === 'SELL';
 }
 
-/** 交易總額 = quantity × price(不含 fee,與後端 total 排序鍵同語意)。 */
-function tradeTotal(row: PortfolioActivityDto): number | null {
+/** 交易總額 = quantity × price(不含 fee,與後端 total 排序鍵同語意);Decimal 相乘,不經 JS 浮點(Phase 5 D-08)。 */
+function tradeTotal(row: PortfolioActivity): Decimal | null {
   if (row.quantity === null || row.price === null) return row.amount;
-  return row.quantity * row.price;
+  return row.quantity.times(row.price);
+}
+
+/** 現金股利是否有預扣稅(> 0 才顯示稅額行);以 Decimal 比較。 */
+function hasWithholdingTax(row: PortfolioActivity): boolean {
+  return row.withholdingTax !== null && row.withholdingTax.gt(ZERO);
+}
+
+/**
+ * 不經格式化的數字文字(交易數量欄與 CSV 數值欄):`toWire` 一般記號、完整精度(`0.00000001` 不會變成 `1e-8`);
+ * null → 空字串。CSV 的 `csvCell` 把這種純數字字串視為數字,不加公式前綴。
+ */
+function plainNumber(value: Decimal | null): string {
+  return value === null ? '' : toWire(value);
 }
 
 /** 類型 pill 文字:買 / 賣沿用既有原字串;股利 / 配股 / 拆股 / 合股經 i18n(拆股 vs 合股看 ratioNew > ratioOld)。 */
-function kindLabel(row: PortfolioActivityDto): string {
+function kindLabel(row: PortfolioActivity): string {
   switch (row.kind) {
     case 'CASH_DIVIDEND':
       return t(props.lang, 'activityKindCashDividend');
@@ -831,7 +845,7 @@ function kindLabel(row: PortfolioActivityDto): string {
   }
 }
 
-function kindPillClass(row: PortfolioActivityDto): string {
+function kindPillClass(row: PortfolioActivity): string {
   if (row.kind === 'BUY') return 'buy';
   if (row.kind === 'SELL') return 'sell';
   return row.kind === 'CASH_DIVIDEND' ? 'div' : '';
@@ -865,7 +879,7 @@ const filteredTrades = computed(() => {
  * 04.2-21(UI-SPEC §Interaction 0):本 session 由 mock 記錄的事件列,依當前頁籤 client-side 篩選、最新在前。
  * 買 / 賣頁籤不含事件;年度頁籤以畫面上的日期欄比對寫死的 2026(與靜態列同規則)。
  */
-const mockEventRows = computed<PortfolioActivityDto[]>(() => {
+const mockEventRows = computed<PortfolioActivity[]>(() => {
   void mockEventsVersion.value;
   if (!live) return [];
   const id = activeFilter.value;
@@ -882,6 +896,7 @@ const mockEventRows = computed<PortfolioActivityDto[]>(() => {
 // 04.1-14(D-28 / UI-SPEC §Interaction 9):`currency` 緊接 `symbol`,兩模式共用同一份表頭。
 // API 列填 `trade.currency`(缺值為空字串);mock 沒有幣別資料,留空而不猜(U-29)。
 // 04.2-20(U-09):擴充 tax / ratio / reversal_of / reversed。數值一律未格式化原始數字;
+// Phase 5 D-08:活動列的數值欄由 Decimal 經 `toWire` 輸出一般記號字串(完整精度、無科學記號);
 // reversal_of 為原紀錄日期,**不輸出 uuid**(T-04.2-44);reversed 為 `true` 或空。
 const CSV_HEADER = 'date,type,symbol,currency,qty,price,total,fee,tax,ratio,note,reversal_of,reversed'.split(',');
 
@@ -909,7 +924,7 @@ async function exportApiCsv() {
   exporting.value = true;
   exportError.value = null;
   try {
-    const collected: PortfolioActivityDto[] = [];
+    const collected: PortfolioActivity[] = [];
     let requestPage = 0;
     let pages = 1;
     do {
@@ -960,7 +975,7 @@ function exportCsv() {
  * 活動列 → CSV 列(依 kind 分支;不適用欄位在 DTO 恆為 null → 空字串)。
  * date:交易沿用 occurredAt 前 10 碼(既有);現金股利為本機日期;股數調整為 effectiveDate。
  */
-function activityCsvRow(row: PortfolioActivityDto): CsvValue[] {
+function activityCsvRow(row: PortfolioActivity): CsvValue[] {
   const isAdjustment = row.kind === 'STOCK_DIVIDEND' || row.kind === 'SPLIT';
   let date = row.occurredAt.slice(0, 10);
   if (row.kind === 'CASH_DIVIDEND') date = localDate(row.occurredAt);
@@ -970,11 +985,11 @@ function activityCsvRow(row: PortfolioActivityDto): CsvValue[] {
     row.kind,
     row.symbol,
     row.currency ?? '',
-    row.quantity,
-    row.price,
-    isTrade(row) ? tradeTotal(row) : row.amount,
-    row.fee,
-    row.kind === 'CASH_DIVIDEND' ? row.withholdingTax : null,
+    plainNumber(row.quantity),
+    plainNumber(row.price),
+    plainNumber(isTrade(row) ? tradeTotal(row) : row.amount),
+    plainNumber(row.fee),
+    row.kind === 'CASH_DIVIDEND' ? plainNumber(row.withholdingTax) : null,
     row.kind === 'SPLIT' && row.ratioNew !== null && row.ratioOld !== null ? `${row.ratioNew}:${row.ratioOld}` : null,
     row.note,
     row.reversalOfId != null ? reversalOfDate(row) : null,

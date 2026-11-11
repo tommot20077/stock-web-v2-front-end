@@ -51,7 +51,7 @@
                   <b class="num">{{ fmtMoney(reversalOf.amount, reversalOf.currency, minorUnits(reversalOf.currency)) }}</b>
                 </div>
                 <div class="sum-row">
-                  <span class="num">{{ tf(lang, 'tradesTaxLine', { amount: fmtMoney(reversalOf.withholdingTax ?? 0, reversalOf.currency, minorUnits(reversalOf.currency)) }) }}</span>
+                  <span class="num">{{ tf(lang, 'tradesTaxLine', { amount: fmtMoney(reversalOf.withholdingTax ?? ZERO, reversalOf.currency, minorUnits(reversalOf.currency)) }) }}</span>
                 </div>
               </template>
               <template v-else>
@@ -576,8 +576,8 @@ import { FALLBACK_MARKET_DAY_RULE, marketDayRuleOf, marketToday, marketZoneLabel
 import type { MarketDayRule } from '../marketDate';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
-import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
-import { numberToWire, parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
+import type { AssetDto, PaginatedResponse, PortfolioActivity } from '../services/apiTypes';
+import { parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
 import type { Dividend, ShareAdjustment } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
@@ -611,7 +611,7 @@ const props = withDefaults(defineProps<{
   holding?: HoldingEventHolding | null;
   initialMode?: HoldingEventMode;
   /** 有值 = 沖銷模式(Trades 活動列「沖銷這筆」);值全取自此列,只有備註可改(D-13)。 */
-  reversalOf?: PortfolioActivityDto | null;
+  reversalOf?: PortfolioActivity | null;
 }>(), {
   symbol: null,
   holding: null,
@@ -723,7 +723,7 @@ const reversalKindLabel = computed(() => {
 
 /** 沖銷預覽的唯一前端衍生:把記錄值前綴「扣回 / 撤銷」字樣,不做加減(UI-SPEC §Money)。 */
 function reversalPreviewFor(kind: 'dividend' | 'shareAdjustment', values: {
-  symbol: string | null; currency: string | null; amount: Decimal | number | null; quantity: Decimal | number | null;
+  symbol: string | null; currency: string | null; amount: Decimal | null; quantity: Decimal | null;
 }): string {
   if (kind === 'dividend') {
     return tf(props.lang, 'holdingEventReversalPreviewDividend', {
@@ -1432,23 +1432,22 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
  * 沖銷請求:除備註外的值逐欄取自原列(DB 驗證沖銷值與原列相同,前端不讓使用者改)。
  * 股利 `paidAt` 送 null(後端帶 now();payload 比對只在有送時比對);拆股 `quantity` 送 null(ΔQ 由後端記錄)。
  *
- * 型別閉包交接點(05-20 → 05-21,同 05-16 規約):原列 `PortfolioActivityDto` 的金額 / 股數在 05-21 之前仍是
- * number,只在這個函式內以 `fromRow` 轉成 Create*Input 的 Decimal(null 保持 null)。
- * **05-21 活動列轉 Decimal 時刪除此轉換**,改為直接傳原列的 Decimal 欄位。
+ * 原列是 domain `PortfolioActivity`(Phase 5 D-08):金額 / 預扣稅 / 股數已是 Decimal,直接放進 Create*Input,
+ * 由 adapter 以 `toWire` 逐欄投影成字串送出 —— 全程不經 JS number。
  */
 async function createReversal(
-  original: PortfolioActivityDto,
+  original: PortfolioActivity,
   symbol: string,
   noteValue: string | null,
   idempotencyKey: string,
 ): Promise<RecordedEvent> {
-  const fromRow = (value: number | null): Decimal | null => (value === null ? null : parseDecimal(numberToWire(value)));
   const clients = getRuntimeApiClients();
   if (original.kind === 'CASH_DIVIDEND') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: fromRow(original.amount) ?? ZERO,
-      withholdingTax: fromRow(original.withholdingTax),
+      // 現金股利列的 amount 依契約恆有值;缺值時送 0 讓後端以值域錯誤拒絕,不在前端猜測。
+      amount: original.amount ?? ZERO,
+      withholdingTax: original.withholdingTax,
       paidAt: null,
       note: noteValue,
       reversalOfId: original.id,
@@ -1459,7 +1458,7 @@ async function createReversal(
   const dto = await clients.holdingEvents.createShareAdjustment({
     symbol,
     type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
-    quantity: isStock ? fromRow(original.quantity) : null,
+    quantity: isStock ? original.quantity : null,
     ratioNew: isStock ? null : original.ratioNew,
     ratioOld: isStock ? null : original.ratioOld,
     effectiveDate: original.effectiveDate ?? '',

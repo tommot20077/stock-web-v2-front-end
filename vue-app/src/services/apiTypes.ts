@@ -108,17 +108,17 @@ export interface PortfolioActivityDto {
   /** 僅股數調整:除權日 `yyyy-MM-dd`。 */
   effectiveDate: string | null;
   createdAt: string;
-  /** 交易數量 / 配股股數 / 拆股 ΔQ(帶號);股利為 null。 */
-  quantity: number | null;
-  /** 僅交易。 */
-  price: number | null;
-  /** 僅交易。 */
-  fee: number | null;
-  /** 交易 = quantity × price;股利 = 實領總額;股數調整為 null。 */
-  amount: number | null;
-  /** 僅股利。 */
-  withholdingTax: number | null;
-  /** 僅拆股。 */
+  /** 交易數量 / 配股股數 / 拆股 ΔQ(帶號);股利為 null。BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  quantity: string | null;
+  /** 僅交易。BigDecimal → JSON 字串(D-05)。 */
+  price: string | null;
+  /** 僅交易。BigDecimal → JSON 字串(D-05)。 */
+  fee: string | null;
+  /** 交易 = quantity × price;股利 = 實領總額;股數調整為 null。BigDecimal → JSON 字串(D-05)。 */
+  amount: string | null;
+  /** 僅股利。BigDecimal → JSON 字串(D-05)。 */
+  withholdingTax: string | null;
+  /** 僅拆股;後端 Integer,維持 number。 */
   ratioNew: number | null;
   ratioOld: number | null;
   note: string | null;
@@ -133,6 +133,15 @@ export interface PortfolioActivityDto {
   /** 交易恆 false;股利 = 非沖銷列且未被沖銷;股數調整 = 同上且為該標的最晚一筆未沖銷調整。 */
   reversible: boolean;
 }
+
+/**
+ * domain:活動列(由 `portfolioApi.toPortfolioActivity` 產生;http 與 mock 共用)。數量 / 價格 / 手續費 / 金額 / 預扣稅為
+ * Decimal(不適用的欄位維持 null),`ratioNew` / `ratioOld` 仍是 number;頁面與元件只拿這個型別(Phase 5 D-08)。
+ */
+export type PortfolioActivity = DecimalFields<
+  PortfolioActivityDto,
+  'quantity' | 'price' | 'fee' | 'amount' | 'withholdingTax'
+>;
 
 /** 對應後端 CashBalanceDto:單一幣別的現金餘額(原幣,可為負)。 */
 export interface CashBalanceDto {

@@ -1,10 +1,24 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHttpPortfolioApi, createMockPortfolioApi, createPortfolioApi, toHolding, toPortfolioSummary } from './portfolioApi';
+import {
+  createHttpPortfolioApi,
+  createMockPortfolioApi,
+  createPortfolioApi,
+  toHolding,
+  toPortfolioActivity,
+  toPortfolioSummary,
+} from './portfolioApi';
 import { createMockHoldingEventApi, resetMockHoldingEventsForTests } from './holdingEventApi';
-import { isDecimal, parseDecimal, toWire } from './decimal';
+import { isDecimal, parseDecimal, toWire, type Decimal } from './decimal';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { Holding, HoldingDto, PortfolioActivityDto, PortfolioSummary, PortfolioSummaryDto } from './apiTypes';
+import type {
+  Holding,
+  HoldingDto,
+  PortfolioActivity,
+  PortfolioActivityDto,
+  PortfolioSummary,
+  PortfolioSummaryDto,
+} from './apiTypes';
 import type { Trade } from '../types';
 
 /** 後端 PortfolioSummaryDto 的完整 wire 樣本(Phase 5 D-05:BigDecimal 欄位為字串,計數欄位為 number)。 */
@@ -787,8 +801,8 @@ const DIVIDEND_ACTIVITY: PortfolioActivityDto = {
   quantity: null,
   price: null,
   fee: null,
-  amount: 120,
-  withholdingTax: 30,
+  amount: '120',
+  withholdingTax: '30',
   ratioNew: null,
   ratioOld: null,
   note: null,
@@ -798,6 +812,18 @@ const DIVIDEND_ACTIVITY: PortfolioActivityDto = {
   reversed: false,
   reversible: true,
 };
+
+/** 活動列五個 Decimal 欄位投影回 wire 字串(null 維持 null),供 `toMatchObject` 以字串斷言精確值。 */
+function activityWire(row: PortfolioActivity): Pick<PortfolioActivityDto, 'quantity' | 'price' | 'fee' | 'amount' | 'withholdingTax'> {
+  const wire = (value: Decimal | null) => (value === null ? null : toWire(value));
+  return {
+    quantity: wire(row.quantity),
+    price: wire(row.price),
+    fee: wire(row.fee),
+    amount: wire(row.amount),
+    withholdingTax: wire(row.withholdingTax),
+  };
+}
 
 describe('portfolioApi http adapter — listActivities(PORT-13)', () => {
   it('calls GET /portfolio/activities with the same parameter names as listTrades', async () => {
@@ -815,7 +841,69 @@ describe('portfolioApi http adapter — listActivities(PORT-13)', () => {
       expect.any(Object),
     );
     expect(String(vi.mocked(fetch).mock.calls[0][1]?.method ?? 'GET').toUpperCase()).toBe('GET');
-    expect(page).toEqual(pageData);
+    expect(page).toMatchObject({ page: 2, size: 20, totalElements: 41, totalPages: 3 });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({ id: DIVIDEND_ACTIVITY.id, kind: 'CASH_DIVIDEND', quantity: null, price: null, fee: null });
+    expect(activityWire(page.items[0])).toEqual({ quantity: null, price: null, fee: null, amount: '120', withholdingTax: '30' });
+  });
+
+  it('05-21 / D-08:wire 字串 → toPortfolioActivity → Decimal;Integer 比例維持 number、null 維持 null', async () => {
+    const splitWire: PortfolioActivityDto = {
+      ...DIVIDEND_ACTIVITY,
+      id: 'split-1',
+      kind: 'SPLIT',
+      amount: null,
+      withholdingTax: null,
+      quantity: '-0.00000001',
+      ratioNew: 3,
+      ratioOld: 1,
+      effectiveDate: '2026-10-01',
+    };
+    const tinyDividend: PortfolioActivityDto = { ...DIVIDEND_ACTIVITY, amount: '0.00000001', withholdingTax: null };
+    const trade: PortfolioActivityDto = {
+      ...DIVIDEND_ACTIVITY,
+      id: 'trade-1',
+      kind: 'BUY',
+      quantity: '123456.12345678',
+      price: '1000000.12345678',
+      fee: '0.00000001',
+      amount: '123456789012.12345678',
+      withholdingTax: null,
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      success: true,
+      data: { items: [tinyDividend, splitWire, trade], page: 0, size: 20, totalElements: 3, totalPages: 1 },
+      error: null,
+      meta: { traceId: 'req_activities' },
+    })));
+
+    const { items } = await createHttpPortfolioApi('/api/v1').listActivities();
+
+    expect(isDecimal(items[0].amount)).toBe(true);
+    expect(activityWire(items[0])).toEqual({ quantity: null, price: null, fee: null, amount: '0.00000001', withholdingTax: null });
+    expect(items[1]).toMatchObject({ ratioNew: 3, ratioOld: 1, amount: null });
+    expect(activityWire(items[1]).quantity).toBe('-0.00000001');
+    expect(activityWire(items[2])).toEqual({
+      quantity: '123456.12345678',
+      price: '1000000.12345678',
+      fee: '0.00000001',
+      amount: '123456789012.12345678',
+      withholdingTax: null,
+    });
+  });
+
+  it('05-21:活動列金額欄仍是 JSON number → 在邊界丟 TypeError(契約違反大聲失敗)', async () => {
+    for (const field of ['quantity', 'price', 'fee', 'amount', 'withholdingTax'] as const) {
+      const drifted = { ...DIVIDEND_ACTIVITY, [field]: 120 } as unknown as PortfolioActivityDto;
+      expect(() => toPortfolioActivity(drifted), field).toThrow(TypeError);
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      success: true,
+      data: { items: [{ ...DIVIDEND_ACTIVITY, amount: 120 }], page: 0, size: 20, totalElements: 1, totalPages: 1 },
+      error: null,
+      meta: { traceId: 'req_activities' },
+    })));
+    await expect(createHttpPortfolioApi('/api/v1').listActivities()).rejects.toThrow(TypeError);
   });
 
   it('forwards symbol / dateFrom / dateTo and defaults page / size', async () => {
@@ -892,10 +980,14 @@ describe('portfolioApi mock adapter — listActivities', () => {
       expect(item.reversible).toBe(false);
       expect(item.reversed).toBe(false);
     }
-    expect(page.items[0]).toMatchObject({ symbol: 'AAPL', quantity: 10, price: 100, fee: 1, amount: 1000 });
-    expect(page.items[2]).toMatchObject({
-      symbol: 'AAPL', quantity: null, price: null, fee: null, amount: 120 * 0.24, effectiveDate: null,
-    });
+    expect(page.items[0].symbol).toBe('AAPL');
+    // mock 交易列與 http 同走 toPortfolioActivity:domain 是 Decimal,數值等於 data.ts 的原值。
+    expect(isDecimal(page.items[0].quantity)).toBe(true);
+    expect(isDecimal(page.items[0].amount)).toBe(true);
+    expect(activityWire(page.items[0])).toEqual({ quantity: '10', price: '100', fee: '1', amount: '1000', withholdingTax: null });
+    expect(page.items[2]).toMatchObject({ symbol: 'AAPL', effectiveDate: null });
+    // 靜態 DIV 列:實領 = 120 × 0.24,以 Decimal 相乘(JS number 會得到 28.799999999999997)。
+    expect(activityWire(page.items[2])).toEqual({ quantity: null, price: null, fee: null, amount: '28.8', withholdingTax: '0' });
   });
 
   it('merges events recorded by the mock holdingEventApi exactly once', async () => {
@@ -915,13 +1007,11 @@ describe('portfolioApi mock adapter — listActivities', () => {
     // 股利事件同時寫了一列 mock DIV 交易;活動列表只能出現一次(以事件本身代表,可沖銷)。
     expect(page.totalElements).toBe(5);
     const dividendRow = page.items.find(item => item.id === dividend.id)!;
-    expect(dividendRow).toMatchObject({
-      kind: 'CASH_DIVIDEND', amount: 50, withholdingTax: 5, price: null, fee: null, reversible: true,
-    });
+    expect(dividendRow).toMatchObject({ kind: 'CASH_DIVIDEND', price: null, fee: null, reversible: true });
+    expect(activityWire(dividendRow)).toMatchObject({ amount: '50', withholdingTax: '5' });
     const splitRow = page.items.find(item => item.id === split.id)!;
-    expect(splitRow).toMatchObject({
-      kind: 'SPLIT', quantity: 1000, ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01', amount: null, reversible: true,
-    });
+    expect(splitRow).toMatchObject({ kind: 'SPLIT', ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01', amount: null, reversible: true });
+    expect(activityWire(splitRow).quantity).toBe('1000');
     expect(Object.keys(splitRow).sort()).toEqual(ACTIVITY_FIELDS);
     expect(page.items.filter(item => item.kind === 'CASH_DIVIDEND')).toHaveLength(2);
     // 預設 occurredAt desc:最新的拆股排第一。
@@ -956,7 +1046,7 @@ describe('portfolioApi mock adapter — listActivities', () => {
     const api = createMockPortfolioApi();
 
     const ascending = await api.listActivities({ sort: 'total', direction: 'asc' });
-    expect(ascending.items.map(item => item.amount)).toEqual([120 * 0.24, 1000, 1000, null]);
+    expect(ascending.items.map(item => activityWire(item).amount)).toEqual(['28.8', '1000', '1000', null]);
 
     const second = await api.listActivities({ sort: 'total', direction: 'desc', page: 1, size: 3 });
     expect(second).toMatchObject({ page: 1, size: 3, totalElements: 4, totalPages: 2 });
@@ -991,7 +1081,8 @@ describe('portfolioApi mock adapter — live.holdingEvents / isHoldingEventTrade
     const rows = api.live!.holdingEvents;
     expect(rows.map(row => row.id)).toEqual([dividend.id, split.id]);
     for (const row of rows) expect(Object.keys(row).sort()).toEqual(ACTIVITY_FIELDS);
-    expect(rows[0]).toMatchObject({ kind: 'CASH_DIVIDEND', amount: 50, price: null, fee: null, reversible: true });
+    expect(rows[0]).toMatchObject({ kind: 'CASH_DIVIDEND', price: null, fee: null, reversible: true });
+    expect(activityWire(rows[0])).toMatchObject({ amount: '50', withholdingTax: '5' });
     expect(rows[1]).toMatchObject({ kind: 'SPLIT', ratioNew: 2, ratioOld: 1, reversible: true });
 
     // 股利事件寫進 mock 交易的那列 DIV 由事件代表;靜態示範列不是。
@@ -1006,8 +1097,8 @@ describe('portfolioApi mock adapter — live.holdingEvents / isHoldingEventTrade
     await createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: parseDecimal('50') }, 'k-1');
     const api = createMockPortfolioApi();
 
-    api.live!.holdingEvents[0].amount = 999;
+    api.live!.holdingEvents[0].amount = parseDecimal('999');
 
-    expect(api.live!.holdingEvents[0].amount).toBe(50);
+    expect(toWire(api.live!.holdingEvents[0].amount!)).toBe('50');
   });
 });

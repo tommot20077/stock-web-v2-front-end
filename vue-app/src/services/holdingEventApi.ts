@@ -215,8 +215,9 @@ const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 export type MockHoldingEventKind = 'CASH_DIVIDEND' | 'STOCK_DIVIDEND' | 'SPLIT';
 
 /**
- * 本 session 由 mock 記錄的一筆事件,欄位名與 `PortfolioActivityDto` 一致(少 `price` / `fee`,
- * 兩者對股利與股數調整恆為 null),供 mock `listActivities` 與 Trades mock 模式合併。
+ * 本 session 由 mock 記錄的一筆事件,欄位名與型別與 wire `PortfolioActivityDto` 一致(少 `price` / `fee`,
+ * 兩者對股利與股數調整恆為 null;金額 / 股數為 wire 字串,Phase 5 D-05),供 mock `listActivities` 與 Trades mock 模式合併。
+ * 本模組只產出 wire 形狀;轉成 domain 由 `portfolioApi.toPortfolioActivity` 負責(避免循環 import)。
  * `reversed` / `reversible` / `reversalOf*` 於讀取時即時計算,規則同後端契約:
  * 股利 = 非沖銷列且未被沖銷;股數調整 = 同上**且**為該標的最晚一筆未沖銷調整。
  */
@@ -229,11 +230,12 @@ export interface MockHoldingEvent {
   occurredAt: string;
   effectiveDate: string | null;
   createdAt: string;
-  /** 配股股數 / 拆股 ΔQ(帶號);股利為 null。 */
-  quantity: number | null;
-  /** 股利實領;股數調整為 null。 */
-  amount: number | null;
-  withholdingTax: number | null;
+  /** 配股股數 / 拆股 ΔQ(帶號,wire 字串);股利為 null。 */
+  quantity: string | null;
+  /** 股利實領(wire 字串);股數調整為 null。 */
+  amount: string | null;
+  /** 預扣稅(wire 字串);股數調整為 null。 */
+  withholdingTax: string | null;
   ratioNew: number | null;
   ratioOld: number | null;
   note: string | null;
@@ -337,9 +339,9 @@ function dividendToEvent(entry: StoredDividend): MockHoldingEvent {
     effectiveDate: null,
     createdAt: entry.createdAt,
     quantity: null,
-    // MockHoldingEvent 與 PortfolioActivityDto 同形,金額仍是 number(05-21 一併字串化);mock-only 資料。
-    amount: Number(entry.amount),
-    withholdingTax: Number(entry.withholdingTax),
+    // mock 儲存層已是 wire 字串,原樣傳出(與 PortfolioActivityDto 同形)。
+    amount: entry.amount,
+    withholdingTax: entry.withholdingTax,
     ratioNew: null,
     ratioOld: null,
     note: entry.note,
@@ -364,8 +366,8 @@ function adjustmentToEvent(entry: StoredAdjustment): MockHoldingEvent {
     occurredAt: effectiveInstant(entry.effectiveDate),
     effectiveDate: entry.effectiveDate,
     createdAt: entry.createdAt,
-    // 同 dividendToEvent:MockHoldingEvent 維持 number(05-21),mock-only 資料。
-    quantity: Number(entry.quantityDelta),
+    // 同 dividendToEvent:儲存層的 wire 字串原樣傳出。
+    quantity: entry.quantityDelta,
     amount: null,
     withholdingTax: null,
     ratioNew: entry.ratioNew,

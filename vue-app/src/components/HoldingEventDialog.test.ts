@@ -19,7 +19,8 @@ import {
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import { toDividend, toShareAdjustment, type Dividend, type DividendDto, type ShareAdjustment, type ShareAdjustmentDto } from '../services/holdingEventApi';
-import type { AssetDto, PortfolioActivityDto } from '../services/apiTypes';
+import type { AssetDto, PortfolioActivity, PortfolioActivityDto } from '../services/apiTypes';
+import { toPortfolioActivity } from '../services/portfolioApi';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -1475,8 +1476,12 @@ describe('HoldingEventDialog — 標的 typeahead(D-28 / D-03)', () => {
 /** 原列 UUID:任何沖銷畫面都不得顯示它(T-04.2-43,只以日期指回)。 */
 const ORIGINAL_UUID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 
-function activityRow(overrides: Partial<PortfolioActivityDto>): PortfolioActivityDto {
-  return {
+/**
+ * 原列 fixture:以 wire 形狀描述(金額 / 股數為字串,05-21 / D-05),再經與 Trades 相同的 `toPortfolioActivity`
+ * 轉成對話框實際收到的 domain `PortfolioActivity`(Decimal)。
+ */
+function activityRow(overrides: Partial<PortfolioActivityDto>): PortfolioActivity {
+  return toPortfolioActivity({
     id: ORIGINAL_UUID,
     kind: 'CASH_DIVIDEND',
     symbol: 'AAPL',
@@ -1498,15 +1503,15 @@ function activityRow(overrides: Partial<PortfolioActivityDto>): PortfolioActivit
     reversed: false,
     reversible: true,
     ...overrides,
-  };
+  });
 }
 
-const DIVIDEND_ROW = activityRow({ kind: 'CASH_DIVIDEND', amount: 120, withholdingTax: 30, note: 'Q3 配息' });
+const DIVIDEND_ROW = activityRow({ kind: 'CASH_DIVIDEND', amount: '120', withholdingTax: '30', note: 'Q3 配息' });
 const SPLIT_ROW = activityRow({
   kind: 'SPLIT',
   occurredAt: '2026-10-20T13:30:00Z',
   effectiveDate: '2026-10-20',
-  quantity: 300,
+  quantity: '300',
   ratioNew: 4,
   ratioOld: 1,
 });
@@ -1514,7 +1519,7 @@ const STOCK_DIVIDEND_ROW = activityRow({
   kind: 'STOCK_DIVIDEND',
   occurredAt: '2026-10-01T13:30:00Z',
   effectiveDate: '2026-10-01',
-  quantity: 50,
+  quantity: '50',
 });
 
 /** 後端回的沖銷紀錄:沖銷列輸出原值(不反號),以 `reversalOfId` 判斷。 */
@@ -1539,7 +1544,7 @@ function reversalAdjustmentDto(overrides: Partial<ShareAdjustmentDto> = {}): Sha
 }
 
 /** 從 Trades 活動列開啟沖銷:不傳 symbol / holding,值全來自 `reversalOf`。 */
-function reversalProps(row: PortfolioActivityDto) {
+function reversalProps(row: PortfolioActivity) {
   return { symbol: null, holding: null, reversalOf: row };
 }
 
@@ -1678,7 +1683,7 @@ describe('HoldingEventDialog — 沖銷模式(D-13)', () => {
   });
 
   it('reversalConflictsLockSubmitAndAskTheOpenerToReload', async () => {
-    const cases: Array<[string, number, string, PortfolioActivityDto]> = [
+    const cases: Array<[string, number, string, PortfolioActivity]> = [
       ['DIVIDEND_ALREADY_REVERSED', 409, 'cashErrAlreadyReversed', DIVIDEND_ROW],
       ['DIVIDEND_NOT_REVERSIBLE', 409, 'cashErrNotReversible', DIVIDEND_ROW],
       ['DIVIDEND_NOT_FOUND', 404, 'cashErrOriginalNotFound', DIVIDEND_ROW],
@@ -2103,8 +2108,8 @@ describe('HoldingEventDialog — 現金股利以 Decimal 解析與送出(05-20 /
     expect(submitButton().disabled).toBe(true);
   });
 
-  it('沖銷現金股利:原列預扣稅為 null → 送 null;原列金額 number 經單點交接送字串', async () => {
-    const row = activityRow({ kind: 'CASH_DIVIDEND', amount: 1234.56, withholdingTax: null });
+  it('沖銷現金股利:原列預扣稅為 null → 送 null;原列金額 Decimal 經 toWire 送字串', async () => {
+    const row = activityRow({ kind: 'CASH_DIVIDEND', amount: '1234.56', withholdingTax: null });
     const { fetchImpl } = await mountDialog({
       fetchImpl: holdingEventFetch({ dividends: () => okResponse(REVERSAL_DIVIDEND_DTO) }),
       props: reversalProps(row),
@@ -2119,17 +2124,15 @@ describe('HoldingEventDialog — 現金股利以 Decimal 解析與送出(05-20 /
     });
   });
 
-  it('源碼守門:金額 / 稅 / 股數輸入不經 Number();number → Decimal 交接只在 createReversal', () => {
+  it('源碼守門:金額 / 稅 / 股數輸入不經 Number();05-20 → 05-21 交接點已收回(numberToWire 0 處)', () => {
     expect(holdingEventDialogSource).not.toMatch(/Number\((amount|tax|shares)\.value/);
     const code = holdingEventDialogSource
       .split('\n')
       .filter(line => !/^\s*(\*|\/\/)/.test(line))
       .join('\n');
-    const reversalFn = code.slice(code.indexOf('async function createReversal'));
-    const reversalBody = reversalFn.slice(0, reversalFn.indexOf('\n}\n'));
-    const total = code.match(/numberToWire\(/g) ?? [];
-    expect(total.length).toBeGreaterThanOrEqual(1);
-    expect((reversalBody.match(/numberToWire\(/g) ?? []).length).toBe(total.length);
+    expect(code.match(/numberToWire/g) ?? []).toHaveLength(0);
+    // 原列以 domain 型別進入對話框,不 import wire 活動列型別。
+    expect(holdingEventDialogSource).not.toMatch(/^import .*\bPortfolioActivityDto\b/m);
   });
 });
 
@@ -2166,8 +2169,8 @@ describe('HoldingEventDialog — 配股 / 拆股以 Decimal 解析與送出(05-2
     expect(fieldError('quantity')).toBeUndefined();
   });
 
-  it('沖銷配股:原列 quantity number 經單點交接送字串;沖銷拆股 quantity 送 null、比例原樣', async () => {
-    const stockRow = activityRow({ kind: 'STOCK_DIVIDEND', occurredAt: '2026-10-01T13:30:00Z', effectiveDate: '2026-10-01', quantity: 12.5 });
+  it('沖銷配股:原列 quantity Decimal 經 toWire 送字串;沖銷拆股 quantity 送 null、比例原樣', async () => {
+    const stockRow = activityRow({ kind: 'STOCK_DIVIDEND', occurredAt: '2026-10-01T13:30:00Z', effectiveDate: '2026-10-01', quantity: '12.5' });
     const first = await mountDialog({
       fetchImpl: adjustmentFetch(reversalAdjustmentDto({ type: 'STOCK_DIVIDEND', quantityDelta: '12.5', ratioNew: null, ratioOld: null })),
       props: reversalProps(stockRow),

@@ -27,6 +27,15 @@ describe('csvCell(T2.11)', () => {
     expect(csvCell('42')).toBe('42');
   });
 
+  it('05-21:Decimal 經 toWire 的金額字串(一般記號)原樣輸出,不加公式前綴', () => {
+    expect(csvCell('0.00000001')).toBe('0.00000001');
+    expect(csvCell('-12.50')).toBe('-12.50');
+    expect(csvCell('123456789012.12345678')).toBe('123456789012.12345678');
+    expect(csvCell('-0.00000001')).toBe('-0.00000001');
+    // 科學記號不是純數字字串:若有人誤用 String(Decimal),`-1e-8` 會被當成文字前綴(提醒一律走 toWire)。
+    expect(csvCell('-1e-8')).toBe("'-1e-8");
+  });
+
   it('既有規則不變:null / undefined → 空字串;逗號、引號、換行加引號', () => {
     expect(csvCell(null)).toBe('');
     expect(csvCell(undefined)).toBe('');

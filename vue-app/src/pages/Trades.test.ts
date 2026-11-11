@@ -5,6 +5,7 @@ import Trades from './Trades.vue';
 // 沿用 03-03 / 03-04 的手法 —— 本專案 tsconfig 未含 @types/node,不得用 node:fs。
 import tradesSource from './Trades.vue?raw';
 import { t, tf } from '../i18n';
+import { fmtMoneyAmount } from '../moneyFormat';
 import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
@@ -54,9 +55,8 @@ function tradeDto(over: Partial<TradeDto> & { id: string }): TradeDto {
 }
 
 /**
- * 05-19:交易 fixture 的金額是 wire 字串(TradeDto 已字串化),但 `PortfolioActivityDto` 在 05-21 之前仍是 number,
- * 所以這裡以 `Number()` 填活動列的 quantity / price / fee,`amount` 先以 Decimal `times` 精確相乘再轉 number
- * (測試碼,不屬 D-08 產品碼;05-21 活動列字串化時改為直接傳字串並以 `toWire` 計算 amount)。
+ * 交易 fixture 與活動列都是 wire 字串(05-19 / 05-21,D-05):quantity / price / fee 直接傳交易 fixture 的字串,
+ * `amount` 以 Decimal `times` 精確相乘後 `toWire`(與後端 quantity × price 同語意,不經 JS 浮點)。
  */
 function trade(over: Partial<TradeDto> & { id: string }): PortfolioActivityDto {
   const tr = tradeDto(over);
@@ -67,10 +67,10 @@ function trade(over: Partial<TradeDto> & { id: string }): PortfolioActivityDto {
     currency: tr.currency,
     occurredAt: tr.executedAt,
     createdAt: tr.createdAt,
-    quantity: Number(tr.quantity),
-    price: Number(tr.price),
-    fee: Number(tr.fee),
-    amount: Number(toWire(parseDecimal(tr.quantity).times(parseDecimal(tr.price)))),
+    quantity: tr.quantity,
+    price: tr.price,
+    fee: tr.fee,
+    amount: toWire(parseDecimal(tr.quantity).times(parseDecimal(tr.price))),
     note: tr.note,
   });
 }
@@ -178,10 +178,14 @@ function fakeBackendFetch(all: PortfolioActivityDto[]): TradesFetch {
 
     const sort = p.get('sort') ?? 'executedAt';
     const factor = p.get('direction') === 'asc' ? 1 : -1;
-    const key = (tr: PortfolioActivityDto) => (sort === 'quantity'
-      ? tr.quantity ?? 0
-      : sort === 'total' ? tr.amount ?? 0 : Date.parse(tr.occurredAt));
-    items = [...items].sort((a, b) => (key(a) - key(b)) * factor);
+    // 數量 / 總額以 Decimal `cmp` 比較(wire 字串;null 視為 0,與既有 stub 同義)。
+    const decimalOf = (wire: string | null) => parseDecimal(wire ?? '0');
+    const compare = (a: PortfolioActivityDto, b: PortfolioActivityDto) => {
+      if (sort === 'quantity') return decimalOf(a.quantity).cmp(decimalOf(b.quantity));
+      if (sort === 'total') return decimalOf(a.amount).cmp(decimalOf(b.amount));
+      return Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
+    };
+    items = [...items].sort((a, b) => compare(a, b) * factor);
 
     const pageNo = Number(p.get('page') ?? 0);
     const size = Number(p.get('size') ?? 20);
@@ -416,8 +420,8 @@ describe('Trades — API mode 參數轉換與分頁(D-05 / D-06 / D-07 / D-08)',
             kind: 'CASH_DIVIDEND',
             symbol: 'AAPL',
             currency: 'USD',
-            amount: 120,
-            withholdingTax: 30,
+            amount: '120',
+            withholdingTax: '30',
             occurredAt: '2026-10-30T01:15:00Z',
           })]
           : [trade({ id: 'x' })],
@@ -900,6 +904,48 @@ describe('Trades — API mode CSV 全頁匯出(D-10)', () => {
     expect(lines[1]).toBe('2026-03-02,BUY,AAPL,USD,3,188.5,565.5,1.25,,,n1,,');
     expect(lines[2].split(',')[3], 'currency 缺值 → 空字串,不猜測').toBe('');
     expect(lines[2]).toBe('2026-03-01,BUY,OLD,,2,5,10,0,,,,,');
+  });
+
+  it('05-21 / D-08:活動列數值欄以 Decimal 計算並以 toWire 匯出 —— 一般記號、完整精度、不加公式前綴', async () => {
+    const dl = captureDownloads();
+    restorers.push(dl.restore);
+
+    const items = [
+      // 3 × 0.1:JS number 會得到 0.30000000000000004;Decimal 為 0.3。手續費 1e-8 不得變成科學記號。
+      trade({ id: 'p1', symbol: 'PREC', currency: 'USD', quantity: '3', price: '0.1', fee: '0.00000001', note: null, executedAt: '2026-03-03T10:00:00Z' }),
+      trade({ id: 'p2', symbol: 'BIG', currency: 'USD', quantity: '123456.12345678', price: '1', fee: '0', note: null, executedAt: '2026-03-02T10:00:00Z' }),
+      activity({
+        id: 'd1',
+        kind: 'CASH_DIVIDEND',
+        symbol: 'DIV',
+        currency: 'USD',
+        amount: '0.00000001',
+        withholdingTax: '123456.12345678',
+        occurredAt: '2026-03-01T10:00:00Z',
+      }),
+    ];
+    const fetchMock = scriptedFetch(() => success(page({ items, totalElements: 3, totalPages: 1 })));
+    await mountApiTrades(fetchMock);
+
+    // 畫面:交易數量欄是一般記號(不是 1.2345612345678e5 之類),總額 = Decimal quantity × price。
+    const [precRow, bigRow] = rows();
+    expect(precRow.querySelectorAll('td')[3].textContent?.trim()).toBe('3');
+    expect(bigRow.querySelectorAll('td')[3].textContent?.trim()).toBe('123456.12345678');
+    expect(precRow.querySelectorAll('td')[5].textContent?.trim()).toBe(fmtMoneyAmount(parseDecimal('0.3'), 'USD', 0));
+    // 手續費欄經 moneyFormat:Decimal 的 1e-8 以 USD 2 位小數顯示(不會出現 1e-8)。
+    expect(precRow.querySelectorAll('td')[6].textContent?.trim()).toBe(fmtMoneyAmount(parseDecimal('0.00000001'), 'USD'));
+
+    click(requireTestid('trades-export'));
+    await flushAsync(40);
+
+    const csv = await dl.blobs[0].text();
+    const lines = csv.split('\n');
+    expect(lines[1]).toBe('2026-03-03,BUY,PREC,USD,3,0.1,0.3,0.00000001,,,,,');
+    expect(lines[2]).toBe('2026-03-02,BUY,BIG,USD,123456.12345678,1,123456.12345678,0,,,,,');
+    // 現金股利:qty / price / fee 不適用(空),total = 實領、tax = 預扣稅,皆為 toWire 字串。
+    expect(lines[3].split(',').slice(1, 9)).toEqual(['CASH_DIVIDEND', 'DIV', 'USD', '', '', '0.00000001', '', '123456.12345678']);
+    expect(csv).not.toMatch(/\de-\d/);
+    expect(csv).not.toContain("'");
   });
 
   it('currencyNoteShownInApiMode:API mode 表格上方有 tradesCurrencyNote', async () => {
@@ -1490,8 +1536,8 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'CASH_DIVIDEND',
         symbol: 'AAPL',
         currency: 'USD',
-        amount: 120,
-        withholdingTax: 30,
+        amount: '120',
+        withholdingTax: '30',
         occurredAt: '2026-10-30T01:15:00Z',
         reversed: true,
       }),
@@ -1500,8 +1546,8 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'CASH_DIVIDEND',
         symbol: 'MSFT',
         currency: 'USD',
-        amount: 50,
-        withholdingTax: 0,
+        amount: '50',
+        withholdingTax: '0',
         occurredAt: '2026-10-29T03:00:00Z',
         reversalOfId: UUIDS.cash,
         reversalOfOccurredAt: '2026-10-30T01:15:00Z',
@@ -1511,7 +1557,7 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'STOCK_DIVIDEND',
         symbol: '2330',
         currency: 'TWD',
-        quantity: 50,
+        quantity: '50',
         effectiveDate: '2026-08-15',
         occurredAt: '2026-08-14T16:00:00Z',
       }),
@@ -1520,7 +1566,7 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'SPLIT',
         symbol: 'TSLA',
         currency: 'USD',
-        quantity: 300,
+        quantity: '300',
         ratioNew: 4,
         ratioOld: 1,
         effectiveDate: '2026-07-01',
@@ -1531,7 +1577,7 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'SPLIT',
         symbol: 'GE',
         currency: 'USD',
-        quantity: -50,
+        quantity: '-50',
         ratioNew: 1,
         ratioOld: 2,
         effectiveDate: '2026-06-01',
@@ -1543,7 +1589,7 @@ describe('Trades — 混合活動列與沖銷標記(04.2-20 Task 2 / D-13 / UI-S
         kind: 'SPLIT',
         symbol: 'GE',
         currency: 'USD',
-        quantity: -50,
+        quantity: '-50',
         ratioNew: 1,
         ratioOld: 2,
         effectiveDate: '2026-06-01',
@@ -1745,8 +1791,8 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
         kind: 'CASH_DIVIDEND',
         symbol: 'AAPL',
         currency: 'USD',
-        amount: 120.5,
-        withholdingTax: 30,
+        amount: '120.5',
+        withholdingTax: '30',
         occurredAt: '2026-10-30T01:15:00Z',
         note: 'Q3',
         reversed: true,
@@ -1756,8 +1802,8 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
         kind: 'CASH_DIVIDEND',
         symbol: 'AAPL',
         currency: 'USD',
-        amount: 120.5,
-        withholdingTax: 30,
+        amount: '120.5',
+        withholdingTax: '30',
         occurredAt: '2026-10-31T02:00:00Z',
         reversalOfId: ORIG,
         reversalOfOccurredAt: '2026-10-30T01:15:00Z',
@@ -1767,7 +1813,7 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
         kind: 'SPLIT',
         symbol: 'TSLA',
         currency: 'USD',
-        quantity: 300,
+        quantity: '300',
         ratioNew: 4,
         ratioOld: 1,
         effectiveDate: '2026-07-01',
@@ -1778,7 +1824,7 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
         kind: 'STOCK_DIVIDEND',
         symbol: '2330',
         currency: 'TWD',
-        quantity: 12.5,
+        quantity: '12.5',
         effectiveDate: '2026-08-15',
         occurredAt: '2026-08-14T16:00:00Z',
       }),
@@ -1787,7 +1833,7 @@ describe('Trades — CSV 匯出擴充(04.2-20 Task 3 / U-09)', () => {
         kind: 'SPLIT',
         symbol: 'TSLA',
         currency: 'USD',
-        quantity: 300,
+        quantity: '300',
         ratioNew: 4,
         ratioOld: 1,
         effectiveDate: '2026-07-01',
@@ -1921,8 +1967,8 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
     kind: 'CASH_DIVIDEND',
     symbol: 'AAPL',
     currency: 'USD',
-    amount: 120,
-    withholdingTax: 30,
+    amount: '120',
+    withholdingTax: '30',
     occurredAt: '2026-10-30T01:15:00Z',
     reversible: true,
   });
@@ -2036,11 +2082,11 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
     function reversibilityItems(): PortfolioActivityDto[] {
       return [
         DIV_ROW,
-        activity({ id: 'div-not-reversible', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversible: false }),
-        activity({ id: 'div-reversed', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversed: true, reversible: true }),
-        activity({ id: 'div-reversal', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: 5, reversalOfId: 'x', reversible: true }),
-        activity({ id: 'split-ok', kind: 'SPLIT', symbol: 'TSLA', quantity: 300, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-07-01', reversible: true }),
-        activity({ id: 'stock-ok', kind: 'STOCK_DIVIDEND', symbol: '2330', quantity: 50, effectiveDate: '2026-08-15', reversible: true }),
+        activity({ id: 'div-not-reversible', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: '5', reversible: false }),
+        activity({ id: 'div-reversed', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: '5', reversed: true, reversible: true }),
+        activity({ id: 'div-reversal', kind: 'CASH_DIVIDEND', symbol: 'MSFT', amount: '5', reversalOfId: 'x', reversible: true }),
+        activity({ id: 'split-ok', kind: 'SPLIT', symbol: 'TSLA', quantity: '300', ratioNew: 4, ratioOld: 1, effectiveDate: '2026-07-01', reversible: true }),
+        activity({ id: 'stock-ok', kind: 'STOCK_DIVIDEND', symbol: '2330', quantity: '50', effectiveDate: '2026-08-15', reversible: true }),
         trade({ id: 'buy-row', symbol: 'NVDA' }),
       ];
     }
@@ -2171,7 +2217,7 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
         id: `evt-${i}`,
         kind: 'CASH_DIVIDEND',
         symbol: `S${i}`,
-        amount: 1,
+        amount: '1',
         occurredAt: new Date(Date.UTC(2026, 9, 30 - i)).toISOString(),
       }));
     }
@@ -2313,7 +2359,7 @@ describe('Trades — 活動列表過時回應守門(04.2-review WR-11)', () => {
     expect(urls(fetchMock)).toHaveLength(3);
 
     dividendGate.resolve(success(page({
-      items: [activity({ id: 'd1', kind: 'CASH_DIVIDEND', symbol: 'DIV', amount: 12 })],
+      items: [activity({ id: 'd1', kind: 'CASH_DIVIDEND', symbol: 'DIV', amount: '12' })],
       totalElements: 1,
       totalPages: 1,
     })));

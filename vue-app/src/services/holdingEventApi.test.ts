@@ -321,8 +321,9 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
       kind: 'CASH_DIVIDEND',
       symbol: 'AAPL',
       currency: 'USD',
-      amount: 120,
-      withholdingTax: 30,
+      // MockHoldingEvent 是 wire 形狀(05-21 / D-05):儲存層的字串原樣傳出。
+      amount: '120',
+      withholdingTax: '30',
       quantity: null,
       reversed: false,
       reversible: true,
@@ -454,7 +455,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     expect(Object.keys(dto).sort()).toEqual(Object.keys(SPLIT_DTO).sort());
     expect(listMockHoldingEvents()[0]).toMatchObject({
       kind: 'STOCK_DIVIDEND',
-      quantity: 50,
+      quantity: '50',
       effectiveDate: '2026-01-10',
       amount: null,
       reversible: true,
@@ -601,13 +602,14 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
     dividend.amount = d('999');
     adjustment.quantityDelta = d('999');
     const listed = listMockHoldingEvents();
-    listed[0].amount = 999;
+    listed[0].amount = '999';
     listed.pop();
 
     const fresh = listMockHoldingEvents();
     expect(fresh).toHaveLength(2);
-    expect(fresh[0].amount).toBe(120);
-    expect(fresh[1].quantity).toBe(3000);
+    // MockHoldingEvent 是 wire 形狀(05-21):金額 / 股數為字串,以 Decimal eq 比較(儲存層可能帶尾零)。
+    expect(d(fresh[0].amount!).eq(d('120'))).toBe(true);
+    expect(d(fresh[1].quantity!).eq(d('3000'))).toBe(true);
     expect(toWire((await api.createDividend(DIVIDEND_REQUEST, 'k-1')).amount)).toBe('120');
   });
 
@@ -813,7 +815,7 @@ describe('holdingEventApi — 股數調整字串契約(05-20 / D-05 / D-08)', ()
     );
     expect(toWire(reversal.quantityDelta)).toBe('50');
     expect(aaplPosition()?.qty).toBe(1000);
-    // mock 活動列(MockHoldingEvent)在 05-21 之前仍是 number。
-    expect(listMockHoldingEvents().map(event => event.quantity)).toEqual([50, 50]);
+    // mock 活動列(MockHoldingEvent)是 wire 字串(05-21);沖銷列存的是 toWire 正規化後的 "50"。
+    expect(listMockHoldingEvents().map(event => event.quantity)).toEqual(['50', '50']);
   });
 });
