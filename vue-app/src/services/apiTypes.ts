@@ -404,32 +404,53 @@ export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'cust
 export type BacktestPeriod = '1Y' | '3Y' | '5Y';
 export type BacktestRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'rejected';
 
+/**
+ * 對應後端 `CreateBacktestRunRequest`;逐欄同形(judgment §4)。
+ *
+ * `initialCapital` 是後端 `BigDecimal` → wire 為十進位字串(Phase 5 D-05);由 `backtestApi` 從
+ * {@link BacktestRunInput}(Decimal)經 `toWire` 產出,頁面不直接組這個型別。
+ */
 export interface BacktestRunRequest {
   strategyId: BacktestStrategyId;
   strategyCode: string | null;
   symbol: string;
   period: BacktestPeriod;
-  initialCapital: number;
+  initialCapital: string;
   currency: 'USD';
   benchmark: 'buy_hold';
   dataMode: 'cached' | 'live';
 }
 
+/** `createRun` 的 domain 輸入:與 {@link BacktestRunRequest} 同欄位,只把 `initialCapital` 換成 `Decimal`(D-08)。 */
+export type BacktestRunInput = DecimalFields<BacktestRunRequest, 'initialCapital'>;
+
+/**
+ * 對應後端 `BacktestRunDto`(`stock-module-backtest/.../api/BacktestRunDto.java`);逐欄同形。
+ *
+ * `initialCapital` / `progress` 掛 `@DecimalString` → JSON 字串(D-05)。`progress` 在 DB 是 nullable
+ * `NUMERIC(6, 5)`,所以可能為 null。進 domain 前經 `backtestApi.toBacktestRunRecord` 轉成 {@link BacktestRunRecord}。
+ */
 export interface BacktestRunDto {
   id: string;
   strategyId: BacktestStrategyId;
   label: string;
   symbol: string;
   period: BacktestPeriod;
-  initialCapital: number;
+  initialCapital: string;
   currency: 'USD';
   status: BacktestRunStatus;
-  progress?: number;
+  progress?: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
   error?: ApiErrorBody | null;
 }
+
+/**
+ * domain:單一回測執行紀錄(由 `backtestApi.toBacktestRunRecord` 產生)。`initialCapital` 為 Decimal、
+ * `progress` 為 `Decimal | null`;名稱加 `Record` 後綴以免與 mock 型別 `BacktestRun`(`types.ts`)撞名。
+ */
+export type BacktestRunRecord = DecimalFields<BacktestRunDto, 'initialCapital' | 'progress'>;
 
 export interface StrategyValidationRequest {
   strategyCode: string;
@@ -441,46 +462,66 @@ export interface StrategyValidationDto {
   warnings: string[];
 }
 
+/**
+ * 後端 `BacktestResultDto.BacktestKpisDto`:八個比率 / 倍數欄是 `@DecimalString BigDecimal` → JSON 字串(D-05);
+ * `drawdownDays` / `tradeCount` 是 Java `int`,維持 number。
+ */
 export interface BacktestKpisDto {
-  totalReturnPct: number;
-  buyHoldReturnPct: number;
-  sharpe: number;
-  cagrPct: number;
-  maxDrawdownPct: number;
+  totalReturnPct: string;
+  buyHoldReturnPct: string;
+  sharpe: string;
+  cagrPct: string;
+  maxDrawdownPct: string;
   drawdownDays: number;
-  winRatePct: number;
+  winRatePct: string;
   tradeCount: number;
-  profitFactor: number;
-  avgTradePct: number;
+  profitFactor: string;
+  avgTradePct: string;
 }
 
+/** {@link BacktestKpisDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type BacktestKpisDecimalKey =
+  | 'totalReturnPct'
+  | 'buyHoldReturnPct'
+  | 'sharpe'
+  | 'cagrPct'
+  | 'maxDrawdownPct'
+  | 'winRatePct'
+  | 'profitFactor'
+  | 'avgTradePct';
+
+/** 後端 `EquityPointDto`:`t` 為 `LocalDate`(ISO 日期字串),兩條權益值為 BigDecimal 字串。 */
 export interface EquityPointDto {
   t: string;
-  strategy: number;
-  benchmark: number;
+  strategy: string;
+  benchmark: string;
 }
 
+/** 後端 `MonthlyReturnDto`:`year` / `month` 為 Java `int`(number),`returnPct` 為 BigDecimal 字串。 */
 export interface MonthlyReturnDto {
   year: number;
   month: number;
-  returnPct: number;
+  returnPct: string;
 }
 
+/** 後端 `DrawdownPointDto`:`drawdownPct` 為 BigDecimal 字串。 */
 export interface DrawdownPointDto {
   t: string;
-  drawdownPct: number;
+  drawdownPct: string;
 }
 
+/** 後端 `BacktestTradeDto`:`entry` / `exit` / `pnl` / `pnlPct` 為 BigDecimal 字串,`bars` 為 Java `int`(number)。 */
 export interface BacktestTradeDto {
   date: string;
   side: 'BUY' | 'SELL';
-  entry: number;
-  exit: number;
+  entry: string;
+  exit: string;
   bars: number;
-  pnl: number;
-  pnlPct: number;
+  pnl: string;
+  pnlPct: string;
 }
 
+/** 對應後端 `BacktestResultDto`;進 domain 前經 `backtestApi.toBacktestResult` 轉成 {@link BacktestResult}。 */
 export interface BacktestResultDto {
   runId: string;
   status: 'succeeded';
@@ -489,6 +530,28 @@ export interface BacktestResultDto {
   monthlyReturns: MonthlyReturnDto[];
   drawdownCurve: DrawdownPointDto[];
   trades: BacktestTradeDto[];
+}
+
+/** domain:回測 KPI,八個 BigDecimal 欄為 Decimal,`drawdownDays` / `tradeCount` 仍是 number。 */
+export type BacktestKpis = DecimalFields<BacktestKpisDto, BacktestKpisDecimalKey>;
+/** domain:權益曲線點,`strategy` / `benchmark` 為 Decimal;畫圖時經 `toChartNumber`。 */
+export type EquityPoint = DecimalFields<EquityPointDto, 'strategy' | 'benchmark'>;
+/** domain:月報酬,`returnPct` 為 Decimal。 */
+export type MonthlyReturn = DecimalFields<MonthlyReturnDto, 'returnPct'>;
+/** domain:回撤點,`drawdownPct` 為 Decimal。 */
+export type DrawdownPoint = DecimalFields<DrawdownPointDto, 'drawdownPct'>;
+/** domain:回測交易明細,`entry` / `exit` / `pnl` / `pnlPct` 為 Decimal,`bars` 仍是 number。 */
+export type BacktestTrade = DecimalFields<BacktestTradeDto, 'entry' | 'exit' | 'pnl' | 'pnlPct'>;
+
+/** domain:回測結果(由 `backtestApi.toBacktestResult` 產生),巢狀陣列都已轉成上面的 domain 型別。 */
+export interface BacktestResult {
+  runId: string;
+  status: 'succeeded';
+  kpis: BacktestKpis;
+  equityCurve: EquityPoint[];
+  monthlyReturns: MonthlyReturn[];
+  drawdownCurve: DrawdownPoint[];
+  trades: BacktestTrade[];
 }
 
 export type OpsRisk = 'low' | 'medium' | 'high';
