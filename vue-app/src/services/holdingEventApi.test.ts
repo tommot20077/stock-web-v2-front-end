@@ -14,7 +14,8 @@ import {
   type ShareAdjustmentDto,
 } from './holdingEventApi';
 import type { ApiClientError } from './apiClient';
-import { parseDecimal, toWire } from './decimal';
+import { isDecimal, parseDecimal, toWire } from './decimal';
+import { createMockPortfolioApi } from './portfolioApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 
 /**
@@ -817,5 +818,49 @@ describe('holdingEventApi — 股數調整字串契約(05-20 / D-05 / D-08)', ()
     expect(aaplPosition()?.qty).toBe(1000);
     // mock 活動列(MockHoldingEvent)是 wire 字串(05-21);沖銷列存的是 toWire 正規化後的 "50"。
     expect(listMockHoldingEvents().map(event => event.quantity)).toEqual(['50', '50']);
+  });
+});
+
+describe('holdingEventApi — mock 事件列為 wire 字串(05-21 / D-05 / D-08)', () => {
+  it('listMockHoldingEvents 的金額 / 預扣稅 / 股數是 wire 字串,完整精度逐字往返', async () => {
+    seedAaplPosition();
+    const api = createMockHoldingEventApi();
+    await api.createDividend(
+      { symbol: 'AAPL', amount: d('123456789012.12345678'), withholdingTax: d('0.00000001'), paidAt: '2026-10-30T09:00:00+08:00' },
+      'k-1',
+    );
+    await api.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('0.00000001'), effectiveDate: '2026-01-10' },
+      'k-2',
+    );
+
+    const [dividend, adjustment] = listMockHoldingEvents();
+    expect(dividend).toMatchObject({ kind: 'CASH_DIVIDEND', amount: '123456789012.12345678', withholdingTax: '0.00000001', quantity: null });
+    expect(adjustment).toMatchObject({ kind: 'STOCK_DIVIDEND', quantity: '0.00000001', amount: null, withholdingTax: null });
+  });
+
+  it('未填預扣稅的股利:事件列 withholdingTax 為 "0"(與後端 0.00000000 同值)', async () => {
+    await createMockHoldingEventApi().createDividend({ symbol: 'TSLA', amount: d('50') }, 'k-1');
+
+    const [event] = listMockHoldingEvents();
+    expect(typeof event.withholdingTax).toBe('string');
+    expect(d(event.withholdingTax!).eq(d('0'))).toBe(true);
+  });
+
+  it('portfolioApi live.holdingEvents 經 toPortfolioActivity 成為 Decimal,toWire 與事件列逐字相同', async () => {
+    seedAaplPosition();
+    const api = createMockHoldingEventApi();
+    await api.createDividend({ symbol: 'AAPL', amount: d('123456789012.12345678'), withholdingTax: d('30') }, 'k-1');
+    await api.createShareAdjustment(SPLIT_REQUEST, 'k-2');
+
+    const [dividend, split] = createMockPortfolioApi().live!.holdingEvents;
+    expect(isDecimal(dividend.amount)).toBe(true);
+    expect(isDecimal(dividend.withholdingTax)).toBe(true);
+    expect(toWire(dividend.amount!)).toBe('123456789012.12345678');
+    expect(toWire(dividend.withholdingTax!)).toBe('30');
+    expect(dividend).toMatchObject({ price: null, fee: null, quantity: null });
+    expect(isDecimal(split.quantity)).toBe(true);
+    expect(toWire(split.quantity!)).toBe(listMockHoldingEvents()[1].quantity);
+    expect(split).toMatchObject({ ratioNew: 4, ratioOld: 1, amount: null });
   });
 });

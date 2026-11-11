@@ -225,18 +225,35 @@ function activity(
   };
 }
 
-/** 交易列:amount = quantity × price,後端以 scale 8 捨入(trading-portfolio-contract〈PortfolioActivityDto〉)。 */
+/**
+ * 兩個非負一般記號十進位字串的精確乘積(BigInt;e2e 不 import 產品碼的 big.js)。fixture 的位數夠小,
+ * 乘積不超過 8 位小數,與後端 scale 8 的結果相同。
+ */
+function multiplyDecimal(left: string, right: string): string {
+  const [li, lf = ''] = left.split('.');
+  const [ri, rf = ''] = right.split('.');
+  const scale = lf.length + rf.length;
+  const digits = (BigInt(li + lf) * BigInt(ri + rf)).toString().padStart(scale + 1, '0');
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/, '');
+  return fraction ? `${digits.slice(0, -scale)}.${fraction}` : digits.slice(0, -scale);
+}
+
+/**
+ * 交易列:amount = quantity × price,後端以 scale 8 捨入(trading-portfolio-contract〈PortfolioActivityDto〉)。
+ * 金額欄位是 wire 字串(Phase 5 D-05)。
+ */
 function tradeActivity(
   index: number,
   overrides: Partial<PortfolioActivityDto> & Pick<PortfolioActivityDto, 'kind' | 'symbol' | 'currency'>,
 ): PortfolioActivityDto {
-  const quantity = overrides.quantity ?? 123456;
-  const price = overrides.price ?? 1234.56;
+  const quantity = overrides.quantity ?? '123456';
+  const price = overrides.price ?? '1234.56';
   return activity(index, {
     quantity,
     price,
-    fee: 1234.5,
-    amount: Math.round(quantity * price * 1e8) / 1e8,
+    fee: '1234.5',
+    amount: multiplyDecimal(quantity, price),
     ...overrides,
   });
 }
@@ -250,37 +267,37 @@ export const ACTIVITIES: PortfolioActivityDto[] = [
   tradeActivity(1, { kind: 'SELL', symbol: 'AAPL', currency: 'USD' }),
   activity(2, {
     kind: 'CASH_DIVIDEND', symbol: 'AAPL', currency: 'USD',
-    amount: 1234567.89, withholdingTax: 308641.97, note: 'Q3 dividend', reversible: true,
+    amount: '1234567.89', withholdingTax: '308641.97', note: 'Q3 dividend', reversible: true,
   }),
   activity(3, {
     kind: 'STOCK_DIVIDEND', symbol: '2330.TW', currency: 'TWD',
-    quantity: 12345.6789, effectiveDate: '2026-10-25', reversible: true,
+    quantity: '12345.6789', effectiveDate: '2026-10-25', reversible: true,
   }),
   activity(4, {
     kind: 'SPLIT', symbol: '7203.T', currency: 'JPY',
-    quantity: -61728, ratioNew: 1, ratioOld: 2, effectiveDate: '2026-10-24', reversible: true,
+    quantity: '-61728', ratioNew: 1, ratioOld: 2, effectiveDate: '2026-10-24', reversible: true,
   }),
   activity(5, {
     kind: 'SPLIT', symbol: 'NVDA', currency: 'USD',
-    quantity: 370368, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-10-23',
+    quantity: '370368', ratioNew: 4, ratioOld: 1, effectiveDate: '2026-10-23',
   }),
   activity(6, {
-    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67,
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: '98765.43', withholdingTax: '12345.67',
     note: 'Reversal of wrong dividend',
     reversalOfId: '22222222-2222-4222-8222-222222222207', reversalOfOccurredAt: '2026-10-21T10:00:00+08:00',
   }),
   activity(7, {
-    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67, reversed: true,
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: '98765.43', withholdingTax: '12345.67', reversed: true,
   }),
   activity(8, {
-    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19',
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: '5000', effectiveDate: '2026-10-19',
     reversalOfId: '22222222-2222-4222-8222-222222222209', reversalOfEffectiveDate: '2026-10-19',
   }),
   activity(9, {
-    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19', reversed: true,
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: '5000', effectiveDate: '2026-10-19', reversed: true,
   }),
   tradeActivity(10, { kind: 'BUY', symbol: 'BTC-USD', currency: 'USD', note: 'long note with spaces '.repeat(10) }),
-  tradeActivity(11, { kind: 'SELL', symbol: '7203.T', currency: 'JPY', price: 2987654.32 }),
+  tradeActivity(11, { kind: 'SELL', symbol: '7203.T', currency: 'JPY', price: '2987654.32' }),
 ];
 
 /** 30 字清單名稱:無空白的寬拉丁字母 + 中文(tab 單行省略、工具列 overflow-wrap、picker 換行的最壞情況)。 */

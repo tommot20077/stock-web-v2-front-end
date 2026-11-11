@@ -2136,6 +2136,46 @@ describe('HoldingEventDialog — 現金股利以 Decimal 解析與送出(05-20 /
   });
 });
 
+describe('HoldingEventDialog — 沖銷原列為 domain PortfolioActivity(05-21 / D-08)', () => {
+  it('沖銷股利:原列 Decimal 完整精度逐字送出,摘要與預覽經 moneyFormat 顯示', async () => {
+    const row = activityRow({ kind: 'CASH_DIVIDEND', amount: '123456789012.12345678', withholdingTax: '0.00000001' });
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => okResponse(REVERSAL_DIVIDEND_DTO) }),
+      props: reversalProps(row),
+    });
+
+    const original = requireTestid('holding-event-reversal-original');
+    expect(original.textContent).toContain(fmtMoney(parseDecimal('123456789012.12345678'), 'USD', 2));
+    expect(original.textContent).toContain(fmtMoney(parseDecimal('0.00000001'), 'USD', 2));
+    expect(original.textContent).not.toMatch(/\de-\d/);
+    expect(requireTestid('holding-event-reversal-preview').textContent).toContain(
+      tf('zh', 'holdingEventReversalPreviewDividend', { code: 'USD', amount: fmtMoney(parseDecimal('123456789012.12345678'), 'USD', 2) }),
+    );
+
+    await submit();
+
+    const [call] = dividendCalls(fetchImpl);
+    expect(String(call[1]?.body)).toContain('"amount":"123456789012.12345678"');
+    expect(String(call[1]?.body)).toContain('"withholdingTax":"0.00000001"');
+  });
+
+  it('沖銷配股:原列極小股數 0.00000001 以一般記號送出;摘要以 fmtSignedQuantity 顯示 Decimal', async () => {
+    const row = activityRow({ kind: 'STOCK_DIVIDEND', occurredAt: '2026-10-01T13:30:00Z', effectiveDate: '2026-10-01', quantity: '0.00000001' });
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: adjustmentFetch(reversalAdjustmentDto({ type: 'STOCK_DIVIDEND', quantityDelta: '0.00000001', ratioNew: null, ratioOld: null })),
+      props: reversalProps(row),
+    });
+
+    expect(requireTestid('holding-event-reversal-original').textContent)
+      .toContain(fmtSignedQuantity(parseDecimal('0.00000001')));
+
+    await submit();
+
+    const [call] = adjustmentCalls(fetchImpl);
+    expect(String(call[1]?.body)).toContain('"quantity":"0.00000001"');
+  });
+});
+
 describe('HoldingEventDialog — 配股 / 拆股以 Decimal 解析與送出(05-20 / D-08)', () => {
   it('配股股數以字串送出(極小值無科學記號);recorded 事件為 domain ShareAdjustment', async () => {
     useWr09Clock();
