@@ -93,14 +93,14 @@ const tone = computed(() => assertive.value ? 'danger' : 'neutral');
   border-radius: 8px; font-size: 13px; line-height: 1.45;
 }
 .session-banner.danger {
-  border-color: color-mix(in oklch, var(--dn) 42%, var(--border));
-  background: color-mix(in oklch, var(--dn) 8%, var(--surface));
+  border-color: color-mix(in oklch, var(--danger) 42%, var(--border));
+  background: color-mix(in oklch, var(--danger) 8%, var(--surface));
 }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--accent); flex-shrink: 0;
 }
-.danger .status-dot { background: var(--dn); }
+.danger .status-dot { background: var(--danger); }
 .banner-copy { flex: 1; min-width: 0; }
 .banner-title { font-weight: 600; overflow-wrap: anywhere; }
 .details {
@@ -114,7 +114,7 @@ const tone = computed(() => assertive.value ? 'danger' : 'neutral');
   color: var(--fg); font: inherit; font-size: 13px; font-weight: 600;
   white-space: nowrap;
 }
-.danger .banner-action { color: var(--dn); }
+.danger .banner-action { color: var(--danger); }
 @media (max-width: 760px) {
   .session-banner { align-items: flex-start; flex-wrap: wrap; }
   .banner-action { width: 100%; }

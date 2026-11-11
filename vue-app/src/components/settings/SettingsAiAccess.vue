@@ -136,7 +136,7 @@ defineProps<{
   transition: all .15s; white-space: nowrap;
 }
 .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }
-.btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
+.btn-ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
 .sw { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }
 .sw input { opacity: 0; width: 0; height: 0; }
 .sw-track { position: absolute; inset: 0; background: var(--border); border-radius: 999px; transition: background .2s; }

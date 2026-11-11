@@ -460,8 +460,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 }
 .run-note strong { color: var(--fg); font-weight: 600; }
 .strategy-error {
-  margin-top: 8px; border: 1px solid rgba(220,38,38,0.35);
-  background: rgba(220,38,38,0.1); color: var(--dn);
+  margin-top: 8px; border: 1px solid color-mix(in oklch, var(--danger) 35%, transparent);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   border-radius: 8px; padding: 9px 11px; font-size: 12px;
 }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -498,8 +498,8 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
 .tl tbody td { padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .tl tbody tr:last-child td { border-bottom: 0; }
 .pill { padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: 4px; letter-spacing: .3px; }
-.pill.buy { background: rgba(22,163,74,0.12); color: var(--up-text); }
-.pill.sell { background: rgba(220,38,38,0.12); color: var(--dn); }
+.pill.buy { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text); }
+.pill.sell { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn); }
 
 .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
 .up { color: var(--up-text); }

@@ -12,23 +12,34 @@
 ## 一鍵執行
 
 ```bash
-# Git Bash / Linux / macOS —— 預設只跑 @smoke
+# Git Bash / Linux / macOS —— 無參數 = 全部(@smoke + @extended,與 CI 相同)
 bash e2e/run-e2e.sh
 
-# 跑 @extended
-bash e2e/run-e2e.sh --grep @extended
+# 本機快速迴圈:只跑 @smoke(其他參數原樣傳給 playwright test)
+bash e2e/run-e2e.sh --grep @smoke
 ```
 
 ```powershell
 # Windows PowerShell
 powershell -ExecutionPolicy Bypass -File e2e\run-e2e.ps1
-powershell -ExecutionPolicy Bypass -File e2e\run-e2e.ps1 --grep @extended
+powershell -ExecutionPolicy Bypass -File e2e\run-e2e.ps1 --grep @smoke
 ```
 
-腳本流程:compose up(等 healthy)→ 後端 `mvnw package` + `java -jar`
-(profile `e2e-browser`,port 8080)→ 等 `/actuator/health` UP(90s,逾時 dump logs)
-→ `npx playwright test`(Playwright webServer 會以 `VITE_DATA_MODE=api` build 並跑
+腳本流程:前置檢查(8080 health 與 4173 都不得已有服務)→ compose up(等 healthy)→ 後端
+`mvnw package` + `java -jar`(profile `e2e-browser`,port 8080)→ 等 `/actuator/health` UP(90s,
+逾時 dump logs)→ `npx playwright test`(Playwright webServer 會以 `VITE_DATA_MODE=api` build 並跑
 `vite preview`,port 4173,`/api`、`/ws` 同源 proxy 到 8080)→ 結束後清理容器與後端。
+
+### Proxy 目標與 4173 檢查
+
+- `vite.config.ts` 的 proxy 目標讀 `VITE_API_PROXY_TARGET`,未設時為 `http://localhost:11180`(後端 dev
+  預設 port,本機 `npm run dev` 聯調不需 `SERVER_PORT=8080`)。
+- E2E 時 `playwright.config.ts` 的 webServer env 把 `VITE_API_PROXY_TARGET` 設為
+  `http://localhost:${E2E_BACKEND_PORT ?? 8080}`,對應 `e2e-browser` profile 的 8080。此變數只在 Node 端
+  讀取,不進 bundle。
+- 本機 `reuseExistingServer` 為 true:若 4173 已有一個沒帶 env 的 `npm run preview`(指向 11180),
+  Playwright 會直接重用它而打到錯的後端。因此 `run-e2e.sh` / `run-e2e.ps1` 開頭偵測到 4173 有服務就中止,
+  請先停掉舊的 preview。
 
 ### 環境變數
 
@@ -44,14 +55,17 @@ powershell -ExecutionPolicy Bypass -File e2e\run-e2e.ps1 --grep @extended
 
 ```bash
 E2E_ENV_ONLY=1 E2E_SKIP_BUILD=1 bash e2e/run-e2e.sh   # 起環境
-npm run test:e2e                                       # @smoke(7 條矩陣案例)
-npm run test:e2e -- --grep @extended                   # @extended(7 條)
+npm run test:e2e                                       # 全部(@smoke + @extended)
+npm run test:e2e -- --grep @smoke                      # 只跑 @smoke
+npm run test:e2e -- --grep @extended                   # 只跑 @extended
 npx playwright test e2e/tests/auth.spec.ts             # 單檔全跑(不分 tag)
 ```
 
 ## Tags 與檔案
 
-- `@smoke`:PR 守門(A1–A3、A7、A9、D1、D2);`@extended`:擴充(A4、A5、A8、A10、A11、D4、D5)
+- `@smoke`:核心流程(A1–A3、A7、A9、D1、D2);`@extended`:擴充(A4、A5、A8、A10、A11、D4、D5)
+- 兩個 tag 在兩個 repo 的 CI 每次都一起跑(D-14 / D-15):後端 CI `Browser E2E Tests` job 與前端 CI
+  `browser-e2e` job 皆以無參數的 `run-e2e.sh` 執行
 - D6(執行中防抖)屬純前端行為 → Vitest:`src/pages/Backtest.test.ts`
 - `smoke.spec.ts` / `fixtures.spec.ts`:基礎設施自我驗證
 - Selector 規範(一律 `data-testid`):`e2e/support/selectors.md`

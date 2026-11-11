@@ -780,8 +780,8 @@ function fmtK(n: number) {
 .metric .ml { font-size: 11px }
 .metric .mv { display: flex; gap: 6px; align-items: center }
 .metric-delta { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; font-weight: 600 }
-.metric-delta.good { background: rgba(16,185,129,0.12); color: var(--up-text) }
-.metric-delta.bad { background: rgba(239,68,68,0.12); color: var(--dn) }
+.metric-delta.good { background: color-mix(in oklch, var(--up) 12%, transparent); color: var(--up-text) }
+.metric-delta.bad { background: color-mix(in oklch, var(--dn) 12%, transparent); color: var(--dn) }
 
 .apply-btn {
   width: 100%; padding: 9px; background: var(--accent); color: var(--on-accent);

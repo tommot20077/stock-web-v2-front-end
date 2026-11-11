@@ -158,6 +158,44 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * AbortController 取消時 fetch 以 name === 'AbortError' 的 DOMException reject。
+ * 以 name 判斷而非 `instanceof DOMException`:jsdom 與 Node(undici)各有自己的 DOMException
+ * 建構子,跨 realm 時 instanceof 會失準。
+ */
+function isAbortError(error: unknown): boolean {
+  return isRecord(error) && error.name === 'AbortError';
+}
+
+/**
+ * transport 唯一的 fetch 呼叫點(D-26;前端鐵律 1:apiClient.ts 是唯一 transport 邊界)。
+ *
+ * <p>為什麼正規化:fetch 在網路層失敗(斷線、DNS、代理拒絕連線、CORS)時直接 reject 成 TypeError,
+ * 不會有 Response。若原樣上拋,各頁 describeError 只能退回 UNKNOWN_ERROR,使用者看不出是網路問題;
+ * 在這裡統一轉成 `ApiClientError{ status: 0, code: 'NETWORK_ERROR' }`,六頁就有一致的診斷碼,
+ * 元件仍只需處理 ApiClientError 一種錯誤型別。訊息是靜態字串,不帶原例外訊息(T-05-04)。</p>
+ *
+ * <p>為什麼 AbortError 放行:`OrderTicket.vue` / `HoldingEventDialog.vue` 的搜尋以 AbortController
+ * 取消過時請求,呼叫端靠 AbortError 辨識「是我自己取消的」而靜默忽略;若也轉成 NETWORK_ERROR,
+ * 取消會被誤報成網路錯誤。</p>
+ *
+ * <p>NETWORK_ERROR 只代表沒有拿到 Response;有 Response 的 401 仍走 fetchWithSessionRecovery 的
+ * refresh 流程,不受影響。</p>
+ */
+async function transportFetch(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new ApiClientError({
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: 'Network error',
+      requestId: null,
+    });
+  }
+}
+
 function buildRequestInit(options: ApiRequestOptions): RequestInit {
   const { json, headers: headersInit, ...requestOptions } = options;
   const headers = new Headers(headersInit);
@@ -176,7 +214,7 @@ function buildRequestInit(options: ApiRequestOptions): RequestInit {
 }
 
 export async function bootstrapCsrf(basePath = DEFAULT_API_BASE_PATH): Promise<CsrfTokenNames> {
-  const response = await fetch(endpoint(basePath, 'csrf'), {
+  const response = await transportFetch(endpoint(basePath, 'csrf'), {
     method: 'GET',
     credentials: 'include',
     headers: { Accept: 'application/json' },
@@ -273,7 +311,7 @@ async function refreshSession(): Promise<void> {
     sessionHandlers.onRefreshing?.();
     refreshPromise = (async () => {
       const init = await prepareRequestInit({ method: 'POST' });
-      const response = await fetch(REFRESH_PATH, init);
+      const response = await transportFetch(REFRESH_PATH, init);
       const payload = await readJson(response);
 
       if (!response.ok) {
@@ -302,7 +340,7 @@ async function fetchWithSessionRecovery(
   retried = false,
 ): Promise<{ response: Response; payload: unknown }> {
   const init = await prepareRequestInit(options);
-  const response = await fetch(path, init);
+  const response = await transportFetch(path, init);
   const payload = await readJson(response);
 
   if (response.status !== 401 || retried || isRefreshPath(path) || isSessionEntryPath(path)) {
@@ -317,7 +355,7 @@ async function fetchWithSessionRecovery(
   }
 
   const replayInit = await prepareRequestInit(options);
-  const replayResponse = await fetch(path, replayInit);
+  const replayResponse = await transportFetch(path, replayInit);
   const replayPayload = await readJson(replayResponse);
   if (replayResponse.status === 401) {
     sessionHandlers.onRefreshFailed?.(safeSessionError(errorFromResponse(replayResponse, replayPayload)));

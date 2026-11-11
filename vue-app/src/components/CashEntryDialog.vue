@@ -297,7 +297,8 @@ import { getRuntimeApiClients } from '../services/pageApiClients';
 import { notifyCashEntryCreated } from '../services/portfolioRevision';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
-import { classifyInstantInput, type TimeFieldIssue } from '../eventTimeBounds';
+import { classifyInstantInput } from '../eventTimeBounds';
+import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtMoneyAmount, fmtSignedMoney, minorUnits } from '../moneyFormat';
 import type { CashBalanceDto } from '../services/apiTypes';
 import type { CashEntryDto, CashEntryType } from '../services/cashApi';
@@ -329,7 +330,20 @@ const type = ref<CashEntryType>('DEPOSIT');
 const currency = ref('TWD');
 const amount = ref('');
 const occurredAt = ref('');
-const maxOccurredAt = ref('');
+
+/**
+ * Phase 5 D-02(d)(同 04.2 IN-09 / HoldingEventDialog):對話框開啟時每 30 秒前進的 reactive 時鐘,
+ * 讓發生時間上限與「未來」判斷隨時間更新,不必等使用者編輯欄位。取值一律經 `clockNow()`:與當下
+ * `Date.now()` 取大者,欄位一被編輯就用最新時間。送出前的自檢(`isOccurredAtValidNow`)仍直接用
+ * `Date.now()` 重算,不依賴本時鐘。
+ */
+const now = useNow({ active: () => props.open });
+function clockNow(): number {
+  return Math.max(now.value, Date.now());
+}
+
+/** datetime-local 的 `max`:隨 `now` 前進(D-02d);原本只在 resetForm 寫一次。 */
+const maxOccurredAt = computed(() => toLocalInputValue(new Date(clockNow())));
 const note = ref('');
 
 /** 欄位被使用者離開過才算「碰過」:空欄位在 blur 前不提早罵人。 */
@@ -376,9 +390,8 @@ function resetForm() {
   currency.value = original ? original.currency : props.initialCurrency;
   amount.value = original ? String(original.amount) : '';
   note.value = '';
-  const now = new Date();
-  occurredAt.value = toLocalInputValue(now);
-  maxOccurredAt.value = toLocalInputValue(now);
+  // 預設 = 現在(上限本身由 useNow 驅動的 computed 提供,這裡只寫輸入值)。
+  occurredAt.value = toLocalInputValue(new Date(Date.now()));
   recorded.value = null;
   touched.amount = false;
   touched.occurredAt = false;
@@ -460,15 +473,19 @@ const amountValid = computed(() => {
 
 /**
  * 發生時間的三態歸類(quick-261107-1j4):空白 / 早於 1900-01-01(與後端 fields.occurredAt 同一個 instant)/ 未來。
- * 不快取:送出當下要用「現在」重新判斷,避免對話框開很久後的舊 `max`。
+ * 依賴 `clockNow()`(Phase 5 D-02d):對話框開著不動時每 30 秒重算,未來輸入會在時間追上後自動轉為合法。
  */
-function occurredAtIssue(): TimeFieldIssue {
-  return classifyInstantInput(occurredAt.value, Date.now());
+const occurredAtIssue = computed(() => classifyInstantInput(occurredAt.value, clockNow()));
+const occurredAtValid = computed(() => occurredAtIssue.value === null);
+
+/**
+ * 送出前自檢:以**此刻**的 `Date.now()` 重算,不依賴 30 秒粒度的時鐘與 computed 快取
+ * (useNow 檔頭:需要精確「此刻」的呼叫端直接用 `Date.now()`)。
+ */
+function isOccurredAtValidNow(): boolean {
+  const nowMs = Date.now();
+  return classifyInstantInput(occurredAt.value, nowMs) === null;
 }
-function isOccurredAtValid(): boolean {
-  return occurredAtIssue() === null;
-}
-const occurredAtValid = computed(() => isOccurredAtValid());
 
 const canSubmit = computed(() => {
   if (lockedError.value) return false;
@@ -531,7 +548,7 @@ function fieldErrorText(field: string): string {
   const serverInvalid = serverFieldKeys.value.includes(field);
   if (!serverInvalid && !localFieldInvalid(field)) return '';
   if (field === 'occurredAt') {
-    const issue = occurredAtIssue();
+    const issue = occurredAtIssue.value;
     if (issue === 'required' || issue === 'tooEarly') return t(props.lang, OCCURRED_AT_ISSUE_COPY[issue]);
   }
   return t(props.lang, key);
@@ -577,7 +594,7 @@ function ensureIdempotencyKey(): string {
 async function submitEntry() {
   if (submitting.value) return;
   submitError.value = null;
-  if (!canSubmit.value || (!isReversal.value && !isOccurredAtValid())) {
+  if (!canSubmit.value || (!isReversal.value && !isOccurredAtValidNow())) {
     // 正常路徑到不了這裡(送出鈕已 disabled);程式化觸發時讓欄位錯誤可見,不得靜默。
     touched.amount = true;
     touched.occurredAt = true;
@@ -765,7 +782,7 @@ textarea.inp { resize: vertical; }
 /* 欄位級錯誤:輸入框下方 12px --dn 文字 */
 .field-error {
   margin: 8px 0 0; font-size: 12px; font-weight: 600; line-height: 1.35;
-  color: var(--dn); overflow-wrap: anywhere;
+  color: var(--danger); overflow-wrap: anywhere;
 }
 .submitting-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); }
 
@@ -788,7 +805,7 @@ textarea.inp { resize: vertical; }
 
 .form-error {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(220,38,38,0.10); color: var(--dn);
+  background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--danger);
   font-size: 12px; font-weight: 600;
 }
 /* 底部錯誤區:body 內、footer 之上,全寬 */

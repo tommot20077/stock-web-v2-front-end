@@ -1,6 +1,6 @@
 ﻿# Browser E2E 一鍵腳本(PowerShell 版,行為對齊 run-e2e.sh)
 # 環境變數:E2E_BACKEND_DIR / E2E_BACKEND_PORT / E2E_SKIP_BUILD / E2E_KEEP / E2E_ENV_ONLY
-# 參數:原樣傳給 playwright test(預設 --grep @smoke)
+# 參數:原樣傳給 playwright test;無參數 = 全部(@smoke + @extended,D-14)。本機快速迴圈可自行帶 --grep @smoke
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PlaywrightArgs)
 $ErrorActionPreference = 'Stop'
 
@@ -11,6 +11,7 @@ $BackendPort = if ($env:E2E_BACKEND_PORT) { $env:E2E_BACKEND_PORT } else { '8080
 $ArtifactsDir = Join-Path $ScriptDir 'artifacts'
 $ComposeFile = Join-Path $ScriptDir 'docker-compose.yml'
 $HealthUrl = "http://localhost:$BackendPort/actuator/health"
+$PreviewUrl = 'http://localhost:4173/'
 $BackendLog = Join-Path $ArtifactsDir 'backend.log'
 $script:BackendProc = $null
 
@@ -49,10 +50,23 @@ function Test-HealthUp {
     } catch { return $false }
 }
 
+function Test-PreviewUp {
+    try {
+        Invoke-WebRequest -Uri $PreviewUrl -TimeoutSec 2 -UseBasicParsing | Out-Null
+        return $true
+    } catch { return $false }
+}
+
 try {
     # 0. 前置檢查
     if (Test-HealthUp) {
         Write-Log "ERROR: port $BackendPort 已有服務回應 health,請先停止舊的後端"
+        exit 1
+    }
+    # 0b. 4173 未被佔用:本機 reuseExistingServer 為 true,Playwright 會重用已在跑的 vite preview,
+    #     而它沒帶 VITE_API_PROXY_TARGET 時指向 11180(後端 dev 預設)。CI 上此檢查無害。
+    if (Test-PreviewUp) {
+        Write-Log 'ERROR: 4173 已有 vite preview,Playwright 會重用它(reuseExistingServer),而它可能指向 11180;請先停止'
         exit 1
     }
 
@@ -106,10 +120,8 @@ try {
         exit 0
     }
 
-    # 5. Playwright(無參數預設只跑 @smoke;其他參數原樣傳遞,如 --grep @extended)
-    if (-not $PlaywrightArgs -or $PlaywrightArgs.Count -eq 0) {
-        $PlaywrightArgs = @('--grep', '@smoke')
-    }
+    # 5. Playwright(無參數 = 全部 tag,含 @extended;本機快速迴圈可自行帶 --grep @smoke,其他參數原樣傳遞)
+    if (-not $PlaywrightArgs) { $PlaywrightArgs = @() }
     Write-Log "執行 Playwright:npx playwright test $($PlaywrightArgs -join ' ')"
     Push-Location $AppDir
     try {

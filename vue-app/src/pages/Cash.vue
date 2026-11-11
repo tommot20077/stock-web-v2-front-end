@@ -695,7 +695,7 @@ tbody .btn-ghost-sm { font-size: 12px; }
 .block-retry {
   margin-top: 8px; min-height: 36px; padding: 8px 12px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--danger); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .block-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 

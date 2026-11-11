@@ -42,3 +42,5 @@
 完整清單維護於 PR 描述與測試回報。
 
 Phase 04.1 版面回歸(`e2e/tests/layout.spec.ts` L2–L6)使用 `overview-` / `base-currency-` / `cash-page-` / `cash-entries-` / `cash-` / `positions-` / `trades-` 前綴;表格宿主 testid 為 `positions-table`、`trades-table`、`overview-recent-trades`(04.1-19 補)。
+
+Phase 5 契約全程 journey `e2e/tests/contract-journey.spec.ts`(J0,05-01)使用的 testid 皆為既有 testid(`auth-` / `header-` / `nav-` / `overview-` / `positions-` / `trades-` / `ticket-` 前綴),無新增。

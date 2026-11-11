@@ -634,7 +634,7 @@ onBeforeUnmount(unbindGlobal);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
-  color: var(--dn);
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 
@@ -665,7 +665,7 @@ onBeforeUnmount(unbindGlobal);
   font: inherit;
   font-size: 13px;
 }
-.wp-input[aria-invalid='true'] { border-color: var(--dn); }
+.wp-input[aria-invalid='true'] { border-color: var(--danger); }
 .wp-form .field-error { margin: 8px 0 0; }
 .wp-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
 .wp-submit {

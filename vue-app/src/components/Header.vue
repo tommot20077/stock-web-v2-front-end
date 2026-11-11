@@ -189,7 +189,7 @@ const sessionTone = computed(() => {
   background: var(--fg-mute); flex-shrink: 0;
 }
 .session-chip.ready .session-dot { background: var(--accent); }
-.session-chip.danger .session-dot { background: var(--dn); }
+.session-chip.danger .session-dot { background: var(--danger); }
 .session-copy, .session-identity {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -204,7 +204,7 @@ const sessionTone = computed(() => {
 .session-logout {
   height: 28px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface);
-  color: var(--dn); font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--danger); font: inherit; font-size: 12px; font-weight: 600;
   white-space: nowrap;
 }
 .session-logout:disabled { opacity: .62; cursor: not-allowed; }

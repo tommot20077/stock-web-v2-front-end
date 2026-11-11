@@ -15,12 +15,19 @@
     淺 #166534:surface ≥ 6.4、15% 膠囊 ≥ 5.1、白色圖示 7.1;深 #22c55e:surface ≥ 7.3、膠囊 ≥ 5.6、
     #15171c 圖示 7.9。
   - --fg-mute 加深:淺 #6b6b73(surface ≥ 4.76)、深 #8f8c84(≥ 4.96)。
+  Phase 5 D-02(c) / D-28(量測見 contrastTokens.test.ts「--danger 固定錯誤色」):
+  - --danger / --on-danger:失敗 / 錯誤 / 破壞性動作的固定紅,與跌色 --dn 分離,紅漲綠跌區塊不得覆寫
+    (否則紅漲模式下錯誤會變綠,被誤讀成正常)。--up / --dn 只留給漲跌語意。
+    淺 #dc2626:--surface 4.83、--bg 4.62;白字 --on-danger 4.83。
+    深 #ef4444:--surface 4.76、--bg 5.16;#15171c 字 --on-danger 4.76。
+    (--surface2 上淺 4.35 / 深 4.42,錯誤文字不放在 surface2 底上。)
 */
 :root {
   --bg: #fafaf9; --surface: #ffffff; --surface2: #f4f3f0;
   --fg: #15171c; --fg-dim: #52525b; --fg-mute: #6b6b73;
   --border: #e7e5e0; --accent: #ff6600; --on-accent: #15171c; --accent-text: #a64300;
   --success: #166534; --on-success: #ffffff;
+  --danger: #dc2626; --on-danger: #ffffff;
   --up: #16a34a; --up-text: #15803d; --dn: #dc2626; --neg: var(--dn); --radius: 12px;
   --btn-up-bg: #15803d; --btn-dn-bg: #dc2626;
 }
@@ -29,6 +36,7 @@
   --fg: #e7e5e0; --fg-dim: #a8a59c; --fg-mute: #8f8c84;
   --border: #262830; --accent-text: #ff6d0b;
   --success: #22c55e; --on-success: #15171c;
+  --danger: #ef4444; --on-danger: #15171c;
   --up-text: #16a34a; --dn: #ef4444;
 }
 :root[data-up-color="red"] {

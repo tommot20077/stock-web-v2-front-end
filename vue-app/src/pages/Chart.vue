@@ -555,8 +555,8 @@ function signedFmt(n: number | null | undefined, d = 2) {
 .ts tr.s td:nth-child(2) { color: var(--dn); }
 .dim { color: var(--fg-dim); }
 .depth { height: 14px; border-radius: 2px; }
-.depth.dn-bg { background: rgba(220, 38, 38, 0.18); }
-.depth.up-bg { background: rgba(22, 163, 74, 0.18); }
+.depth.dn-bg { background: color-mix(in oklch, var(--dn) 18%, transparent); }
+.depth.up-bg { background: color-mix(in oklch, var(--up) 18%, transparent); }
 .spread td { padding: 6px 14px; background: var(--surface2); color: var(--fg-dim); font-size: 10px; text-align: center; letter-spacing: .4px; }
 
 .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }

@@ -202,9 +202,8 @@ describe('A2 買進 / 賣出鈕底色(2c-addendum)', () => {
     });
   }
 
-  it('以 --dn 當底色的危險按鈕 / 警示圖示同樣改用 --btn-dn-bg 白字(不再繼承 accent 的深色字)', () => {
+  it('以 --dn 當底色的警示圖示同樣改用 --btn-dn-bg 白字(不再繼承 accent 的深色字)', () => {
     for (const [file, selector] of [
-      ['components/AuthPanel.vue', '.auth-submit.danger'],
       ['components/settings/SettingsBrokers.vue', '.banner.warn-banner .banner-icon'],
     ]) {
       const rules = rulesFor(file, selector);
@@ -213,6 +212,15 @@ describe('A2 買進 / 賣出鈕底色(2c-addendum)', () => {
         expect(backgroundOf(r), `${file} ${selector}`).toBe('var(--btn-dn-bg)');
         expect(r.decls.color ?? '', `${file} ${selector}`).toMatch(WHITE);
       }
+    }
+  });
+
+  it('危險動作鈕 AuthPanel .auth-submit.danger 改用固定錯誤色 --danger / --on-danger(Phase 5 D-28,不隨紅漲綠跌對調)', () => {
+    const rules = rulesFor('components/AuthPanel.vue', '.auth-submit.danger');
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) {
+      expect(backgroundOf(r)).toBe('var(--danger)');
+      expect(r.decls.color).toBe('var(--on-danger)');
     }
   });
 
@@ -563,5 +571,110 @@ describe('E3 其餘 accent 文字用法改用 --accent-text(quick-261107-1j4)', 
       .filter(r => backgroundOf(r) === 'var(--accent)' && r.decls.color === 'var(--accent-text)')
       .map(r => `${r.file} ${r.selector}`);
     expect(offenders).toEqual([]);
+  });
+});
+
+/*
+ * Phase 5 D-02(c) / D-28:失敗 / 錯誤 / 破壞性動作改用固定紅 --danger(與跌色 --dn 分離)。
+ * 紅漲綠跌偏好會把 --dn 對調成綠,若錯誤樣式沿用 --dn,使用者會把失敗誤讀成正常(T-05-19)。
+ */
+describe('--danger 固定錯誤色(D-28)', () => {
+  const RED_BLOCKS = [':root[data-up-color="red"]', ':root[data-theme="dark"][data-up-color="red"]'];
+
+  it(':root 與深色區塊定義 --danger / --on-danger;紅漲兩個區塊不覆寫(固定紅)', () => {
+    expect(blockOf(':root')['--danger']).toBe('#dc2626');
+    expect(blockOf(':root')['--on-danger']).toBe('#ffffff');
+    expect(blockOf(':root[data-theme="dark"]')['--danger']).toBe('#ef4444');
+    expect(blockOf(':root[data-theme="dark"]')['--on-danger']).toBe('#15171c');
+    for (const red of RED_BLOCKS) {
+      expect(blockOf(red)['--danger'], red).toBeUndefined();
+      expect(blockOf(red)['--on-danger'], red).toBeUndefined();
+    }
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}:--danger 文字對 --surface ≥ 4.5;--on-danger 對 --danger ≥ 4.5`, () => {
+      const vars = themeVars(theme);
+      const danger = vars['--danger'];
+      const onSurface = contrastRatio(danger, surfaces[theme]['--surface']);
+      expect(onSurface, `${danger} on --surface = ${onSurface.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+      const onDanger = contrastRatio(vars['--on-danger'], danger);
+      expect(onDanger, `--on-danger on --danger = ${onDanger.toFixed(2)}`).toBeGreaterThanOrEqual(AA_TEXT);
+    });
+  }
+
+  it("Ops 失敗狀態燈使用 var(--danger),原始碼不再含 'var(--dn)'", () => {
+    const ops = templateAndScriptOf(vueSources['./pages/Ops.vue']);
+    expect(ops).toMatch(/o\.status === 'success' \? 'var\(--success\)' : 'var\(--danger\)'/);
+    expect(vueSources['./pages/Ops.vue']).not.toContain("'var(--dn)'");
+  });
+});
+
+/*
+ * Phase 5 D-28:selector 帶 error / danger / invalid / fail 的規則屬失敗 / 錯誤 / 破壞性語意,
+ * 不得引用會隨紅漲綠跌對調的漲跌色(--up / --dn,及由它們衍生或同樣被對調的 --neg / --btn-up-bg / --btn-dn-bg),
+ * 也不得寫死錯誤紅 rgba(220, 38, 38, …) 字面(改 color-mix(in oklch, var(--danger) N%, transparent))。
+ */
+describe('錯誤樣式不得使用漲跌色(D-28)', () => {
+  // retry / logout:錯誤區塊旁的重試鈕與登出鈕(破壞性動作),selector 不含上列字眼但同屬錯誤 / 破壞性語意。
+  const ERROR_SELECTOR = /error|danger|invalid|fail|retry|logout/i;
+  const SWAPPING_TOKEN = /var\(--(up|dn|neg|btn-up-bg|btn-dn-bg)\)/;
+  const ERROR_RED_LITERAL = /rgba\(\s*220\s*,\s*38\s*,\s*38\b/;
+
+  function errorStyleOffenders(rules: CssRule[]): string[] {
+    return rules
+      .filter(r => ERROR_SELECTOR.test(r.selector))
+      .flatMap(r =>
+        Object.entries(r.decls)
+          .filter(([, value]) => SWAPPING_TOKEN.test(value) || ERROR_RED_LITERAL.test(value))
+          .map(([prop, value]) => `${r.file} ${r.selector} → ${prop}: ${value}`),
+      );
+  }
+
+  it('守門自我驗證:假 CSS .x-error { color: var(--dn) } 回報 1 條違規,漲跌語意 selector 不誤報', () => {
+    expect(errorStyleOffenders(parseRules('fake.css', '.x-error { color: var(--dn) }'))).toHaveLength(1);
+    expect(errorStyleOffenders(parseRules('fake.css', '.x-error { background: rgba(220,38,38,0.10) }'))).toHaveLength(1);
+    expect(errorStyleOffenders(parseRules('fake.css', '.dn { color: var(--dn) } .x-error { color: var(--danger) }'))).toEqual([]);
+  });
+
+  it('掃描範圍涵蓋 .vue 與 styles.css', () => {
+    expect(Object.keys(vueSources).length).toBeGreaterThan(0);
+    expect(vueRules.some(r => ERROR_SELECTOR.test(r.selector))).toBe(true);
+  });
+
+  it('所有 .vue <style> 與 styles.css 的錯誤類規則不引用漲跌色、不寫死錯誤紅 rgba', () => {
+    expect(errorStyleOffenders([...vueRules, ...globalRules])).toEqual([]);
+  });
+});
+
+/*
+ * Phase 5 D-02(c):漲跌語意的膠囊 / 按鈕 / 深度條 / 指標底色若寫死 rgba 字面,紅漲綠跌偏好下
+ * 文字色會對調、底色卻不會(綠底紅字)。改為 color-mix(in oklch, var(--up|--dn) N%, transparent),
+ * 比例沿用原 alpha。.pill.div / .kind-pill.div(紫色,股利)不是漲跌語意,不在此規則內。
+ */
+describe('漲跌底色隨紅漲綠跌對調(D-02c)', () => {
+  const UPDOWN_SELECTOR = /\.(pill|kind-pill)\.(buy|sell)|\.side-btn\.(buy|sell)|\.depth\.(up|dn)-bg|\.metric-delta\.(good|bad)/;
+
+  const updownRules = () => vueRules.filter(r => UPDOWN_SELECTOR.test(r.selector) && backgroundOf(r) !== undefined);
+
+  it('守門涵蓋規劃時掃到的漲跌底色規則(防止 selector 失效讓斷言空轉)', () => {
+    const files = new Set(updownRules().map(r => r.file.replace(/^\.\//, '')));
+    for (const file of ['pages/Overview.vue', 'pages/Trades.vue', 'pages/Backtest.vue', 'components/OrderTicket.vue', 'pages/Chart.vue', 'pages/Analytics.vue']) {
+      expect(files.has(file), file).toBe(true);
+    }
+  });
+
+  it('漲跌類規則的 background 不含 rgba( 字面,且引用 var(--up) 或 var(--dn)', () => {
+    const offenders = updownRules()
+      .filter(r => {
+        const bg = backgroundOf(r) ?? '';
+        return /rgba\(/.test(bg) || !/var\(--(up|dn)\)/.test(bg);
+      })
+      .map(r => `${r.file} ${r.selector} → background: ${backgroundOf(r)}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('.pill.div / .kind-pill.div 不受此規則約束(非漲跌語意,維持紫色)', () => {
+    expect(vueRules.filter(r => /\.(pill|kind-pill)\.div/.test(r.selector)).every(r => !UPDOWN_SELECTOR.test(r.selector))).toBe(true);
   });
 });

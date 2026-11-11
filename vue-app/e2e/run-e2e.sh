@@ -6,6 +6,9 @@
 #   E2E_SKIP_BUILD=1  略過 mvn package(需已有 jar)
 #   E2E_KEEP=1        結束後保留 infra 與後端(除錯用)
 #   E2E_ENV_ONLY=1    只起環境(不跑 Playwright),隱含 E2E_KEEP=1
+# 參數:原樣傳給 playwright test;無參數 = 全部(@smoke + @extended,D-14)。
+#   本機快速迴圈可自行帶 --grep @smoke
+# Vite preview 的 proxy 目標由 playwright.config.ts 以 VITE_API_PROXY_TARGET 設為 E2E_BACKEND_PORT(D-21)。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +18,7 @@ BACKEND_PORT="${E2E_BACKEND_PORT:-8080}"
 ARTIFACTS_DIR="$SCRIPT_DIR/artifacts"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 HEALTH_URL="http://localhost:${BACKEND_PORT}/actuator/health"
+PREVIEW_URL="http://localhost:4173/"
 BACKEND_LOG="$ARTIFACTS_DIR/backend.log"
 BACKEND_PID=""
 
@@ -49,6 +53,15 @@ trap cleanup EXIT
 # 0. 前置檢查:port 未被占用
 if curl -fsS -o /dev/null --max-time 2 "$HEALTH_URL" 2>/dev/null; then
   log "ERROR: port ${BACKEND_PORT} 已有服務回應 health,請先停止舊的後端"
+  BACKEND_PID=""; E2E_KEEP=1
+  exit 1
+fi
+
+# 0b. 前置檢查:4173 未被佔用。本機 reuseExistingServer 為 true,Playwright 會直接重用已在跑的
+#     vite preview,而它沒帶 VITE_API_PROXY_TARGET 時指向 11180(後端 dev 預設),E2E 會打到錯的後端。
+#     CI 上 reuseExistingServer 為 false,此檢查無害。
+if curl -fsS --max-time 2 "$PREVIEW_URL" >/dev/null 2>&1; then
+  log "ERROR: 4173 已有 vite preview,Playwright 會重用它(reuseExistingServer),而它可能指向 11180;請先停止"
   BACKEND_PID=""; E2E_KEEP=1
   exit 1
 fi
@@ -98,10 +111,7 @@ if [ "${E2E_ENV_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-# 5. Playwright(無參數預設只跑 @smoke;其他參數原樣傳遞,如 --grep @extended)
-if [ $# -eq 0 ]; then
-  set -- --grep @smoke
-fi
+# 5. Playwright(無參數 = 全部 tag,含 @extended;本機快速迴圈可自行帶 --grep @smoke,其他參數原樣傳遞)
 log "執行 Playwright:npx playwright test $*"
 cd "$APP_DIR"
 set +e

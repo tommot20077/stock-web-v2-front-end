@@ -440,7 +440,7 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
   border-color: var(--border); background: color-mix(in oklch, var(--surface2) 70%, transparent);
 }
 .btn-ghost:disabled:hover { border-color: var(--border); color: var(--fg-mute); }
-.btn-ghost.danger:hover { border-color: var(--dn); color: var(--dn); }
+.btn-ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
 .btn-accent {
   background: var(--accent); color: var(--on-accent); border: 0; padding: 7px 14px;
   border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
@@ -471,13 +471,13 @@ h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; }
 .ccy-status { font-size: 12px; color: var(--fg-dim); }
 .ccy-status:empty { display: none; }
 .ccy-error { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; }
-.ccy-error-text { font-size: 12px; color: var(--dn); overflow-wrap: anywhere; }
+.ccy-error-text { font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
 .ccy-diag { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 10px; font-size: 12px; color: var(--fg-dim); }
 .ccy-diag span { overflow-wrap: anywhere; }
 .ccy-retry {
   min-height: 36px; padding: 0 12px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface2);
-  color: var(--dn); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--danger); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .ccy-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
