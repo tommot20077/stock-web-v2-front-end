@@ -761,6 +761,20 @@ describe('Cash page — balances row (API mode)', () => {
     expect(testid('cash-page-negative')).toBeNull();
   });
 
+  it('shows balances beyond double precision exactly and treats -0.00000001 as negative (Decimal, D-08)', async () => {
+    await mountApiCash(cashFetch(THREE_ENTRIES, {
+      summary: () => success(summaryDto({
+        cash: '9007199254740993',
+        cashBalances: [{ currency: 'TWD', amount: '9007199254740993' }, { currency: 'USD', amount: '-0.00000001' }],
+      })),
+    }));
+
+    const row = requireTestid('cash-page-balances');
+    expect(row.textContent).toContain('9,007,199,254,740,993');
+    expect(row.textContent).toContain('TWD 9,007,199,254,740,993.00');
+    expect(requireTestid('cash-page-negative').textContent).toContain(tf('zh', 'cashNegativeHint', { codes: 'USD' }));
+  });
+
   it('shows the missing-rate hint for cash currencies the backend could not convert', async () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
       summary: () => success(summaryDto({

@@ -756,6 +756,24 @@ describe('CashEntryDialog — 金額以 Decimal 送出字串(D-05 / D-08)', () =
     expect(testid('cash-withdraw-over-balance')).toBeTruthy();
   });
 
+  it('comparesAgainstABalanceBeyondDoublePrecisionWithoutNumberConversion', async () => {
+    // 999999999999.99999998 與 ...99 經 number 都會變成 1000000000000;Decimal 直接比較才分得出「等於」與「多 1e-8」。
+    // (金額上限 1e12,所以用低於上限、但超過 double 有效位數的值。)
+    const balances = [{ currency: 'USD', amount: parseDecimal('999999999999.99999998') }];
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances } });
+
+    await typeAmount('999999999999.99999998');
+    expect(testid('cash-withdraw-over-balance'), '等於餘額不算超額').toBeNull();
+    await typeAmount('999999999999.99999999');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+  });
+
+  it('dropsThe0516NumberToDecimalHandoffInOverBalance', () => {
+    // 05-16 留下的 parseDecimal(numberToWire(balance)) 交接點已由 05-17 刪除(balances 是 CashBalance[])。
+    const code = cashEntryDialogSource.split('\n').filter(line => !/^\s*(\*|\/\/)/.test(line)).join('\n');
+    expect(code).not.toContain('numberToWire');
+  });
+
   it('parsesTheAmountWithParseDecimalInputInsteadOfNumber', () => {
     expect(cashEntryDialogSource).toContain('parseDecimalInput(amount.value)');
     expect(cashEntryDialogSource).not.toMatch(/Number\(amount\.value/);

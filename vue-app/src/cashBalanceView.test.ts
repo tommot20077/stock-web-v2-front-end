@@ -47,12 +47,24 @@ describe('cashBalanceView(T2.6)', () => {
     expect(cashBalanceListText(ordered)).toBe(
       `TWD ${fmtMoneyAmount(300, 'TWD')} · USD ${fmtMoneyAmount(-12.5, 'USD')} · JPY ${fmtMoneyAmount(1000, 'JPY')} · HKD ${fmtMoneyAmount(5, 'HKD')}`,
     );
+    // 超過 double 精度的餘額照原值顯示(不經 number)
+    expect(cashBalanceListText([bal('USD', '9007199254740993.01')])).toBe(
+      `USD ${fmtMoneyAmount(parseDecimal('9007199254740993.01'), 'USD')}`,
+    );
     expect(cashBalanceListText([])).toBe('');
   });
 
   it('負值幣別只看各幣別本身(總額可能為正)', () => {
     expect(negativeCashCurrencies(orderCashBalances(MIXED))).toEqual(['USD']);
     expect(negativeCashCurrencies([])).toEqual([]);
+  });
+
+  it('Decimal 判斷:-0.00000001 是負值、"0" / "0.00000000" 不是負值且被濾掉', () => {
+    const ordered = orderCashBalances([bal('USD', '-0.00000001'), bal('TWD', '0'), bal('EUR', '0.00000000')]);
+    expect(ordered.map(b => b.currency)).toEqual(['USD']);
+    expect(negativeCashCurrencies(ordered)).toEqual(['USD']);
+    expect(negativeCashCurrencies([bal('TWD', '0')])).toEqual([]);
+    expect(defaultCashEntryCurrency('DEPOSIT', ordered, 'TWD')).toBe('USD');
   });
 
   it('未折算幣別:依排序後的順序,只列有非零餘額者', () => {
