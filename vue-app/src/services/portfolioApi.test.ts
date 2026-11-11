@@ -902,7 +902,7 @@ describe('portfolioApi mock adapter — listActivities', () => {
     seedTrades();
     const events = createMockHoldingEventApi();
     const dividend = await events.createDividend(
-      { symbol: 'AAPL', amount: 50, withholdingTax: 5, paidAt: '2026-04-01T09:00:00+08:00' },
+      { symbol: 'AAPL', amount: parseDecimal('50'), withholdingTax: parseDecimal('5'), paidAt: '2026-04-01T09:00:00+08:00' },
       'k-1',
     );
     const split = await events.createShareAdjustment(
@@ -931,7 +931,7 @@ describe('portfolioApi mock adapter — listActivities', () => {
   it('filters by type: DIVIDEND → CASH_DIVIDEND, SHARE_ADJUSTMENT → STOCK_DIVIDEND / SPLIT, BUY / SELL', async () => {
     seedTrades();
     const events = createMockHoldingEventApi();
-    await events.createDividend({ symbol: 'AAPL', amount: 50 }, 'k-1');
+    await events.createDividend({ symbol: 'AAPL', amount: parseDecimal('50') }, 'k-1');
     await events.createShareAdjustment(
       { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-05-01' },
       'k-2',
@@ -982,7 +982,7 @@ describe('portfolioApi mock adapter — live.holdingEvents / isHoldingEventTrade
     expect(api.live?.holdingEvents).toEqual([]);
 
     const events = createMockHoldingEventApi();
-    const dividend = await events.createDividend({ symbol: 'AAPL', amount: 50, withholdingTax: 5 }, 'k-1');
+    const dividend = await events.createDividend({ symbol: 'AAPL', amount: parseDecimal('50'), withholdingTax: parseDecimal('5') }, 'k-1');
     const split = await events.createShareAdjustment(
       { symbol: 'AAPL', type: 'SPLIT', ratioNew: 2, ratioOld: 1, effectiveDate: '2026-05-01' },
       'k-2',
@@ -1003,7 +1003,7 @@ describe('portfolioApi mock adapter — live.holdingEvents / isHoldingEventTrade
   it('returns clones: mutating a row does not leak back into mock state', async () => {
     const store = useMockPortfolioStore();
     store.positions = [{ sym: 'AAPL', name: 'Apple Inc.', qty: 1000, avg: 100, price: 218.4, sector: 'Tech' }];
-    await createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: 50 }, 'k-1');
+    await createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: parseDecimal('50') }, 'k-1');
     const api = createMockPortfolioApi();
 
     api.live!.holdingEvents[0].amount = 999;

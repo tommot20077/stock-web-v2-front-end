@@ -2091,8 +2091,8 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
         id: 'bbbbbbbb-2222-4bbb-8ccc-000000000001',
         symbol: 'AAPL',
         currency: 'USD',
-        amount: 120,
-        withholdingTax: 30,
+        amount: '120.00000000',
+        withholdingTax: '30.00000000',
         paidAt: '2026-11-04T09:30:00+08:00',
         createdAt: '2026-11-04T09:30:05+08:00',
         note: null,
@@ -2140,7 +2140,7 @@ describe('Trades — 股利與股數調整寫入入口(04.2-21 Task 2)', () => {
       expect(rows()).toHaveLength(1);
       expect(testid('trades-reverse')).toBeNull();
 
-      const dto = await getRuntimeApiClients().holdingEvents.createDividend({ symbol: 'AAPL', amount: 50 }, 'mock-key-1');
+      const dto = await getRuntimeApiClients().holdingEvents.createDividend({ symbol: 'AAPL', amount: parseDecimal('50') }, 'mock-key-1');
       notifyHoldingEventCreated(dto, 'dividend');
       await flushAsync();
 

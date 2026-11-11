@@ -1,7 +1,8 @@
 import { ApiClientError, apiRequest } from './apiClient';
 import { toRaw } from 'vue';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { RuntimeDataMode } from './apiTypes';
+import { parseDecimal, toWire, ZERO, type Decimal } from './decimal';
+import type { DecimalFields, RuntimeDataMode } from './apiTypes';
 import type { Trade } from '../types';
 
 /**
@@ -12,10 +13,13 @@ import type { Trade } from '../types';
  */
 export interface CreateDividendRequest {
   symbol: string;
-  /** **實領總額**(扣稅後、標的幣別);必須大於 0。 */
-  amount: number;
-  /** 預扣稅(標的幣別),≥ 0;省略視為 0。 */
-  withholdingTax?: number | null;
+  /**
+   * **實領總額**(扣稅後、標的幣別);必須大於 0。wire 為十進位字串(後端 `BigDecimal` + `@DecimalString`,
+   * Phase 5 D-05),由 `services/decimal.ts` 的 `toWire` 產出。
+   */
+  amount: string;
+  /** 預扣稅(標的幣別),≥ 0;省略視為 0。未填送 `null`,不送空字串(後端把 `""` 視為未提供)。 */
+  withholdingTax?: string | null;
   /** ISO-8601 含 offset;省略時由後端帶 now()。 */
   paidAt?: string | null;
   note?: string | null;
@@ -29,14 +33,55 @@ export interface DividendDto {
   symbol: string;
   /** 標的交易幣別(`amount` / `withholdingTax` 的幣別)。 */
   currency: string;
-  /** 恆為正(沖銷列亦同,以 `reversalOfId` 判斷)。 */
-  amount: number;
-  withholdingTax: number;
+  /** 恆為正(沖銷列亦同,以 `reversalOfId` 判斷)。wire 為十進位字串(D-05)。 */
+  amount: string;
+  withholdingTax: string;
   paidAt: string;
   createdAt: string;
   note: string | null;
   reversalOfId: string | null;
   reversed: boolean;
+}
+
+/** domain:現金股利,`amount` / `withholdingTax` 為 Decimal(由 {@link toDividend} 產生,Phase 5 D-08)。 */
+export type Dividend = DecimalFields<DividendDto, 'amount' | 'withholdingTax'>;
+
+/**
+ * domain 側的現金股利輸入(Phase 5 D-08):金額 / 預扣稅為 Decimal,其餘同 {@link CreateDividendRequest}。
+ * 對話框把文字輸入以 `parseDecimalInput` 解析後傳進來;轉成 wire 字串是 adapter 的事。
+ */
+export type CreateDividendInput = Omit<CreateDividendRequest, 'amount' | 'withholdingTax'> & {
+  amount: Decimal;
+  withholdingTax?: Decimal | null;
+};
+
+/**
+ * domain → wire 的逐欄投影(T-04.2-37):多餘欄位不得送到後端;可省略的欄位補成明確的 null,
+ * 同一份 input 每次投影逐位元相同(同一把 key 重試時 payload 穩定)。
+ * 金額經 `toWire`(一般記號);Decimal 不得直接進 JSON body(big.js 的 toJSON 走 toString,極小值會變 `1e-8`)。
+ */
+function toCreateDividendRequest(input: CreateDividendInput): Required<CreateDividendRequest> {
+  return {
+    symbol: input.symbol,
+    amount: toWire(input.amount),
+    withholdingTax: input.withholdingTax == null ? null : toWire(input.withholdingTax),
+    paidAt: input.paidAt ?? null,
+    note: input.note ?? null,
+    reversalOfId: input.reversalOfId ?? null,
+  };
+}
+
+/**
+ * wire `DividendDto` → domain {@link Dividend}。http 與 mock adapter 共用。
+ *
+ * @throws TypeError 金額不是字串(例如後端仍回 JS number)時 —— 契約違反要在邊界大聲失敗(T-05-27)。
+ */
+export function toDividend(wire: DividendDto): Dividend {
+  return {
+    ...wire,
+    amount: parseDecimal(wire.amount),
+    withholdingTax: parseDecimal(wire.withholdingTax),
+  };
 }
 
 /** 後端 `ShareAdjustmentType`:配股或拆股 / 合股。 */
@@ -82,7 +127,8 @@ export interface ShareAdjustmentDto {
  */
 export interface HoldingEventApi {
   mode: RuntimeDataMode;
-  createDividend(request: CreateDividendRequest, idempotencyKey: string): Promise<DividendDto>;
+  /** 金額為 Decimal 的 input;adapter 逐欄投影成 wire 字串,回應經 {@link toDividend} 轉成 domain。 */
+  createDividend(input: CreateDividendInput, idempotencyKey: string): Promise<Dividend>;
   createShareAdjustment(request: CreateShareAdjustmentRequest, idempotencyKey: string): Promise<ShareAdjustmentDto>;
 }
 
@@ -99,18 +145,11 @@ export interface HoldingEventApi {
 export function createHttpHoldingEventApi(basePath = '/api/v1'): HoldingEventApi {
   return {
     mode: 'api',
-    createDividend: (request, idempotencyKey) => apiRequest<DividendDto>(`${basePath}/portfolio/dividends`, {
+    createDividend: async (input, idempotencyKey) => toDividend(await apiRequest<DividendDto>(`${basePath}/portfolio/dividends`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
-      json: {
-        symbol: request.symbol,
-        amount: request.amount,
-        withholdingTax: request.withholdingTax ?? null,
-        paidAt: request.paidAt ?? null,
-        note: request.note ?? null,
-        reversalOfId: request.reversalOfId ?? null,
-      },
-    }),
+      json: toCreateDividendRequest(input),
+    })),
     createShareAdjustment: (request, idempotencyKey) => apiRequest<ShareAdjustmentDto>(
       `${basePath}/portfolio/share-adjustments`,
       {
@@ -137,7 +176,8 @@ export function createHttpHoldingEventApi(basePath = '/api/v1'): HoldingEventApi
 const MOCK_CURRENCY = 'USD';
 
 /** 契約值域:amount / withholdingTax ≤ 10^12、配股股數 ≤ 10^9、比例 1–1000、symbol ≤ 32 字、note ≤ 500 字。 */
-const MAX_AMOUNT = 1_000_000_000_000;
+const MIN_POSITIVE = parseDecimal('0.00000001');
+const MAX_AMOUNT = parseDecimal('1000000000000');
 const MAX_QUANTITY = 1_000_000_000;
 const MAX_RATIO = 1000;
 const MAX_SYMBOL_LENGTH = 32;
@@ -186,8 +226,9 @@ type StoredAdjustment = Omit<ShareAdjustmentDto, 'reversed'>;
 interface DividendKeyRecord {
   id: string;
   symbol: string;
-  amount: number;
-  withholdingTax: number;
+  /** wire 字串;比對以 Decimal `eq`(後端 `compareTo` 語意,`"10"` 與 `"10.00000000"` 為同值)。 */
+  amount: string;
+  withholdingTax: string;
   paidAt: string | null;
   reversalOfId: string | null;
 }
@@ -246,6 +287,7 @@ function latestActiveAdjustment(symbol: string): StoredAdjustment | undefined {
   return active[active.length - 1];
 }
 
+/** mock 儲存的是 wire 形狀(金額為字串);回傳前再走與 http 相同的 {@link toDividend}。 */
 function dividendToDto(entry: StoredDividend): DividendDto {
   return { ...entry, reversed: isDividendReversed(entry.id) };
 }
@@ -268,8 +310,9 @@ function dividendToEvent(entry: StoredDividend): MockHoldingEvent {
     effectiveDate: null,
     createdAt: entry.createdAt,
     quantity: null,
-    amount: entry.amount,
-    withholdingTax: entry.withholdingTax,
+    // MockHoldingEvent 與 PortfolioActivityDto 同形,金額仍是 number(05-21 一併字串化);mock-only 資料。
+    amount: Number(entry.amount),
+    withholdingTax: Number(entry.withholdingTax),
     ratioNew: null,
     ratioOld: null,
     note: entry.note,
@@ -407,11 +450,15 @@ function insufficientHolding(): ApiClientError {
 export function createMockHoldingEventApi(): HoldingEventApi {
   return {
     mode: 'mock',
-    async createDividend(request, idempotencyKey) {
-      const withholdingTax = request.withholdingTax ?? 0;
+    async createDividend(input, idempotencyKey) {
+      // 與 http adapter 相同的逐欄投影:mock 先組成 wire 形狀,儲存與回傳都以字串為準,回傳前走同一個 toDividend。
+      const request = toCreateDividendRequest(input);
+      const amount = parseDecimal(request.amount);
+      const withholdingTaxWire = request.withholdingTax ?? '0';
+      const withholdingTax = parseDecimal(withholdingTaxWire);
       const fields = commonFieldErrors(idempotencyKey, request.symbol, request.note);
-      if (!(request.amount >= 0.00000001 && request.amount <= MAX_AMOUNT)) fields.amount = 'out of range';
-      if (!(withholdingTax >= 0 && withholdingTax <= MAX_AMOUNT)) fields.withholdingTax = 'out of range';
+      if (!(amount.gte(MIN_POSITIVE) && amount.lte(MAX_AMOUNT))) fields.amount = 'out of range';
+      if (!(withholdingTax.gte(ZERO) && withholdingTax.lte(MAX_AMOUNT))) fields.withholdingTax = 'out of range';
       if (request.paidAt != null) {
         const paidAt = Date.parse(request.paidAt);
         if (Number.isNaN(paidAt)) fields.paidAt = 'invalid format';
@@ -420,7 +467,7 @@ export function createMockHoldingEventApi(): HoldingEventApi {
       if (Object.keys(fields).length > 0) throw validationFailed(fields);
       assertKnownSymbol(request.symbol);
 
-      const reversalOfId = request.reversalOfId ?? null;
+      const reversalOfId = request.reversalOfId;
       const original = reversalOfId === null
         ? undefined
         : mockDividends.find(candidate => candidate.id === reversalOfId);
@@ -430,15 +477,16 @@ export function createMockHoldingEventApi(): HoldingEventApi {
 
       const known = dividendKeys.get(idempotencyKey);
       if (known) {
+        // 金額以 Decimal eq 比對(後端 BigDecimal compareTo 語意):同 key 的 "10" 與 "10.00000000" 是同一筆。
         const samePayload = known.symbol === request.symbol
-          && known.amount === request.amount
-          && known.withholdingTax === withholdingTax
+          && parseDecimal(known.amount).eq(amount)
+          && parseDecimal(known.withholdingTax).eq(withholdingTax)
           && known.reversalOfId === reversalOfId
-          && (request.paidAt == null || (known.paidAt !== null && sameInstant(known.paidAt, request.paidAt)));
+          && (request.paidAt === null || (known.paidAt !== null && sameInstant(known.paidAt, request.paidAt)));
         if (!samePayload) {
           throw conflict('DIVIDEND_IDEMPOTENCY_KEY_REUSED', 'Idempotency key was reused with a different payload');
         }
-        return structuredClone(dividendToDto(mockDividends.find(candidate => candidate.id === known.id)!));
+        return toDividend(dividendToDto(mockDividends.find(candidate => candidate.id === known.id)!));
       }
 
       if (original) {
@@ -450,8 +498,8 @@ export function createMockHoldingEventApi(): HoldingEventApi {
         }
         const mismatch: Record<string, string> = {};
         if (request.symbol !== original.symbol) mismatch.symbol = 'must mirror the original record';
-        if (request.amount !== original.amount) mismatch.amount = 'must mirror the original record';
-        if (withholdingTax !== original.withholdingTax) mismatch.withholdingTax = 'must mirror the original record';
+        if (!amount.eq(parseDecimal(original.amount))) mismatch.amount = 'must mirror the original record';
+        if (!withholdingTax.eq(parseDecimal(original.withholdingTax))) mismatch.withholdingTax = 'must mirror the original record';
         if (Object.keys(mismatch).length > 0) throw validationFailed(mismatch);
       }
 
@@ -461,10 +509,10 @@ export function createMockHoldingEventApi(): HoldingEventApi {
         symbol: request.symbol,
         currency: MOCK_CURRENCY,
         amount: request.amount,
-        withholdingTax,
+        withholdingTax: withholdingTaxWire,
         paidAt: request.paidAt ?? now,
         createdAt: now,
-        note: request.note ?? null,
+        note: request.note,
         reversalOfId,
       };
       mockDividends.push(entry);
@@ -473,24 +521,26 @@ export function createMockHoldingEventApi(): HoldingEventApi {
         id: entry.id,
         symbol: entry.symbol,
         amount: entry.amount,
-        withholdingTax,
-        paidAt: request.paidAt ?? null,
+        withholdingTax: withholdingTaxWire,
+        paidAt: request.paidAt,
         reversalOfId,
       });
       // 可見效果(鐵律 6):mock 交易頭部多一列 DIV。mock `Trade` 沒有「總額」欄位,
       // 總額 = qty × px,所以以 qty 1、px = 實領金額表示;沖銷列 px 取負值,讓股利淨額歸零。
+      // mock store 是 mock-only 的 number 資料(05-16 規約),只有這裡把 wire 字串轉成 number 交給它。
+      const px = Number(request.amount);
       const row: Trade = {
         d: (request.paidAt ?? todayLocal()).slice(0, 10),
         type: 'DIV',
         sym: request.symbol,
         qty: 1,
-        px: reversalOfId === null ? request.amount : -request.amount,
+        px: reversalOfId === null ? px : -px,
         fee: 0,
         note: request.note ?? '',
       };
       eventTradeRows.add(row);
       useMockPortfolioStore().trades.unshift(row);
-      return structuredClone(dividendToDto(entry));
+      return toDividend(dividendToDto(entry));
     },
 
     async createShareAdjustment(request, idempotencyKey) {

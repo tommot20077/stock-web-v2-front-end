@@ -577,8 +577,8 @@ import type { MarketDayRule } from '../marketDate';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
 import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
-import type { Decimal } from '../services/decimal';
-import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
+import { numberToWire, parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
+import type { Dividend, ShareAdjustmentDto } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
 /** 三種記錄模式;名稱依 D-11(「股利與股數調整」)。 */
@@ -620,7 +620,7 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'recorded', event: DividendDto | ShareAdjustmentDto): void;
+  (e: 'recorded', event: Dividend | ShareAdjustmentDto): void;
   (e: 'reversalConflict', code: string): void;
 }>();
 
@@ -662,7 +662,7 @@ const note = ref('');
 const touched = reactive({ symbol: false, amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
 
 const submitting = ref(false);
-type RecordedEvent = { kind: 'dividend'; dto: DividendDto } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
+type RecordedEvent = { kind: 'dividend'; dto: Dividend } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
 const recorded = ref<RecordedEvent | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
@@ -722,7 +722,7 @@ const reversalKindLabel = computed(() => {
 
 /** 沖銷預覽的唯一前端衍生:把記錄值前綴「扣回 / 撤銷」字樣,不做加減(UI-SPEC §Money)。 */
 function reversalPreviewFor(kind: 'dividend' | 'shareAdjustment', values: {
-  symbol: string | null; currency: string | null; amount: number | null; quantity: number | null;
+  symbol: string | null; currency: string | null; amount: Decimal | number | null; quantity: Decimal | number | null;
 }): string {
   if (kind === 'dividend') {
     return tf(props.lang, 'holdingEventReversalPreviewDividend', {
@@ -1162,20 +1162,38 @@ const reversalOfDate = computed(() => {
 // =================== 前端自檢(UI-SPEC §Interaction 1 欄位契約) ===================
 // 後端 Bean Validation 才是權威;這裡只是在送出前把「必定被拒」的輸入擋下並說明原因。
 // 上限與小數位數與靜態文案(holdingEventErrAmount / Tax / Shares / Ratio)一致,文案不從錯誤訊息解析。
-const MONEY_MAX = 1_000_000_000_000;
-const SHARES_MAX = 1_000_000_000;
+// 金額 / 股數的上下限與比較一律用 Decimal(Phase 5 D-08):number 在 10^12 附近已無法區分第 8 位小數。
+// 比例是後端 Integer(1–1000),維持 number。
+const MONEY_MAX = parseDecimal('1000000000000');
+const SHARES_MAX = parseDecimal('1000000000');
 const RATIO_MAX = 1000;
 const MAX_DECIMALS = 8;
 const DECIMAL_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
 const INTEGER_PATTERN = /^\d+$/;
 
-function decimalWithin(text: string, min: number, max: number, allowZero: boolean): boolean {
-  if (!DECIMAL_PATTERN.test(text)) return false;
-  const decimals = text.includes('.') ? text.split('.')[1].length : 0;
-  if (decimals > MAX_DECIMALS) return false;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value > max) return false;
-  return allowZero ? value >= min : value > min;
+/**
+ * 金額 / 股數輸入文字 → Decimal;不是一般記號的非負數字面、或小數超過 8 位 → `null`。
+ * 範圍(> 0 / ≥ 0、上限)由呼叫端判斷。
+ */
+function parseAmountText(text: string): Decimal | null {
+  const trimmed = text.trim();
+  if (!DECIMAL_PATTERN.test(trimmed)) return null;
+  const decimals = trimmed.includes('.') ? trimmed.split('.')[1].length : 0;
+  if (decimals > MAX_DECIMALS) return null;
+  return parseDecimalInput(trimmed);
+}
+
+function decimalWithin(text: string, max: Decimal, allowZero: boolean): boolean {
+  const value = parseAmountText(text);
+  if (value === null || value.gt(max)) return false;
+  return allowZero ? value.gte(ZERO) : value.gt(ZERO);
+}
+
+/** 送出用:只在自檢通過後呼叫,所以解析失敗代表程式錯誤,大聲失敗而不是送出 0。 */
+function requireAmount(text: string): Decimal {
+  const value = parseAmountText(text);
+  if (value === null) throw new TypeError('[HoldingEventDialog] amount input was not validated before submit');
+  return value;
 }
 
 function ratioSideValid(text: string): boolean {
@@ -1184,10 +1202,10 @@ function ratioSideValid(text: string): boolean {
   return value >= 1 && value <= RATIO_MAX;
 }
 
-const amountValid = computed(() => decimalWithin(amount.value.trim(), 0, MONEY_MAX, false));
-/** 預扣稅選填:空 = 0。 */
-const taxValid = computed(() => tax.value.trim() === '' || decimalWithin(tax.value.trim(), 0, MONEY_MAX, true));
-const sharesValid = computed(() => decimalWithin(shares.value.trim(), 0, SHARES_MAX, false));
+const amountValid = computed(() => decimalWithin(amount.value, MONEY_MAX, false));
+/** 預扣稅選填:空 = 未提供(送 null,後端視為 0)。 */
+const taxValid = computed(() => tax.value.trim() === '' || decimalWithin(tax.value, MONEY_MAX, true));
+const sharesValid = computed(() => decimalWithin(shares.value, SHARES_MAX, false));
 const ratioValid = computed(() => {
   const n = ratioNew.value.trim();
   const o = ratioOld.value.trim();
@@ -1383,8 +1401,9 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
   if (mode.value === 'cashDividend') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: Number(amount.value.trim()),
-      withholdingTax: tax.value.trim() === '' ? null : Number(tax.value.trim()),
+      amount: requireAmount(amount.value),
+      // 選填:未填送 null(不送空字串,後端把 "" 視為未提供)。
+      withholdingTax: tax.value.trim() === '' ? null : requireAmount(tax.value),
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       paidAt: toLocalIso(new Date(paidAt.value)),
       note: noteValue,
@@ -1410,6 +1429,10 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
 /**
  * 沖銷請求:除備註外的值逐欄取自原列(DB 驗證沖銷值與原列相同,前端不讓使用者改)。
  * 股利 `paidAt` 送 null(後端帶 now();payload 比對只在有送時比對);拆股 `quantity` 送 null(ΔQ 由後端記錄)。
+ *
+ * 型別閉包交接點(05-20 → 05-21,同 05-16 規約):原列 `PortfolioActivityDto` 的金額 / 股數在 05-21 之前仍是
+ * number,只在這個函式內以 `fromRow` 轉成 Create*Input 的 Decimal(null 保持 null)。
+ * **05-21 活動列轉 Decimal 時刪除此轉換**,改為直接傳原列的 Decimal 欄位。
  */
 async function createReversal(
   original: PortfolioActivityDto,
@@ -1417,12 +1440,13 @@ async function createReversal(
   noteValue: string | null,
   idempotencyKey: string,
 ): Promise<RecordedEvent> {
+  const fromRow = (value: number | null): Decimal | null => (value === null ? null : parseDecimal(numberToWire(value)));
   const clients = getRuntimeApiClients();
   if (original.kind === 'CASH_DIVIDEND') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: original.amount ?? 0,
-      withholdingTax: original.withholdingTax,
+      amount: fromRow(original.amount) ?? ZERO,
+      withholdingTax: fromRow(original.withholdingTax),
       paidAt: null,
       note: noteValue,
       reversalOfId: original.id,

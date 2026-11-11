@@ -6,12 +6,14 @@ import {
   createMockHoldingEventApi,
   listMockHoldingEvents,
   resetMockHoldingEventsForTests,
-  type CreateDividendRequest,
+  toDividend,
+  type CreateDividendInput,
   type CreateShareAdjustmentRequest,
   type DividendDto,
   type ShareAdjustmentDto,
 } from './holdingEventApi';
 import type { ApiClientError } from './apiClient';
+import { parseDecimal, toWire } from './decimal';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 
 /**
@@ -33,14 +35,18 @@ const ADJUSTMENT_CONTRACT_FIELDS = [
   'effectiveDate', 'note', 'quantity', 'ratioNew', 'ratioOld', 'reversalOfId', 'symbol', 'type',
 ];
 
-const DIVIDEND_REQUEST: CreateDividendRequest = { symbol: 'AAPL', amount: 120 };
+/** 測試用簡寫:字串 → Decimal(domain 輸入)。 */
+const d = parseDecimal;
 
+const DIVIDEND_REQUEST: CreateDividendInput = { symbol: 'AAPL', amount: d('120') };
+
+/** wire fixture:金額為字串(後端 `@DecimalString`,scale 8)。 */
 const DIVIDEND_DTO: DividendDto = {
   id: '11111111-2222-3333-4444-555555555555',
   symbol: 'AAPL',
   currency: 'USD',
-  amount: 120,
-  withholdingTax: 0,
+  amount: '120.00000000',
+  withholdingTax: '0.00000000',
   paidAt: '2026-10-30T09:00:00+08:00',
   createdAt: '2026-10-30T09:00:01+08:00',
   note: null,
@@ -130,18 +136,19 @@ describe('holdingEventApi http adapter — createDividend(tracer)', () => {
     expect(Object.keys(bodyAt(0)).sort()).toEqual(DIVIDEND_CONTRACT_FIELDS);
     expect(bodyAt(0)).toEqual({
       symbol: 'AAPL',
-      amount: 120,
+      amount: '120',
       withholdingTax: null,
       paidAt: null,
       note: null,
       reversalOfId: null,
     });
-    expect(dto).toEqual(DIVIDEND_DTO);
+    expect(dto).toEqual(toDividend(DIVIDEND_DTO));
+    expect(dto.amount.eq(d('120'))).toBe(true);
   });
 
   it('httpCreateDividendDropsExcessFields', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(DIVIDEND_DTO))));
-    const widerFormState = { ...DIVIDEND_REQUEST, currency: 'USD', userId: 7 } as CreateDividendRequest;
+    const widerFormState = { ...DIVIDEND_REQUEST, currency: 'USD', userId: 7 } as CreateDividendInput;
 
     await createHttpHoldingEventApi('/api/v1').createDividend(widerFormState, 'k-1');
 
@@ -173,7 +180,7 @@ describe('holdingEventApi http adapter — createDividend(tracer)', () => {
     expect(headerValue(initAt(writeIndexes[0]), 'idempotency-key')).toBe('k-1');
     expect(headerValue(initAt(writeIndexes[1]), 'idempotency-key')).toBe('k-1');
     expect(bodyAt(writeIndexes[1])).toEqual(bodyAt(writeIndexes[0]));
-    expect(dto).toEqual(DIVIDEND_DTO);
+    expect(dto).toEqual(toDividend(DIVIDEND_DTO));
   });
 
   it('httpCreateDividendErrorsSurfaceAsApiClientError', async () => {
@@ -239,11 +246,11 @@ describe('holdingEventApi mock adapter — createDividend', () => {
 
     const dto = await createMockHoldingEventApi().createDividend(DIVIDEND_REQUEST, 'k-1');
 
+    expect(toWire(dto.amount)).toBe('120');
+    expect(toWire(dto.withholdingTax)).toBe('0');
     expect(dto).toMatchObject({
       symbol: 'AAPL',
       currency: 'USD',
-      amount: 120,
-      withholdingTax: 0,
       note: null,
       reversalOfId: null,
       reversed: false,
@@ -296,7 +303,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     const before = store.trades.length;
 
     const dto = await createMockHoldingEventApi().createDividend(
-      { symbol: 'AAPL', amount: 120, withholdingTax: 30, paidAt: '2026-10-30T09:00:00+08:00', note: 'Q3' },
+      { symbol: 'AAPL', amount: d('120'), withholdingTax: d('30'), paidAt: '2026-10-30T09:00:00+08:00', note: 'Q3' },
       'k-1',
     );
 
@@ -304,7 +311,8 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     expect(store.trades[0]).toMatchObject({ type: 'DIV', sym: 'AAPL', d: '2026-10-30', note: 'Q3' });
     // mock Trade 沒有「總額」欄位,總額 = qty × px;寫入後必須等於實領金額。
     expect(store.trades[0].qty * store.trades[0].px).toBe(120);
-    expect(dto).toMatchObject({ amount: 120, withholdingTax: 30, paidAt: '2026-10-30T09:00:00+08:00', note: 'Q3' });
+    expect(dto).toMatchObject({ paidAt: '2026-10-30T09:00:00+08:00', note: 'Q3' });
+    expect([toWire(dto.amount), toWire(dto.withholdingTax)]).toEqual(['120', '30']);
     const events = listMockHoldingEvents();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -321,7 +329,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
   });
 
   it('accepts a dividend without any holding(D-03:股利常在賣出後才入帳)', async () => {
-    const dto = await createMockHoldingEventApi().createDividend({ symbol: 'TSLA', amount: 50 }, 'k-1');
+    const dto = await createMockHoldingEventApi().createDividend({ symbol: 'TSLA', amount: d('50') }, 'k-1');
 
     expect(dto.symbol).toBe('TSLA');
   });
@@ -343,14 +351,14 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     const api = createMockHoldingEventApi();
     await api.createDividend(DIVIDEND_REQUEST, 'k-1');
 
-    const error = await thrownBy(api.createDividend({ ...DIVIDEND_REQUEST, amount: 121 }, 'k-1'));
+    const error = await thrownBy(api.createDividend({ ...DIVIDEND_REQUEST, amount: d('121') }, 'k-1'));
 
     expect(error).toMatchObject({ name: 'ApiClientError', status: 409, code: 'DIVIDEND_IDEMPOTENCY_KEY_REUSED' });
     expect(listMockHoldingEvents()).toHaveLength(1);
   });
 
   it('rejects amount <= 0 with VALIDATION_FAILED fields.amount', async () => {
-    const error = await thrownBy(createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: 0 }, 'k-1'));
+    const error = await thrownBy(createMockHoldingEventApi().createDividend({ symbol: 'AAPL', amount: d('0') }, 'k-1'));
 
     expect(error).toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
     expect(error.fields).toHaveProperty('amount');
@@ -358,7 +366,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
   });
 
   it('rejects an unknown symbol with ASSET_NOT_FOUND fields.symbol', async () => {
-    const error = await thrownBy(createMockHoldingEventApi().createDividend({ symbol: 'NOPE', amount: 10 }, 'k-1'));
+    const error = await thrownBy(createMockHoldingEventApi().createDividend({ symbol: 'NOPE', amount: d('10') }, 'k-1'));
 
     expect(error).toMatchObject({ status: 404, code: 'ASSET_NOT_FOUND' });
     expect(error.fields).toHaveProperty('symbol');
@@ -366,10 +374,10 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
   it('reverses a dividend: original becomes reversed, a second reversal is DIVIDEND_ALREADY_REVERSED', async () => {
     const api = createMockHoldingEventApi();
-    const original = await api.createDividend({ symbol: 'AAPL', amount: 120, withholdingTax: 30 }, 'k-1');
+    const original = await api.createDividend({ symbol: 'AAPL', amount: d('120'), withholdingTax: d('30') }, 'k-1');
 
     const reversal = await api.createDividend(
-      { symbol: 'AAPL', amount: 120, withholdingTax: 30, reversalOfId: original.id },
+      { symbol: 'AAPL', amount: d('120'), withholdingTax: d('30'), reversalOfId: original.id },
       'k-2',
     );
 
@@ -389,13 +397,13 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
     expect(aaplDivTotal).toBe(0);
 
     const again = await thrownBy(api.createDividend(
-      { symbol: 'AAPL', amount: 120, withholdingTax: 30, reversalOfId: original.id },
+      { symbol: 'AAPL', amount: d('120'), withholdingTax: d('30'), reversalOfId: original.id },
       'k-3',
     ));
     expect(again).toMatchObject({ status: 409, code: 'DIVIDEND_ALREADY_REVERSED' });
 
     const ofReversal = await thrownBy(api.createDividend(
-      { symbol: 'AAPL', amount: 120, withholdingTax: 30, reversalOfId: reversal.id },
+      { symbol: 'AAPL', amount: d('120'), withholdingTax: d('30'), reversalOfId: reversal.id },
       'k-4',
     ));
     expect(ofReversal).toMatchObject({ status: 409, code: 'DIVIDEND_NOT_REVERSIBLE' });
@@ -403,9 +411,9 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
   it('rejects a reversal whose values do not mirror the original, naming the field', async () => {
     const api = createMockHoldingEventApi();
-    const original = await api.createDividend({ symbol: 'AAPL', amount: 120 }, 'k-1');
+    const original = await api.createDividend({ symbol: 'AAPL', amount: d('120') }, 'k-1');
 
-    const error = await thrownBy(api.createDividend({ symbol: 'AAPL', amount: 100, reversalOfId: original.id }, 'k-2'));
+    const error = await thrownBy(api.createDividend({ symbol: 'AAPL', amount: d('100'), reversalOfId: original.id }, 'k-2'));
 
     expect(error).toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
     expect(error.fields).toHaveProperty('amount');
@@ -413,7 +421,7 @@ describe('holdingEventApi mock adapter — 現金股利(UI-SPEC §Interaction 0)
 
   it('rejects a reversal of an unknown record with DIVIDEND_NOT_FOUND', async () => {
     const error = await thrownBy(createMockHoldingEventApi().createDividend(
-      { symbol: 'AAPL', amount: 120, reversalOfId: 'missing-id' },
+      { symbol: 'AAPL', amount: d('120'), reversalOfId: 'missing-id' },
       'k-1',
     ));
 
@@ -587,7 +595,7 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
     const dividend = await api.createDividend(DIVIDEND_REQUEST, 'k-1');
     const adjustment = await api.createShareAdjustment(SPLIT_REQUEST, 'k-2');
 
-    dividend.amount = 999;
+    dividend.amount = d('999');
     adjustment.quantityDelta = 999;
     const listed = listMockHoldingEvents();
     listed[0].amount = 999;
@@ -597,7 +605,7 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
     expect(fresh).toHaveLength(2);
     expect(fresh[0].amount).toBe(120);
     expect(fresh[1].quantity).toBe(3000);
-    expect((await api.createDividend(DIVIDEND_REQUEST, 'k-1')).amount).toBe(120);
+    expect(toWire((await api.createDividend(DIVIDEND_REQUEST, 'k-1')).amount)).toBe('120');
   });
 
   it('resetMockHoldingEventsForTests clears recorded events and keys', async () => {
@@ -607,7 +615,104 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
     resetMockHoldingEventsForTests();
 
     expect(listMockHoldingEvents()).toEqual([]);
-    const second = await api.createDividend({ ...DIVIDEND_REQUEST, amount: 121 }, 'k-1');
+    const second = await api.createDividend({ ...DIVIDEND_REQUEST, amount: d('121') }, 'k-1');
     expect(second.id).not.toBe(first.id);
+  });
+});
+
+describe('holdingEventApi — 現金股利字串契約(05-20 / D-05 / D-08)', () => {
+  const PRECISE = '123456789012.12345678';
+
+  it('http:Decimal 輸入逐欄 toWire 送出,未填預扣稅送 null;回應字串 → Dividend 逐字往返', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
+      ...DIVIDEND_DTO,
+      amount: PRECISE,
+      withholdingTax: '0.00000000',
+    }))));
+
+    const dividend = await createHttpHoldingEventApi('/api/v1').createDividend(
+      { symbol: 'AAPL', amount: d(PRECISE), withholdingTax: null },
+      'k-precise',
+    );
+
+    // JSON 原文:金額是 JSON 字串(帶引號),不是 number。
+    expect(String(initAt(0).body)).toContain('"amount":"123456789012.12345678"');
+    expect(bodyAt(0).amount).toBe(PRECISE);
+    expect(bodyAt(0).withholdingTax).toBeNull();
+    expect(toWire(dividend.amount)).toBe(PRECISE);
+    expect(dividend.withholdingTax.eq(d('0'))).toBe(true);
+  });
+
+  it('http:極小值不出現科學記號;預扣稅有填時送字串', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(DIVIDEND_DTO))));
+
+    await createHttpHoldingEventApi('/api/v1').createDividend(
+      { symbol: 'AAPL', amount: d('0.00000001'), withholdingTax: d('30.5') },
+      'k-tiny',
+    );
+
+    const raw = String(initAt(0).body);
+    expect(raw).not.toMatch(/e-/i);
+    expect(bodyAt(0)).toMatchObject({ amount: '0.00000001', withholdingTax: '30.5' });
+  });
+
+  it('http:回應金額仍是 JS number → 在邊界丟 TypeError(T-05-27)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
+      ...DIVIDEND_DTO,
+      amount: 120,
+    }))));
+
+    await expect(createHttpHoldingEventApi('/api/v1').createDividend(DIVIDEND_REQUEST, 'k-1'))
+      .rejects.toBeInstanceOf(TypeError);
+  });
+
+  it('toDividend:預扣稅為 number 也丟 TypeError', () => {
+    expect(() => toDividend({ ...DIVIDEND_DTO, withholdingTax: 0 } as unknown as DividendDto)).toThrow(TypeError);
+  });
+
+  it('mock:完整精度往返;同 key 的 "10" 與 "10.00000000" 視為同一筆(Decimal eq),不同金額為 KEY_REUSED', async () => {
+    const api = createMockHoldingEventApi();
+    const precise = await api.createDividend({ symbol: 'AAPL', amount: d(PRECISE) }, 'k-precise');
+    expect(toWire(precise.amount)).toBe(PRECISE);
+
+    const store = useMockPortfolioStore();
+    const tradesBefore = store.trades.length;
+    const first = await api.createDividend({ symbol: 'AAPL', amount: d('10'), withholdingTax: d('1') }, 'k-10');
+    const second = await api.createDividend(
+      { symbol: 'AAPL', amount: d('10.00000000'), withholdingTax: d('1.0') },
+      'k-10',
+    );
+    expect(second.id).toBe(first.id);
+    expect(store.trades).toHaveLength(tradesBefore + 1);
+
+    const reused = await thrownBy(api.createDividend({ symbol: 'AAPL', amount: d('10.00000001') }, 'k-10'));
+    expect(reused).toMatchObject({ status: 409, code: 'DIVIDEND_IDEMPOTENCY_KEY_REUSED' });
+  });
+
+  it('mock:金額 > 10^12 或 < 0.00000001 → fields.amount;預扣稅 > 10^12 → fields.withholdingTax(Decimal 比較)', async () => {
+    const api = createMockHoldingEventApi();
+    const tooLarge = await thrownBy(api.createDividend({ symbol: 'AAPL', amount: d('1000000000000.00000001') }, 'k-1'));
+    expect(tooLarge.fields).toHaveProperty('amount');
+    const tooSmall = await thrownBy(api.createDividend({ symbol: 'AAPL', amount: d('0.000000009') }, 'k-2'));
+    expect(tooSmall.fields).toHaveProperty('amount');
+    const tax = await thrownBy(api.createDividend(
+      { symbol: 'AAPL', amount: d('1'), withholdingTax: d('1000000000000.00000001') },
+      'k-3',
+    ));
+    expect(tax.fields).toHaveProperty('withholdingTax');
+    expect(tax.fields).not.toHaveProperty('amount');
+  });
+
+  it('mock:沖銷值以 Decimal 比對原列("120" 與 "120.0" 相同)', async () => {
+    const api = createMockHoldingEventApi();
+    const original = await api.createDividend({ symbol: 'AAPL', amount: d('120'), withholdingTax: d('30') }, 'k-1');
+
+    const reversal = await api.createDividend(
+      { symbol: 'AAPL', amount: d('120.0'), withholdingTax: d('30.00000000'), reversalOfId: original.id },
+      'k-2',
+    );
+
+    expect(reversal.reversalOfId).toBe(original.id);
+    expect(toWire(reversal.amount)).toBe('120');
   });
 });
