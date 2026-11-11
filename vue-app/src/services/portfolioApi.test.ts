@@ -683,6 +683,80 @@ describe('portfolioApi mock adapter reads', () => {
   });
 });
 
+describe('portfolioApi — 交易分頁以 TradeRecord 回傳(05-19 / D-08)', () => {
+  const WIRE_TRADE = {
+    id: 'tr-1',
+    symbol: '2330.TW',
+    type: 'BUY',
+    quantity: '0.00000001',
+    price: '123456.12345678',
+    fee: '9007199254740993.01',
+    note: null,
+    currency: 'TWD',
+    executedAt: '2026-10-01T10:00:00+08:00',
+    createdAt: '2026-10-01T10:00:05+08:00',
+  };
+
+  function tradePage(items: unknown[]) {
+    return jsonResponse({
+      success: true,
+      data: { items, page: 0, size: 20, totalElements: items.length, totalPages: 1 },
+      error: null,
+      meta: { traceId: 'req_trades' },
+    });
+  }
+
+  it('http listTrades:wire 字串 → Decimal,極小值與超過 double 精度的值逐字往返,分頁欄位原樣', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => tradePage([WIRE_TRADE])));
+
+    const page = await createHttpPortfolioApi('/api/v1').listTrades();
+
+    expect(page).toMatchObject({ page: 0, size: 20, totalElements: 1, totalPages: 1 });
+    const [trade] = page.items;
+    expect([trade.quantity, trade.price, trade.fee].every(isDecimal)).toBe(true);
+    expect(toWire(trade.quantity)).toBe('0.00000001');
+    expect(toWire(trade.price)).toBe('123456.12345678');
+    expect(toWire(trade.fee)).toBe('9007199254740993.01');
+    expect(trade).toMatchObject({ id: 'tr-1', symbol: '2330.TW', type: 'BUY', currency: 'TWD', note: null });
+  });
+
+  it('http listTrades:後端 setScale(8) 的尾零以 eq 比較(big.js 正規化尾零)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => tradePage([{ ...WIRE_TRADE, quantity: '10.00000000', fee: '0E-8' }])));
+
+    const [trade] = (await createHttpPortfolioApi('/api/v1').listTrades()).items;
+
+    expect(trade.quantity.eq(parseDecimal('10'))).toBe(true);
+    expect(toWire(trade.fee)).toBe('0');
+  });
+
+  it('http listTrades:金額仍為 JS number 時在邊界丟錯(T-05-27)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => tradePage([{ ...WIRE_TRADE, quantity: 3 }])));
+
+    await expect(createHttpPortfolioApi('/api/v1').listTrades()).rejects.toThrow(TypeError);
+  });
+
+  it('mock listTrades:總額排序以 Decimal 計算(0.1 × 3 與 0.3 × 1 相等,保留原順序;double 會把前者排在後面)', async () => {
+    useMockPortfolioStore().trades = [
+      { d: '2026-03-01', type: 'BUY', sym: 'AAA', qty: 0.1, px: 3, fee: 0, note: '' },
+      { d: '2026-02-01', type: 'BUY', sym: 'BBB', qty: 0.3, px: 1, fee: 0, note: '' },
+    ];
+
+    const page = await createMockPortfolioApi().listTrades({ sort: 'total', direction: 'asc' });
+
+    expect(page.items.map(trade => trade.symbol)).toEqual(['AAA', 'BBB']);
+    expect(page.items[0].quantity.times(page.items[0].price).eq(parseDecimal('0.3'))).toBe(true);
+  });
+
+  it('mock live.lastFill:mock store 的 number 經 numberToWire → parseDecimal,小數價格精確', () => {
+    const api = createMockPortfolioApi();
+    useMockPortfolioStore().executeOrder({ sym: 'AAPL', name: 'Apple Inc.', side: 'BUY', qty: 0.5, px: 218.12, fee: 0, sector: 'Tech' });
+
+    const fill = api.live?.lastFill;
+    expect(isDecimal(fill?.qty) && isDecimal(fill?.px)).toBe(true);
+    expect([toWire(fill!.qty), toWire(fill!.px)]).toEqual(['0.5', '218.12']);
+  });
+});
+
 describe('portfolioApi factory', () => {
   it('selects mock or http implementation by runtime mode', () => {
     const mock = createPortfolioApi('mock');

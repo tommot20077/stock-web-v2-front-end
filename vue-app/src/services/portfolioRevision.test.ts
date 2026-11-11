@@ -109,6 +109,35 @@ describe('portfolioRevision — notifyTradeCreated 是單一原子動作', () =>
   });
 });
 
+describe('portfolioRevision — LastFill 以 Decimal 承載(05-19 / D-08)', () => {
+  it('notifyTradeCreated 由 TradeRecord 推導 qty / px,8 位小數與超過 double 精度的值原樣保留', () => {
+    notifyTradeCreated(toTradeRecord({
+      ...TRADE_WIRE,
+      quantity: '0.00000001',
+      price: '9007199254740993.01',
+    }));
+
+    expect(fillWire(apiLastFill.value)).toEqual({
+      sym: 'AAPL',
+      type: 'BUY',
+      qty: '0.00000001',
+      px: '9007199254740993.01',
+    });
+  });
+
+  it('apiLastFill 的 qty / px 是原始 Decimal(shallowRef,不被包成 readonly proxy)且 revision / tradeId 訊號不變', () => {
+    const trade = toTradeRecord(TRADE_WIRE);
+    notifyTradeCreated(trade);
+
+    expect(apiLastFill.value?.qty).toBe(trade.quantity);
+    expect(apiLastFill.value?.px).toBe(trade.price);
+    expect(toWire(apiLastFill.value!.qty)).toBe('10');
+    expect(portfolioRevision.value).toBe(1);
+    expect(portfolioRevisionCause.value).toBe('trade');
+    expect(lastCreatedTradeId.value).toBe(TRADE_WIRE.id);
+  });
+});
+
 describe('portfolioRevision — 重讀訊號帶觸發來源(U-09 / U-10)', () => {
   it('notifyTradeCreated sets the cause to trade', () => {
     notifyTradeCreated(TRADE_DTO);
