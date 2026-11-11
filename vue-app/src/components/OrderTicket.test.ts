@@ -1771,6 +1771,63 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     expect(orderTicketSource).toContain('totalQuantity');
     expect(orderTicketSource).toContain('listHoldings');
   });
+
+  /*
+   * 05-18(Phase 5 D-08 / T-05-34):持股數是 domain Decimal(wire 字串經 portfolioApi.toHolding),
+   * 超賣比較以 Decimal `gt` 做,小數股數與 8 位小數的邊界不經 JS number。preset 預填 qty = 10。
+   */
+  it('05-18:可賣數量為小數股數時以 fmtQuantity 原值顯示', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '12.5')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 12.5`);
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+  });
+
+  it('05-18:賣出數量等於可賣數量(後端 setScale(8) 尾零)不算超賣', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '10.00000000')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 10`);
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('05-18:可賣只差 1e-8(9.99999999)時賣 10 即為超賣;多 1e-8 則通過', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '9.99999999')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 9.99999999`);
+    expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(true);
+
+    cleanupMounted();
+    resetPortfolioRevisionForTests();
+
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '10.00000001')]),
+    }));
+    await switchToSell();
+
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('05-18:數量輸入的 number → Decimal 轉換只在 oversellError 一處(05-19 改文字輸入時刪除)', () => {
+    const code = orderTicketSource.split('\n').filter(line => !/^\s*(\*|\/\/)/.test(line));
+    expect(code.filter(line => line.includes('numberToWire(')), '唯一交接點').toHaveLength(1);
+    expect(orderTicketSource).toMatch(/const oversellError = computed\([\s\S]*?numberToWire\(qty\.value\)[\s\S]*?\.gt\(sellableQty\.value\)/);
+  });
 });
 
 // =====================================================================================

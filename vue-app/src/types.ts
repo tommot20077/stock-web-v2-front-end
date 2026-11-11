@@ -64,6 +64,10 @@ export interface Bond {
   star?: boolean;
 }
 
+/**
+ * mock 宇宙的持倉(靜態 number 資料,只供 mock mode)。API 路徑的持倉是 domain `Holding`(apiTypes,金額為 Decimal);
+ * mock adapter 以 number 計算後經 `numberToWire` 組成 wire 再走 `portfolioApi.toHolding`(Phase 5 D-08)。
+ */
 export interface Position {
   sym: string;
   name: string;
@@ -71,9 +75,9 @@ export interface Position {
   avg: number;
   price: number;
   sector: string;
-  /** quick-261107-1j4 E2:mock 持倉的資產類別(同 mock `AssetDto.assetType`);缺值時 mock HoldingDto 以 STOCK 代替。 */
+  /** quick-261107-1j4 E2:mock 持倉的資產類別(同 mock `AssetDto.assetType`);缺值時 mock `Holding.assetType` 以 STOCK 代替。 */
   assetType?: string;
-  /** quick-261107-1j4 E2:mock 持倉的市場(同 mock `AssetDto.market`);缺值 → HoldingDto.market = null。 */
+  /** quick-261107-1j4 E2:mock 持倉的市場(同 mock `AssetDto.market`);缺值 → `Holding.market` = null。 */
   market?: string | null;
 }
 

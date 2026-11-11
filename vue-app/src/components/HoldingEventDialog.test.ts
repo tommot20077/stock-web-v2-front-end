@@ -5,6 +5,7 @@ import HoldingEventDialog from './HoldingEventDialog.vue';
 import holdingEventDialogSource from './HoldingEventDialog.vue?raw';
 import { t, tf } from '../i18n';
 import { fmtMoney, fmtQuantity, fmtSignedQuantity } from '../moneyFormat';
+import { parseDecimal } from '../services/decimal';
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
@@ -496,6 +497,38 @@ describe('HoldingEventDialog — 配股(D-05)', () => {
     expect(fieldError('effectiveDate')).toBeUndefined();
     await submit();
     expect(bodiesOf(adjustmentCalls(fetchImpl))[0].effectiveDate, '原字串送出、不轉時區').toBe('2026-10-30');
+  });
+});
+
+/*
+ * 05-18(Phase 5 D-08):API 路徑由 Positions 傳 domain Holding 的 Decimal 股數,mock 路徑傳 Position.qty 的 number;
+ * 對話框只經 fmtQuantity 顯示、不做運算(Phase 3 D-04),兩者顯示文字相同。
+ */
+describe('HoldingEventDialog — 目前持股接受 Decimal 與 number(05-18)', () => {
+  async function currentQtyFor(totalQuantity: unknown): Promise<string | undefined> {
+    await mountDialog({
+      props: {
+        holding: { totalQuantity, currency: 'USD', name: 'Apple Inc.', assetType: 'STOCK', market: 'US' },
+        initialMode: 'stockDividend',
+      },
+    });
+    const text = requireTestid('holding-event-current-qty').textContent?.trim();
+    cleanupMounted();
+    return text;
+  }
+
+  it('Decimal(含 setScale(8) 尾零)與 number 的目前持股顯示相同', async () => {
+    const fromNumber = await currentQtyFor(1000);
+    const fromDecimal = await currentQtyFor(parseDecimal('1000.00000000'));
+    expect(fromDecimal).toBe(fromNumber);
+    expect(fromDecimal).toBe(tf('zh', 'holdingEventCurrentQty', { qty: fmtQuantity(1000) }));
+
+    expect(await currentQtyFor(parseDecimal('12.5'))).toBe(await currentQtyFor(12.5));
+  });
+
+  it('Decimal 股數 8 位小數與超過 double 精度的值原值顯示', async () => {
+    expect(await currentQtyFor(parseDecimal('9007199254740993.12345678')))
+      .toBe(tf('zh', 'holdingEventCurrentQty', { qty: '9,007,199,254,740,993.12345678' }));
   });
 });
 
