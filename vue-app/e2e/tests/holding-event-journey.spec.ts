@@ -1,5 +1,5 @@
 import { test, expect, loginViaApi } from '../support/fixtures';
-import { apiBuy, apiRead, apiWrite, localDate } from '../support/journeyApi';
+import { apiBuy, apiRead, apiWrite, decimalValue, localDate } from '../support/journeyApi';
 import type { Page } from '@playwright/test';
 
 /**
@@ -9,26 +9,28 @@ import type { Page } from '@playwright/test';
  * → summary 重讀 → Trades 活動列表(GET /portfolio/activities)→ 沖銷」在真後端串得起來(judgment §8)。
  * 每條測試自帶唯一帳號;前置買進走 API(journeyApi.ts),要證明的那段一律走 UI;selector 一律 data-testid;
  * 不攔截任何請求(版面 stub 屬 layout.spec.ts)。金額文字的數字與代碼之間是 NBSP,文字斷言一律用 \s+ 正規式。
+ * 後端 BigDecimal 欄位是 JSON 字串(Phase 5 D-05);跨來源斷言一律經 `decimalValue` 先驗字串再比數值。
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** 後端 BigDecimal → JSON 字串(D-05),斷言前經 `decimalValue`。 */
 interface CashBalance {
   currency: string;
-  amount: number;
+  amount: string;
 }
 
 interface PortfolioSummary {
   baseCurrency: string;
   cashBalances: CashBalance[];
-  dividendIncome: number;
-  dividendTaxWithheld: number;
+  dividendIncome: string;
+  dividendTaxWithheld: string;
 }
 
 interface Holding {
   symbol: string;
-  totalQuantity: number;
-  avgCost: number;
+  totalQuantity: string;
+  avgCost: string;
 }
 
 interface ActivityPage {
@@ -40,8 +42,10 @@ async function readSummary(page: Page): Promise<PortfolioSummary> {
   return apiRead<PortfolioSummary>(page, '/api/v1/portfolio/summary');
 }
 
+/** USD 現金餘額的數值(沒有 USD 列視為 0);只供斷言比較。 */
 function usdCash(summary: PortfolioSummary): number {
-  return summary.cashBalances.find((balance) => balance.currency === 'USD')?.amount ?? 0;
+  const usd = summary.cashBalances.find((balance) => balance.currency === 'USD');
+  return usd === undefined ? 0 : decimalValue(usd.amount, 'cashBalances[USD].amount');
 }
 
 /** Positions 該代號那一列的「股利與股數調整」→ 對話框(標的鎖定、預設現金股利,D-11)。 */
@@ -66,10 +70,10 @@ test('J1 記現金股利 → 股利收入與可用現金上升 → Trades「股�
   await loginViaApi(page, uniqueAccount);
   // 基準幣切 USD:dividendIncome 以目前匯率折成基準幣,AAPL 是 USD → 收入恰為實領淨額,不依賴匯率資料
   await apiWrite(page, 'PATCH', '/api/v1/me/preferences', { baseCurrency: 'USD' });
-  await apiBuy(page, 'AAPL', 10, 100);
+  await apiBuy(page, 'AAPL', '10', '100');
   const before = await readSummary(page);
   expect(before.baseCurrency).toBe('USD');
-  expect(before.dividendIncome).toBe(0);
+  expect(decimalValue(before.dividendIncome, 'dividendIncome')).toBe(0);
 
   await page.goto('/');
   await openHoldingEventFromPositions(page, 'AAPL');
@@ -89,8 +93,8 @@ test('J1 記現金股利 → 股利收入與可用現金上升 → Trades「股�
 
   // 跨來源:後端 summary 的股利收入 / 預扣稅,USD 現金 +120(實領淨額記入標的幣別;股利不動股數)
   const afterDividend = await readSummary(page);
-  expect(afterDividend.dividendIncome).toBeCloseTo(120, 6);
-  expect(afterDividend.dividendTaxWithheld).toBeCloseTo(30, 6);
+  expect(decimalValue(afterDividend.dividendIncome, 'dividendIncome')).toBeCloseTo(120, 6);
+  expect(decimalValue(afterDividend.dividendTaxWithheld, 'dividendTaxWithheld')).toBeCloseTo(30, 6);
   expect(usdCash(afterDividend)).toBeCloseTo(usdCash(before) + 120, 6);
 
   // Overview 總報酬率卡的同一列
@@ -121,8 +125,8 @@ test('J1 記現金股利 → 股利收入與可用現金上升 → Trades「股�
 
   // 跨來源:收入與預扣稅歸零、USD 現金回到股利前
   const afterReversal = await readSummary(page);
-  expect(afterReversal.dividendIncome).toBeCloseTo(0, 6);
-  expect(afterReversal.dividendTaxWithheld).toBeCloseTo(0, 6);
+  expect(decimalValue(afterReversal.dividendIncome, 'dividendIncome')).toBeCloseTo(0, 6);
+  expect(decimalValue(afterReversal.dividendTaxWithheld, 'dividendTaxWithheld')).toBeCloseTo(0, 6);
   expect(usdCash(afterReversal)).toBeCloseTo(usdCash(before), 6);
 
   // 兩者皆 0 → 附加列不渲染(U-10)
@@ -134,7 +138,7 @@ test('J1 記現金股利 → 股利收入與可用現金上升 → Trades「股�
 test('J2 1000 股(均價 100)配股 50 → Positions 1050 股、均價 95.24 → Trades「股數調整」頁籤列出 @smoke', async ({ page, uniqueAccount }) => {
   await loginViaApi(page, uniqueAccount);
   // 成交在 7 天前:Q_asOf 只計 executed_at 早於除權日起點的交易
-  await apiBuy(page, 'AAPL', 1000, 100);
+  await apiBuy(page, 'AAPL', '1000', '100');
 
   await page.goto('/');
   await openHoldingEventFromPositions(page, 'AAPL');
@@ -154,11 +158,13 @@ test('J2 1000 股(均價 100)配股 50 → Positions 1050 股、均價 95.24 →
   await expect(row).toContainText('1050');
   await expect(row).toContainText('95.24');
 
-  // 跨來源:後端持倉(scale 8 均價;不以「總成本恰好相等」斷言,契約〈配股攤薄的捨入誤差〉)
+  // 跨來源:後端持倉(scale 8 均價;不以「總成本恰好相等」斷言,契約〈配股攤薄的捨入誤差〉)。
+  // 股數 / 均價是 BigDecimal 字串(例 "1050.00000000");scale 由後端決定,以數值比較而非逐字比較。
   const holdings = await apiRead<Holding[]>(page, '/api/v1/portfolio/holdings');
   const aapl = holdings.find((holding) => holding.symbol === 'AAPL');
-  expect(aapl?.totalQuantity).toBe(1050);
-  expect(aapl?.avgCost ?? 0).toBeCloseTo(95.2381, 4);
+  expect(aapl, 'holdings 應含 AAPL').toBeDefined();
+  expect(decimalValue(aapl?.totalQuantity, 'totalQuantity')).toBe(1050);
+  expect(decimalValue(aapl?.avgCost, 'avgCost')).toBeCloseTo(95.2381, 4);
 
   // Trades「股數調整」頁籤(type=SHARE_ADJUSTMENT):一列配股,帶號股數
   await page.getByTestId('nav-trades').click();

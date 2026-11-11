@@ -1,5 +1,6 @@
 import { test, expect, loginViaApi } from '../support/fixtures';
 import type { Page } from '@playwright/test';
+import { decimalValue } from '../support/journeyApi';
 
 /**
  * 旅程 C:Phase 04.1 的基準幣 / 現金帳 / 交易幣別,真瀏覽器 → 真後端。
@@ -8,17 +9,19 @@ import type { Page } from '@playwright/test';
  * POST / GET /portfolio/cash-entries)的行為;本檔讓這條鏈在新端點上至少被自動化走過一次。
  * 每條測試自帶唯一帳號,不依賴執行順序;selector 一律 data-testid;不攔截任何請求(版面 stub 屬 layout.spec.ts)。
  * 金額文字的數字與代碼之間是 NBSP(moneyFormat.ts),文字斷言一律用 \s+ 正規式。
+ * 後端 BigDecimal 欄位是 JSON 字串(Phase 5 D-05);跨來源斷言一律經 `decimalValue` 先驗字串再比數值。
  */
 
+/** 後端 BigDecimal → JSON 字串(D-05),斷言前經 `decimalValue`。 */
 interface CashBalance {
   currency: string;
-  amount: number;
+  amount: string;
 }
 
 interface PortfolioSummary {
-  cash: number;
-  totalEquity: number;
-  totalMarketValue: number;
+  cash: string;
+  totalEquity: string;
+  totalMarketValue: string;
   cashBalances: CashBalance[];
 }
 
@@ -131,7 +134,7 @@ test('C2 入金 1000 USD → 可用現金與現金頁顯示 → 一鍵沖銷後�
   expect((await entriesRes.json()).data.totalElements).toBe(2);
   const summary = await readSummary(page);
   const usd = summary.cashBalances.find((balance) => balance.currency === 'USD');
-  expect(usd?.amount ?? 0).toBe(0);
+  expect(usd === undefined ? 0 : decimalValue(usd.amount, 'cashBalances[USD].amount')).toBe(0);
 });
 
 test('C3 未入金買進 1 股 AAPL → 交易不被阻擋、各處標示 USD、Overview 提示現金為負 @smoke', async ({ page, uniqueAccount }) => {
@@ -173,6 +176,10 @@ test('C3 未入金買進 1 股 AAPL → 交易不被阻擋、各處標示 USD、
   const summary = await readSummary(page);
   const usd = summary.cashBalances.find((balance) => balance.currency === 'USD');
   expect(usd).toBeDefined();
-  expect(usd?.amount ?? 0).toBeLessThan(0);
-  expect(summary.totalEquity).toBeCloseTo(summary.totalMarketValue + summary.cash, 6);
+  expect(decimalValue(usd?.amount, 'cashBalances[USD].amount')).toBeLessThan(0);
+  // 恆等式以數值近似比較(測試碼;不以 number 累加後比相等,契約〈序列化格式〉)
+  expect(decimalValue(summary.totalEquity, 'totalEquity')).toBeCloseTo(
+    decimalValue(summary.totalMarketValue, 'totalMarketValue') + decimalValue(summary.cash, 'cash'),
+    6,
+  );
 });

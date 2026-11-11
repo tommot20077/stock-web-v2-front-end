@@ -19,7 +19,12 @@ test('D1 建立回測 → 完成 → 結果區塊顯示(驗結構) @smoke', asyn
   await page.getByTestId('backtest-symbol').selectOption('NVDA');
   await page.getByTestId('backtest-period').selectOption('1Y');
   await page.getByTestId('backtest-initial').fill('50000');
+  // 初始資金是文字輸入 → Decimal → toWire:送出的 body 必須是字串(Phase 5 D-05;只觀察,不攔截)
+  const createRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/backtests/runs',
+  );
   await page.getByTestId('backtest-run').click();
+  expect((await createRequest).postDataJSON()?.initialCapital).toBe('50000');
 
   // 至完成:輪詢 run 狀態直到 succeeded(不斷言行情數值,只驗結構)
   await expect.poll(

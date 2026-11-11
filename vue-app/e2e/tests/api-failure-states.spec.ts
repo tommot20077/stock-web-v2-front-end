@@ -131,8 +131,8 @@ function withGrouping(value: string): string[] {
 
 const PRICE_SENTINELS = MOCK_SENTINELS.prices.flatMap(withGrouping);
 
-/** 決定性種子:AAPL 3 股 @ 123.45(mock 持倉沒有這個數量 / 價格組合)。 */
-const BUY_SEED = { symbol: 'AAPL', quantity: 3, price: 123.45 } as const;
+/** 決定性種子:AAPL 3 股 @ 123.45(mock 持倉沒有這個數量 / 價格組合)。金額依後端契約送字串(Phase 5 D-05)。 */
+const BUY_SEED = { symbol: 'AAPL', quantity: '3', price: '123.45' } as const;
 
 /** 入金種子的備註:只有真後端回來的分錄會帶它。 */
 const CASH_SEED_NOTE = 'sc5-seed';
@@ -188,7 +188,7 @@ const PAGES: PageCase[] = [
     assertReal: async (page) => {
       const row = page.getByTestId('positions-row').filter({ hasText: BUY_SEED.symbol });
       await expect(row).toHaveCount(1);
-      await expect(row).toContainText(String(BUY_SEED.quantity));
+      await expect(row).toContainText(BUY_SEED.quantity);
     },
   },
   {
@@ -220,13 +220,14 @@ const PAGES: PageCase[] = [
       traceId: 'cash-entries-trace-id',
       retry: 'cash-entries-retry',
     },
-    // CreateCashEntryRequest:type / currency / amount 必填,occurredAt 省略 = 伺服器現在;Idempotency-Key 必填
+    // CreateCashEntryRequest:type / currency / amount 必填(amount 依契約送字串,D-05),occurredAt 省略 = 伺服器現在;
+    // Idempotency-Key 必填
     seed: async (page) => {
       await apiWrite(
         page,
         'POST',
         '/api/v1/portfolio/cash-entries',
-        { type: 'DEPOSIT', currency: 'USD', amount: 1234.5, note: CASH_SEED_NOTE },
+        { type: 'DEPOSIT', currency: 'USD', amount: '1234.5', note: CASH_SEED_NOTE },
         { idempotent: true },
       );
     },
