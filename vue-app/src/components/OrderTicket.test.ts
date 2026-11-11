@@ -2308,3 +2308,77 @@ describe('OrderTicket 金額輸入 — 文字輸入 + Decimal(05-19)', () => {
     expect(flat(requireTestid('ticket-result-price').textContent)).toBe('123,456.12 TWD');
   });
 });
+
+// =====================================================================================
+// 05-22(Phase 5 D-05 / D-08 / T-05-36):標的報價為 wire 字串,元件拿 domain Asset(報價 Decimal)。
+// 搜尋選項 / 報價卡只格式化(moneyFormat)、正負用 Decimal 方法;價格預填 = toWire(latestPrice)。
+// =====================================================================================
+
+describe('OrderTicket 標的報價 — domain Asset(05-22)', () => {
+  it('價格預填 toWire(latestPrice):8 位小數原樣、極小值為一般記號(無科學記號)、尾零正規化', async () => {
+    const cases: Array<[string, string]> = [
+      ['123456.12345678', '123456.12345678'],
+      ['0.0000005', '0.0000005'],
+      ['190.20000000', '190.2'],
+    ];
+    for (const [wire, expected] of cases) {
+      cleanupMounted();
+      await mountApiTicket(marketFetch({ assets: () => assetPageResponse([{ ...CONTRADICTORY, latestPrice: wire }]) }), { sym: 'AAPL' });
+      expect(requireInput('ticket-price').value, `latestPrice ${wire}`).toBe(expected);
+    }
+  });
+
+  it('缺價(latestPrice null)維持既有行為:預填 0、報價卡顯示 —、送出鈕停用(不猜價格)', async () => {
+    const nulled = { ...CONTRADICTORY, latestPrice: null };
+    await mountApiTicket(marketFetch({ assets: () => assetPageResponse([nulled]) }), { sym: 'AAPL' });
+
+    expect(requireInput('ticket-price').value).toBe('0');
+    expect(requireTestid('ticket-quote-last').textContent?.trim()).toBe('—');
+    expect((requireTestid('ticket-review-advance') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('報價卡:大額不失真、HALF_UP 捨入;漲跌 0 帶 +(沿用 fmtPct 規則)、色彩依 Decimal 正負', async () => {
+    const quoted = {
+      ...CONTRADICTORY,
+      latestPrice: '9007199254740993.005',
+      change: '0',
+      changePercent: '-2.355',
+      high: '9007199254740993.995',
+      low: '0.004',
+    };
+    await mountApiTicket(marketFetch({ assets: () => assetPageResponse([quoted]) }), { sym: 'AAPL' });
+
+    expect(requireTestid('ticket-quote-last').textContent?.trim()).toBe('9,007,199,254,740,993.01');
+    expect(requireTestid('ticket-quote-change').textContent?.trim()).toBe('+0.00');
+    expect(requireTestid('ticket-quote-change-pct').textContent?.trim()).toBe('-2.36%');
+    expect(flat(requireTestid('ticket-quote-range').textContent)).toBe('0.00 – 9,007,199,254,740,994.00');
+    const wrap = document.body.querySelector<HTMLElement>('.quote-chg-wrap');
+    expect(wrap?.style.color).toBe('var(--dn)');
+  });
+
+  it('搜尋選項:價格 / 漲跌幅經 moneyFormat,正值補 +、色彩依 Decimal 正負', async () => {
+    const up = asset({ symbol: 'UPX', latestPrice: '1234.5', changePercent: '0.005' });
+    const down = asset({ symbol: 'DNX', latestPrice: '0.00000001', changePercent: '-0.004' });
+    await mountApiTicket(assetsFetch(() => assetPageResponse([up, down])));
+    await focusSymbol();
+
+    const upRow = requireTestid('ticket-symbol-option-UPX');
+    expect(upRow.querySelector('.sym-opt-px')?.textContent?.trim()).toBe('1,234.50');
+    expect(upRow.querySelector('.sym-opt-chg')?.textContent?.trim()).toBe('+0.01%');
+    expect(upRow.querySelector<HTMLElement>('.sym-opt-chg')?.style.color).toBe('var(--up-text)');
+    const downRow = requireTestid('ticket-symbol-option-DNX');
+    expect(downRow.querySelector('.sym-opt-px')?.textContent?.trim()).toBe('0.00');
+    // -0.004 → 2 位為 -0.00(負號保留,同 Phase 5 前 fmtPct 的 toFixed 行為)
+    expect(downRow.querySelector('.sym-opt-chg')?.textContent?.trim()).toBe('-0.00%');
+    expect(downRow.querySelector<HTMLElement>('.sym-opt-chg')?.style.color).toBe('var(--dn)');
+  });
+
+  it('源碼守門:不 import AssetDto、預填不再經 String() / parseDecimalInput、報價顯示不用 fmtNum / fmtPct', () => {
+    const script = orderTicketSource.slice(orderTicketSource.indexOf('<script setup'));
+    expect(script).not.toMatch(/^import .*\bAssetDto\b/m);
+    const prefill = script.slice(script.indexOf('function priceInputText'), script.indexOf('function pickAsset'));
+    expect(prefill).toContain('toWire(price)');
+    expect(prefill).not.toMatch(/String\(|parseDecimalInput/);
+    expect(script).not.toMatch(/\bfmtNum\(|\bfmtPct\(/);
+  });
+});

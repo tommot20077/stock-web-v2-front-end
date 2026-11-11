@@ -312,45 +312,45 @@ function asset(
     market: 'US',
     sector: null,
     tradeable: true,
-    latestPrice: 1234.56,
-    change: 12.34,
-    changePercent: 1.01,
+    latestPrice: '1234.56',
+    change: '12.34',
+    changePercent: '1.01',
     volumeText: '123.4M',
-    high: 1240,
-    low: 1220,
+    high: '1240',
+    low: '1220',
     ...overrides,
   };
 }
 
 /** 作用中清單 12 檔:股票 / 加密 / FX / 債券 / 無報價(價格與漲跌全 —)、超長名稱、9 位數價格。 */
 export const WATCHLIST_ITEMS: AssetDto[] = [
-  asset(0, { symbol: 'AAPL', name: 'Apple Inc.', assetType: 'STOCK', currency: 'USD', latestPrice: 218.4, change: 1.42, changePercent: 0.66 }),
+  asset(0, { symbol: 'AAPL', name: 'Apple Inc.', assetType: 'STOCK', currency: 'USD', latestPrice: '218.4', change: '1.42', changePercent: '0.66' }),
   asset(1, {
     symbol: '2330.TW', name: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)',
-    assetType: 'STOCK', currency: 'TWD', market: 'TW', latestPrice: 945, change: -12, changePercent: -1.25,
+    assetType: 'STOCK', currency: 'TWD', market: 'TW', latestPrice: '945', change: '-12', changePercent: '-1.25',
   }),
-  asset(2, { symbol: 'BTC', name: 'Bitcoin', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 67842.4, volumeText: '$28.4B' }),
-  asset(3, { symbol: 'USD/TWD', name: '美元/新台幣', assetType: 'FX', currency: 'TWD', market: 'FX', tradeable: false, latestPrice: 32.418, change: 0.024, changePercent: 0.07, volumeText: null }),
+  asset(2, { symbol: 'BTC', name: 'Bitcoin', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: '67842.4', volumeText: '$28.4B' }),
+  asset(3, { symbol: 'USD/TWD', name: '美元/新台幣', assetType: 'FX', currency: 'TWD', market: 'FX', tradeable: false, latestPrice: '32.418', change: '0.024', changePercent: '0.07', volumeText: null }),
   asset(4, {
     symbol: 'EUR/USD', name: '歐元/美元', assetType: 'FX', currency: 'USD', market: 'FX', tradeable: false,
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
   asset(5, {
     symbol: 'US10Y', name: 'US 10-Year Treasury', assetType: 'BOND', currency: 'USD', tradeable: false,
-    latestPrice: 4.218, change: 0.014, changePercent: null, volumeText: null, high: null, low: null,
+    latestPrice: '4.218', change: '0.014', changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(6, { symbol: 'MSFT', name: 'Microsoft Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 123456789.12, change: -1234567.89, changePercent: -0.99 }),
+  asset(6, { symbol: 'MSFT', name: 'Microsoft Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: '123456789.12', change: '-1234567.89', changePercent: '-0.99' }),
   asset(7, {
     symbol: 'NOQUOTE', name: 'Asset Without Any Quote Yet', assetType: 'STOCK', currency: 'USD',
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(8, { symbol: 'ETH', name: 'Ethereum', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 3482.18 }),
+  asset(8, { symbol: 'ETH', name: 'Ethereum', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: '3482.18' }),
   asset(9, {
     symbol: 'JP10Y', name: 'Japan 10-Year', assetType: 'BOND', currency: 'JPY', market: 'JP', tradeable: false,
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(10, { symbol: 'NVDA', name: 'NVIDIA Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 1142.83 }),
-  asset(11, { symbol: '7203.T', name: 'Toyota Motor Corporation', assetType: 'STOCK', currency: 'JPY', market: 'JP', latestPrice: 2987654.32 }),
+  asset(10, { symbol: 'NVDA', name: 'NVIDIA Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: '1142.83' }),
+  asset(11, { symbol: '7203.T', name: 'Toyota Motor Corporation', assetType: 'STOCK', currency: 'JPY', market: 'JP', latestPrice: '2987654.32' }),
 ];
 
 /** 20 個清單(上限):第一個(作用中)為 30 字名稱 + 12 檔;每 5 個再放一個 30 字中文名稱。 */
