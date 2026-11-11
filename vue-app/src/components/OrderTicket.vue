@@ -322,8 +322,8 @@
 
           <div class="right">
             <!--
-              D-16 的**例外分支**:報價卡的每一格後端都有(`AssetDto.java:9-24`),
-              所以走「真實資料」而不是「隱藏」。六格全部來自**同一份** AssetDto,
+              D-16 的**例外分支**:報價卡的每一格後端都有(`AssetDto.java`),
+              所以走「真實資料」而不是「隱藏」。六格全部來自**同一份** Asset(domain,報價為 Decimal),
               不需要第二個請求,而且**只做格式化、不做任何計算**(judgment §7 / Phase 3 D-04)。
             -->
             <div v-if="selected" class="quote-card">
@@ -567,7 +567,6 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { t } from '../i18n';
 // 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
 // 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
-import { fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtQuantity, minorUnits } from '../moneyFormat';
 import LineChart from './LineChart.vue';
 import { ApiClientError } from '../services/apiClient';
@@ -584,7 +583,7 @@ import {
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
-import type { AssetDto, Holding, KlineDto, PaginatedResponse, TradeRecord } from '../services/apiTypes';
+import type { Asset, Holding, KlineDto, PaginatedResponse, TradeRecord } from '../services/apiTypes';
 import { parseDecimal, parseDecimalInput, toWire, ZERO, type Decimal } from '../services/decimal';
 import type { Lang } from '../types';
 
@@ -625,7 +624,7 @@ const symInput = ref<HTMLInputElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 const symQuery = ref('');
 const symOpen = ref(false);
-const selected = ref<AssetDto | null>(null);
+const selected = ref<Asset | null>(null);
 
 const side = ref<'BUY' | 'SELL'>('BUY');
 // quick-261107-1j4(Yuan 2026-11-07 裁決 3B):訂單類型(市價 / 限價)與有效時間(當日 / 長效)是委託單概念,
@@ -729,7 +728,7 @@ const IDLE_LIMIT = 6;
 /** §Interaction Contract 2 明定 250ms。自行以 setTimeout/clearTimeout 實作,不引入任何套件。 */
 const SEARCH_DEBOUNCE_MS = 250;
 
-const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+const symbolState = ref<BlockState<PaginatedResponse<Asset>>>({ status: 'idle' });
 /** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
 const activeQuery = ref('');
 const activeIndex = ref(-1);
@@ -746,7 +745,7 @@ const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbo
 
 // D-01:唯一允許的本地過濾 —— 只列可交易標的。**不得**再做任何關鍵字過濾:
 // 後端已依 query 篩選,前端重做等於複製後端邏輯。
-const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const options = computed<Asset[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
 const visibleOptions = computed(() => (
   activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
 ));
@@ -768,23 +767,27 @@ const activeOptionId = computed(() => (
     : undefined
 ));
 
-/** `AssetDto` 的價格欄位可為 null;顯示 `—` 而不是 NaN,也不得被當成 0。 */
-function numOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : fmtNum(value);
+/**
+ * `Asset` 的報價欄位為 `Decimal | null`(Phase 5 D-05 / D-08);null 顯示 `—`,不得被當成 0。
+ * 只格式化、不重算:數字經 moneyFormat(2 位、千分位、負號 ASCII `-`),正負判斷用 Decimal 方法。
+ */
+function numOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : fmtMoneyAmount(value, null, 2);
 }
 
-function pctOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : fmtPct(value);
+/** 漲跌幅:≥ 0 補 `+`(含 0,沿用 Phase 5 前的 fmtPct 規則),負號由 moneyFormat 自帶。 */
+function pctOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : `${value.gte(ZERO) ? '+' : ''}${fmtMoneyAmount(value, null, 2)}%`;
 }
 
-/** 漲跌值:正數補 `+`(負號由 fmtNum 自帶)。同樣只格式化,不重算。 */
-function signedNumOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : `${value >= 0 ? '+' : ''}${fmtNum(value)}`;
+/** 漲跌值:≥ 0 補 `+`(負號由 moneyFormat 自帶)。同樣只格式化,不重算。 */
+function signedNumOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : `${value.gte(ZERO) ? '+' : ''}${fmtMoneyAmount(value, null, 2)}`;
 }
 
-function changeColor(value: number | null | undefined): string {
+function changeColor(value: Decimal | null | undefined): string {
   if (value == null) return 'var(--fg-mute)';
-  return value >= 0 ? 'var(--up-text)' : 'var(--dn)';
+  return value.gte(ZERO) ? 'var(--up-text)' : 'var(--dn)';
 }
 
 // ---- debounce + 「只採最後一次結果」(DP-12 / T-04-11) ----
@@ -882,7 +885,7 @@ async function loadKlines(symbol: string) {
     // 後端 `from` 是 `@RequestParam Instant`,必須是完整 ISO instant ——
     // 格式錯在 develop 上會回 **500** 而不是 400。
     const from = new Date(Date.now() - KLINE_WINDOW_MS).toISOString();
-    // symbol 直接用 AssetDto.symbol(後端原值),**不得 toUpperCase()**:
+    // symbol 直接用 Asset.symbol(後端原值),**不得 toUpperCase()**:
     // `MarketController` javadoc 明文大小寫敏感(encodeURIComponent 已在 adapter 內處理)。
     const klines = await apiClients().market.listKlines(symbol, {
       interval: '1h',
@@ -1213,17 +1216,16 @@ const canSubmit = computed(() =>
 );
 
 /**
- * 價格欄的預填文字(05-19 起價格欄是文字輸入)。缺價維持既有行為(預填 0)。
- * `AssetDto.latestPrice` 在本 plan 仍是 number(05-22 轉成 domain Decimal 後改為直接 `toWire(asset.latestPrice)`):
- * `String(n)` 是 JS 的最短往返表示,再經 Decimal 正規化為一般記號(`5e-7` → `0.0000005`),預填值才不會被
- * 欄位格式檢查擋下。這只是顯示用的預填文字;送出前仍由 parseAmountInput 解析使用者看到的字串。
+ * 價格欄的預填文字(05-19 起價格欄是文字輸入)。`latestPrice` 是 domain Decimal(05-22),以 `toWire` 輸出
+ * 一般記號(極小值不會變成 `1e-7`,預填值才不會被欄位格式檢查擋下)。缺價(null)維持既有行為:預填 `0`,
+ * 送出鈕因價格不 > 0 而停用,使用者須自行輸入成交價 —— 不猜價格。這只是顯示用的預填文字;送出前仍由
+ * parseAmountInput 解析使用者看到的字串。
  */
-function priceInputText(price: number | null): string {
-  if (price == null) return '0';
-  return toWire(parseDecimalInput(String(price)) ?? ZERO);
+function priceInputText(price: Decimal | null): string {
+  return price === null ? '0' : toWire(price);
 }
 
-function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
+function pickAsset(asset: Asset, { close = true }: { close?: boolean } = {}) {
   orderError.value = '';
   selected.value = asset;
   symQuery.value = asset.symbol;

@@ -447,9 +447,9 @@ import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { AssetDto, PortfolioSummary, TradeRecord } from '../services/apiTypes';
-import { ZERO, toChartNumber, toWire } from '../services/decimal';
-import type { WatchlistDto } from '../services/watchlistApi';
+import type { Asset, PortfolioSummary, TradeRecord } from '../services/apiTypes';
+import { ZERO, toChartNumber, toWire, type Decimal } from '../services/decimal';
+import type { WatchlistRecord } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { baseCurrencyErrorKey } from '../baseCurrencyErrorKey';
@@ -906,17 +906,17 @@ function tradeDate(trade: TradeRecord): string {
 // =============== 觀察清單卡(D-26;UI-SPEC §10、U-20 / U-21,API mode)===============
 /** U-21:第一個清單的前 6 檔 */
 const OVERVIEW_WATCHLIST_LIMIT = 6;
-const NO_ROWS: readonly AssetDto[] = [];
+const NO_ROWS: readonly Asset[] = [];
 const quotes = clients.quotes;
 
-const wlState = ref<BlockState<WatchlistDto[]>>({ status: 'loading' });
+const wlState = ref<BlockState<WatchlistRecord[]>>({ status: 'loading' });
 /** 最後一次 GET 成功的前端收到時間(「更新於」下限,U-19) */
 const wlRestFetchedAt = ref<number | null>(null);
 /** 較舊的清單回應(重試與靜默重讀交疊)一律丟棄 */
 let wlSeq = 0;
 
 const wlFirst = computed(() => (wlState.value.status === 'loaded' ? wlState.value.data[0] ?? null : null));
-const wlRows = computed<readonly AssetDto[]>(() => wlFirst.value?.items.slice(0, OVERVIEW_WATCHLIST_LIMIT) ?? NO_ROWS);
+const wlRows = computed<readonly Asset[]>(() => wlFirst.value?.items.slice(0, OVERVIEW_WATCHLIST_LIMIT) ?? NO_ROWS);
 const wlMore = computed(() => Math.max(0, (wlFirst.value?.items.length ?? 0) - OVERVIEW_WATCHLIST_LIMIT));
 const wlLive = useLiveQuotes(wlRows, quotes, { restFetchedAt: wlRestFetchedAt });
 const wlLiveRows = wlLive.rows;
@@ -961,39 +961,36 @@ onMounted(() => {
   void loadWatchlist();
 });
 
-function wlFinite(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+/** 固定 dp 位小數、千分位(經 moneyFormat,Decimal 不經 JS number;Phase 5 D-08)。 */
+function wlFixed(value: Decimal, dp: number): string {
+  return fmtMoneyAmount(value, null, dp);
 }
 
-function wlFixed(value: number, dp: number): string {
-  return value.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
-}
-
-/** 與 Watchlist 頁同一套(UI-SPEC §Money:觀察清單):FX 4 位、BOND 3 位(殖利率)、其餘 2 位 */
-function wlPriceText(row: AssetDto): string {
-  if (!wlFinite(row.latestPrice)) return '—';
+/** 與 Watchlist 頁同一套(UI-SPEC §Money:觀察清單):FX 4 位、BOND 3 位(殖利率)、其餘 2 位;缺價顯示 —(不當 0) */
+function wlPriceText(row: Asset): string {
+  if (row.latestPrice === null) return '—';
   const dp = row.assetType === 'FX' ? 4 : row.assetType === 'BOND' ? 3 : 2;
   return wlFixed(row.latestPrice, dp);
 }
 
 /** BOND 用 change(殖利率變動,3 位、不加 %),其餘用 changePercent */
-function wlChangeValue(row: AssetDto): number | null {
-  const value = row.assetType === 'BOND' ? row.change : row.changePercent;
-  return wlFinite(value) ? value : null;
+function wlChangeValue(row: Asset): Decimal | null {
+  return row.assetType === 'BOND' ? row.change : row.changePercent;
 }
 
-function wlChangeText(row: AssetDto): string {
+/** 正負號由 Decimal 比較決定(未捨入的原值,同 Phase 5 前的 number 版),本體為絕對值。 */
+function wlChangeText(row: Asset): string {
   const value = wlChangeValue(row);
   if (value === null) return '—';
-  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-  const body = row.assetType === 'BOND' ? wlFixed(Math.abs(value), 3) : `${wlFixed(Math.abs(value), 2)}%`;
+  const sign = value.gt(ZERO) ? '+' : value.lt(ZERO) ? '-' : '';
+  const body = row.assetType === 'BOND' ? wlFixed(value.abs(), 3) : `${wlFixed(value.abs(), 2)}%`;
   return `${sign}${body}`;
 }
 
-function wlChangeTone(row: AssetDto): string {
+function wlChangeTone(row: Asset): string {
   const value = wlChangeValue(row);
   if (value === null) return 'na';
-  return value > 0 ? 'up' : value < 0 ? 'dn' : '';
+  return value.gt(ZERO) ? 'up' : value.lt(ZERO) ? 'dn' : '';
 }
 
 /** mock mode 的觀察清單卡(data.ts star 列,不改);API mode 不渲染這組列,改用 wlLiveRows(D-26)。 */

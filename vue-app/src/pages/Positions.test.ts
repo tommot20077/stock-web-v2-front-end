@@ -1009,12 +1009,12 @@ const TICKET_ASSET: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 218.4,
-  change: 1.2,
-  changePercent: 0.55,
+  latestPrice: '218.4',
+  change: '1.2',
+  changePercent: '0.55',
   volumeText: '52.1M',
-  high: 220,
-  low: 215,
+  high: '220',
+  low: '215',
 };
 
 const TICKET_RECORDED: TradeDto = {

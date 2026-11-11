@@ -168,7 +168,7 @@ import { t, tf } from '../i18n';
 import { SYMBOLS, CRYPTO, FX, BONDS, fmtNum, fmtPct } from '../data';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import type { WatchlistDto } from '../services/watchlistApi';
+import type { WatchlistRecord } from '../services/watchlistApi';
 import type { Lang, MarketTab } from '../types';
 import Bars from '../components/Bars.vue';
 import WatchlistPicker, { WATCHLIST_PICKER_ID } from '../components/WatchlistPicker.vue';
@@ -178,7 +178,7 @@ defineEmits<{ (e: 'order', preset: { sym: string }): void; (e: 'chart', preset: 
 
 // WATCH-03 / judgment §3:觀察清單只經 watchlist service(不 import mock store)。頁級 ref 是星號、
 // ★ 觀察 chip、觀察清單 tab 與選擇器的唯一狀態來源;選擇器寫入後以回應 DTO 回填(不樂觀更新)。
-const lists = ref<WatchlistDto[] | null>(null);
+const lists = ref<WatchlistRecord[] | null>(null);
 const listsLoading = ref(false);
 const listsError = ref<ApiClientError | null>(null);
 
@@ -209,12 +209,12 @@ async function loadLists() {
   }
 }
 
-function onListChanged(updated: WatchlistDto) {
+function onListChanged(updated: WatchlistRecord) {
   listsSeq += 1;
   lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
 }
 
-function onListCreated(created: WatchlistDto) {
+function onListCreated(created: WatchlistRecord) {
   listsSeq += 1;
   lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
 }

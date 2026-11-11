@@ -98,7 +98,7 @@ type Handler = () => Response | Promise<Response>;
 
 /** 04.2-24:API mode 的觀察清單卡讀 GET /watchlists;未覆寫時回一個兩檔的預設清單。 */
 const DEFAULT_WATCHLISTS: WatchlistDto[] = [
-  { id: 'wl-default', name: 'My list', items: [assetDto('ZWA', { latestPrice: 12.5 }), assetDto('ZWB', { latestPrice: 34.5 })] },
+  { id: 'wl-default', name: 'My list', items: [assetDto('ZWA', { latestPrice: '12.5' }), assetDto('ZWB', { latestPrice: '34.5' })] },
 ];
 
 function routedFetch(handlers: {
@@ -1638,14 +1638,14 @@ describe('Overview — 格線重排(U-27)', () => {
 // =====================================================================================
 
 const WL_ITEMS = [
-  assetDto('AAPL', { name: 'Apple Inc.', latestPrice: 215.75, change: 2.65, changePercent: 1.24 }),
-  assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', latestPrice: 67000, change: 100, changePercent: 0.15 }),
-  assetDto('USD/TWD', { name: 'USD/TWD', assetType: 'FX', market: 'FX', currency: 'TWD', latestPrice: 32.1, change: 0.05, changePercent: 0.16 }),
-  assetDto('MSFT', { latestPrice: 410 }),
-  assetDto('NVDA', { latestPrice: 120 }),
-  assetDto('TSLA', { latestPrice: 250, change: -5, changePercent: -1.96 }),
-  assetDto('GOOG', { latestPrice: 170 }),
-  assetDto('AMZN', { latestPrice: 185 }),
+  assetDto('AAPL', { name: 'Apple Inc.', latestPrice: '215.75', change: '2.65', changePercent: '1.24' }),
+  assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', latestPrice: '67000', change: '100', changePercent: '0.15' }),
+  assetDto('USD/TWD', { name: 'USD/TWD', assetType: 'FX', market: 'FX', currency: 'TWD', latestPrice: '32.1', change: '0.05', changePercent: '0.16' }),
+  assetDto('MSFT', { latestPrice: '410' }),
+  assetDto('NVDA', { latestPrice: '120' }),
+  assetDto('TSLA', { latestPrice: '250', change: '-5', changePercent: '-1.96' }),
+  assetDto('GOOG', { latestPrice: '170' }),
+  assetDto('AMZN', { latestPrice: '185' }),
 ];
 
 function wlLists(items = WL_ITEMS): WatchlistDto[] {
@@ -1812,7 +1812,7 @@ describe('Overview — 觀察清單卡(D-26,API mode)', () => {
     expect(wlRows()).toHaveLength(6);
 
     const refreshed = wlLists();
-    refreshed[0].items = [{ ...WL_ITEMS[0], latestPrice: 220.5 }, ...WL_ITEMS.slice(1)];
+    refreshed[0].items = [{ ...WL_ITEMS[0], latestPrice: '220.5' }, ...WL_ITEMS.slice(1)];
     second.resolve(success(refreshed));
     await flushAsync();
     expect(wlRow('AAPL').querySelector('.wl-price')?.textContent?.trim()).toBe('220.50');

@@ -1,6 +1,8 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import { CRYPTO, FX, SYMBOLS, genSeries } from '../data';
+import { numberToWire, parseNullableDecimal } from './decimal';
 import type {
+  Asset,
   AssetDto,
   KlineDto,
   KlineInterval,
@@ -45,12 +47,13 @@ export interface KlineListParams {
 export interface MarketApi {
   mode: RuntimeDataMode;
   /**
-   * 搜尋可交易標的。回傳分頁信封本體(`ApiResponse<PageResponse<AssetDto>>` 拆封後)。
+   * 搜尋可交易標的。回傳分頁信封本體(`ApiResponse<PageResponse<AssetDto>>` 拆封後),
+   * items 經 {@link toAsset} 轉成 domain(報價欄為 Decimal);http 與 mock 共用同一個 mapper。
    *
    * @param signal typeahead 取消用;OrderTicket 的 250ms debounce 與「只採最後一次結果」
    *               在元件層實作(DP-12),adapter 只負責把 signal 原樣傳給 fetch。
    */
-  searchAssets(params: AssetSearchParams, signal?: AbortSignal): Promise<PaginatedResponse<AssetDto>>;
+  searchAssets(params: AssetSearchParams, signal?: AbortSignal): Promise<PaginatedResponse<Asset>>;
   /** 取單一標的的 K 線序列。非分頁端點,回傳裸陣列。 */
   listKlines(symbol: string, params: KlineListParams): Promise<KlineDto[]>;
   /** market domain 沒有 mock 專屬 reactive 狀態,兩種實作都不提供。 */
@@ -72,11 +75,27 @@ const INTERVAL_MS: Record<KlineInterval, number> = {
 };
 
 /**
+ * wire `AssetDto` → domain {@link Asset}(Phase 5 D-05 / D-08)。五個報價欄由字串轉 Decimal,null 維持 null
+ * (沒有價格資料的標的畫面顯示 `—`,不當 0);wire 若混入 JSON number,`parseDecimal` 丟 TypeError(T-05-36)。
+ * 其餘欄位原樣保留。`watchlistApi.toWatchlistRecord` 的 items 也經這裡(後端 `WatchlistDto.items` 與
+ * `GET /api/v1/assets` 共用同一個 `AssetDto`)。
+ */
+export function toAsset(wire: AssetDto): Asset {
+  return {
+    ...wire,
+    latestPrice: parseNullableDecimal(wire.latestPrice),
+    change: parseNullableDecimal(wire.change),
+    changePercent: parseNullableDecimal(wire.changePercent),
+    high: parseNullableDecimal(wire.high),
+    low: parseNullableDecimal(wire.low),
+  };
+}
+
+/**
  * 把 `KlineDto` 的 `close`(JSON **字串**)轉成 `LineChart` 需要的 `number[]`。
  *
- * 獨立成純函式而非讓消費端各自 `Number()` 的理由(Pitfall 8):`KlineDto` 的 OHLCV
- * 是字串而 `AssetDto` 的價格是 number,兩者相反,而 `vue-tsc` 對「把 string 當 number 用」
- * 在模板內抓不到。集中一個轉換點才能被單測鎖住。
+ * 獨立成純函式而非讓消費端各自 `Number()` 的理由(Pitfall 8):`vue-tsc` 對「把 string 當 number 用」
+ * 在模板內抓不到,集中一個轉換點才能被單測鎖住。這是圖表出口,轉 number 是刻意的(D-08:圖表輸入可為 number)。
  */
 export function closeSeries(klines: KlineDto[]): number[] {
   return klines.map(kline => Number(kline.close));
@@ -86,14 +105,17 @@ export function createHttpMarketApi(basePath = '/api/v1'): MarketApi {
   return {
     mode: 'api',
     // 分頁端點(AssetController 回 ApiResponse<PageResponse<AssetDto>>)→ apiPaginatedRequest。
-    searchAssets: (params, signal) => apiPaginatedRequest<AssetDto>(
-      `${basePath}/assets${buildQueryString({
-        query: params.query,
-        page: params.page ?? DEFAULT_PAGE,
-        size: params.size ?? DEFAULT_SIZE,
-      })}`,
-      { signal },
-    ),
+    searchAssets: async (params, signal) => {
+      const page = await apiPaginatedRequest<AssetDto>(
+        `${basePath}/assets${buildQueryString({
+          query: params.query,
+          page: params.page ?? DEFAULT_PAGE,
+          size: params.size ?? DEFAULT_SIZE,
+        })}`,
+        { signal },
+      );
+      return { ...page, items: page.items.map(toAsset) };
+    },
     // 非分頁端點(MarketController 回 ApiResponse<List<KlineDto>>)→ apiRequest。
     // symbol 是使用者可控字串且**大小寫敏感**(MarketController javadoc 明文),
     // 故只 encodeURIComponent,絕不 toUpperCase()。
@@ -123,7 +145,8 @@ function mockCurrencyOf(symbol: MockSymbol): string {
 }
 
 /**
- * 把 `data.ts` 的 `Symbol` 投影成 `AssetDto` 形狀。
+ * 把 `data.ts` 的 `Symbol` 投影成 wire `AssetDto` 形狀(報價 number 以 `numberToWire` 轉字串),之後與 http
+ * 同走 {@link toAsset}。
  *
  * `tradeable` 一律 `true`:mock 資料沒有可交易旗標的來源,而 mock mode 的用途是讓
  * OrderTicket 走完整流程。`uuid` 用穩定合成值(mock 沒有真 UUID),頁面只拿它當 key。
@@ -138,18 +161,18 @@ function assetDtoFrom(symbol: MockSymbol): AssetDto {
     currency: mockCurrencyOf(symbol),
     sector: symbol.sector ?? '',
     tradeable: true,
-    latestPrice: symbol.price,
-    change: symbol.chg,
-    changePercent: symbol.chgPct,
+    latestPrice: numberToWire(symbol.price),
+    change: numberToWire(symbol.chg),
+    changePercent: numberToWire(symbol.chgPct),
     volumeText: symbol.vol,
-    high: symbol.high,
-    low: symbol.low,
+    high: numberToWire(symbol.high),
+    low: numberToWire(symbol.low),
   };
 }
 
 /** mock 可搜尋的宇宙。BONDS 不納入:`Bond` 沒有 price/high/low,湊不出 `AssetDto` 且不可交易。 */
-function mockAssets(): AssetDto[] {
-  return [...SYMBOLS, ...CRYPTO, ...FX].map(assetDtoFrom);
+function mockSymbols(): MockSymbol[] {
+  return [...SYMBOLS, ...CRYPTO, ...FX];
 }
 
 /** BigDecimal 在 JSON 是字串,mock 必須同形 —— 8 位小數對齊後端 `numeric` 的呈現。 */
@@ -162,15 +185,16 @@ export function createMockMarketApi(): MarketApi {
     mode: 'mock',
     async searchAssets(params) {
       const needle = params.query.trim().toLowerCase();
-      const matched = mockAssets().filter(asset => (
+      const matched = mockSymbols().filter(symbol => (
         needle === ''
-        || asset.symbol.toLowerCase().includes(needle)
-        || asset.name.toLowerCase().includes(needle)
+        || symbol.sym.toLowerCase().includes(needle)
+        || symbol.name.toLowerCase().includes(needle)
       ));
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;
       return {
-        items: matched.slice(page * size, page * size + size),
+        // 先組 wire 再走共用 mapper(05-16 規約);每次呼叫都建立新物件,呼叫端改動不回灌 data.ts。
+        items: matched.slice(page * size, page * size + size).map(symbol => toAsset(assetDtoFrom(symbol))),
         page,
         size,
         // filter 後的**總數**(非本頁筆數):UI-SPEC §2 的 `truncated` 態靠它觸發。
@@ -179,8 +203,9 @@ export function createMockMarketApi(): MarketApi {
       };
     },
     async listKlines(symbol, params) {
-      const asset = mockAssets().find(candidate => candidate.symbol === symbol);
-      const start = asset?.latestPrice ?? 100;
+      // mock 走勢圖的起點取 data.ts 的 number 價格(mock-only 畫面資料;K 線輸出仍是 wire 字串)。
+      const mockSymbol = mockSymbols().find(candidate => candidate.sym === symbol);
+      const start = mockSymbol?.price ?? 100;
       const step = INTERVAL_MS[params.interval];
       const fromMs = Date.parse(params.from);
       const toMs = params.to ? Date.parse(params.to) : Number.NaN;

@@ -1,5 +1,6 @@
 import { computed, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
-import type { AssetDto } from '../services/apiTypes';
+import type { Asset } from '../services/apiTypes';
+import { numberToWire, parseDecimal, ROUND_HALF_UP, ZERO } from '../services/decimal';
 import type { LiveTick, QuoteStream } from '../services/quoteStream';
 
 /**
@@ -15,36 +16,33 @@ import type { LiveTick, QuoteStream } from '../services/quoteStream';
  */
 
 export type QuoteSource = 'ws' | 'rest' | 'none';
-export type LiveQuoteRow = AssetDto & { quoteSource: QuoteSource };
+export type LiveQuoteRow = Asset & { quoteSource: QuoteSource };
 
 /** FX / 債券永遠沒有 tick(RESEARCH W4、P-W6):不套用 tick、永不標示即時 */
 const NEVER_LIVE_ASSET_TYPES = new Set(['FX', 'BOND']);
 
 /**
- * 與後端 `AssetQueryService` 的 `RoundingMode.HALF_UP` 一致:四捨五入、.5 遠離 0。
- * (單純 `Math.round(x * 100) / 100` 對負數的 .5 會往 +∞ 進位,與 BigDecimal HALF_UP 不同,故以絕對值計算再補號。)
+ * 後端 changePercent:`change × 100 ÷ previousClose`,`divide(previousClose, 2, HALF_UP)`。
+ * Decimal 的 `round(dp, ROUND_HALF_UP)` 與 BigDecimal HALF_UP 同義(.5 遠離 0,負數亦然)。
+ *
+ * Phase 5 D-08:疊加改以 Decimal 計算後,減法沒有浮點殘差,原本 number 版的 `roundHalfUp` 與
+ * `CHANGE_DIGITS = 8`(清理 218.4 − 198 = 20.400000000000006 這類殘差)已刪除;change 與後端一樣不捨入。
+ * `div` 的中間結果依 decimal.ts 的 `DP = 20` 捨入後再捨入到 2 位(與 Positions.holdingWeight 同一寫法)。
  */
-function roundHalfUp(value: number, digits: number): number {
-  const factor = 10 ** digits;
-  const rounded = (Math.sign(value) * Math.round(Math.abs(value) * factor)) / factor;
-  return rounded === 0 ? 0 : rounded;
-}
-
-/** 浮點減法殘差清理(例:218.4 − 198 = 20.400000000000006);後端 change 本身不捨入,這裡只清到 8 位 */
-const CHANGE_DIGITS = 8;
-/** 後端 changePercent:`divide(previousClose, 2, HALF_UP)` */
 const CHANGE_PERCENT_DIGITS = 2;
+const HUNDRED = parseDecimal('100');
 
-function overlayTick(row: AssetDto, tick: LiveTick): AssetDto {
-  const price = tick.price;
+function overlayTick(row: Asset, tick: LiveTick): Asset {
+  // 05-22 → 05-23 交接點(05-16 規約):LiveTick.price 仍是 number,只在這一處轉成 Decimal(方向 number → Decimal)。
+  // 05-23 LiveTick 轉 Decimal 時刪除這一行與 numberToWire import,並以 grep 驗證 useLiveQuotes.ts 不再引用。
+  const price = parseDecimal(numberToWire(tick.price));
   let change = row.change;
   let changePercent = row.changePercent;
   if (row.latestPrice !== null && row.change !== null) {
-    const previousClose = row.latestPrice - row.change;
-    const rawChange = price - previousClose;
-    change = roundHalfUp(rawChange, CHANGE_DIGITS);
-    if (previousClose !== 0) {
-      changePercent = roundHalfUp((rawChange * 100) / previousClose, CHANGE_PERCENT_DIGITS);
+    const previousClose = row.latestPrice.minus(row.change);
+    change = price.minus(previousClose);
+    if (!previousClose.eq(ZERO)) {
+      changePercent = change.times(HUNDRED).div(previousClose).round(CHANGE_PERCENT_DIGITS, ROUND_HALF_UP);
     }
   }
   return {
@@ -52,14 +50,14 @@ function overlayTick(row: AssetDto, tick: LiveTick): AssetDto {
     latestPrice: price,
     change,
     changePercent,
-    high: row.high === null ? null : Math.max(row.high, price),
-    low: row.low === null ? null : Math.min(row.low, price),
+    high: row.high === null ? null : (row.high.cmp(price) >= 0 ? row.high : price),
+    low: row.low === null ? null : (row.low.cmp(price) <= 0 ? row.low : price),
     // volumeText 是當日累計;tick volume 是單筆量,不得覆寫(P-W5)。
   };
 }
 
 export function useLiveQuotes(
-  rows: Ref<readonly AssetDto[]>,
+  rows: Ref<readonly Asset[]>,
   stream: QuoteStream,
   options?: { restFetchedAt: Ref<number | null> },
 ): {
@@ -78,7 +76,7 @@ export function useLiveQuotes(
     baseline.value = stream.ticks.value;
   }, { flush: 'sync' });
 
-  function freshTick(row: AssetDto): LiveTick | null {
+  function freshTick(row: Asset): LiveTick | null {
     if (NEVER_LIVE_ASSET_TYPES.has(row.assetType)) return null;
     const tick = stream.ticks.value.get(row.symbol);
     if (!tick || baseline.value.get(row.symbol) === tick) return null;

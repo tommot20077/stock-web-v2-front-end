@@ -60,12 +60,12 @@ const APPLE: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 218.4,
-  change: 1.2,
-  changePercent: 0.55,
+  latestPrice: '218.4',
+  change: '1.2',
+  changePercent: '0.55',
   volumeText: '52.1M',
-  high: 220,
-  low: 215,
+  high: '220',
+  low: '215',
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -359,9 +359,9 @@ describe('OrderTicket 骨架契約 — 三步驟流程(U-01 / DP-9)', () => {
 // =====================================================================================
 
 /**
- * 後端 `AssetDto`(`AssetDto.java:9-24`)。
- * **注意**:`AssetDto` 的 BigDecimal 欄位**沒有** `@JsonSerialize(ToStringSerializer.class)`,
- * 所以 latestPrice / change / changePercent / high / low 在 JSON 是 **number**(與 `KlineDto` 相反)。
+ * 後端 `AssetDto`(`AssetDto.java`)wire fixture。
+ * Phase 5 D-05:latestPrice / change / changePercent / high / low 在 JSON 是 **字串**(與 `KlineDto` 一致);
+ * 元件拿到的是 `marketApi.toAsset` 轉出的 domain Decimal。
  */
 function asset(overrides: Partial<AssetDto> & { symbol: string }): AssetDto {
   return {
@@ -461,7 +461,9 @@ async function pressKey(key: string) {
 
 async function advance(ms: number) {
   vi.advanceTimersByTime(ms);
-  await flushAsync();
+  // 假計時器下 flushAsync 只跑 microtask(LEARNINGS 2026-11-07);05-22 起 searchAssets 在 apiClient 之後
+  // 多一段 toAsset 映射的 await,預設 6 輪不夠,與 HoldingEventDialog.test 的同名 helper 一樣跑 16 輪。
+  await flushAsync(16);
 }
 
 function assetCallQueries(fetchImpl: ReturnType<typeof vi.fn>): string[] {
@@ -702,8 +704,7 @@ describe('OrderTicket typeahead — 七態(04-10 / D-01 / UI-SPEC §Interaction 
  * **刻意矛盾的 fixture**:high(999)/ low(1)彼此與 latestPrice(190.20)、
  * changePercent(-1.60)都不自洽。只要前端偷偷重算任何一格,斷言就會紅(judgment §7)。
  *
- * 欄位形狀對應後端 `AssetDto.java:9-24`;其 BigDecimal **沒有**掛
- * `@JsonSerialize(using = ToStringSerializer.class)`,所以在 JSON 是 number。
+ * 欄位形狀對應後端 `AssetDto.java`;報價欄在 JSON 是字串(Phase 5 D-05)。
  */
 const CONTRADICTORY: AssetDto = {
   uuid: 'asset-aapl',
@@ -714,18 +715,18 @@ const CONTRADICTORY: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 190.2,
-  change: -3.1,
-  changePercent: -1.6,
+  latestPrice: '190.2',
+  change: '-3.1',
+  changePercent: '-1.6',
   volumeText: 'X-VOL',
-  high: 999,
-  low: 1,
+  high: '999',
+  low: '1',
 };
 
 /**
  * 後端 `KlineDto.java:23-30` 的五個 OHLCV 欄位掛
  * `@JsonSerialize(using = ToStringSerializer.class)`,序列化為 **JSON 字串**
- * (與 `AssetDto` 相反)。fixture 必須同形,否則 Pitfall 8 抓不到。
+ * (Phase 5 D-05 後與 `AssetDto` 的報價欄一致)。fixture 必須同形,否則 Pitfall 8 抓不到。
  */
 const KLINES_AS_STRINGS = [
   { bucket: '2026-08-15T00:00:00Z', open: '217.00000000', high: '219.00000000', low: '216.50000000', close: '218.40000000', volume: '1000.00000000' },
@@ -1845,7 +1846,7 @@ describe('OrderTicket review 步驟 — 標的幣別(04.1-14 / D-28 補充 / UI-
     name: 'TSMC',
     market: 'TW',
     currency: 'TWD',
-    latestPrice: 945,
+    latestPrice: '945',
   };
 
   function reviewText(): string {
@@ -1901,7 +1902,7 @@ describe('OrderTicket ticket 步驟 — 預估總額幣別(04.1-27 / D-28 補充
     name: 'TSMC',
     market: 'TW',
     currency: 'TWD',
-    latestPrice: 945,
+    latestPrice: '945',
   };
 
   function ticketEstTotal(): string {

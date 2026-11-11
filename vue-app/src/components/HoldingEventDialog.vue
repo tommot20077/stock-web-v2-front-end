@@ -576,7 +576,7 @@ import { FALLBACK_MARKET_DAY_RULE, marketDayRuleOf, marketToday, marketZoneLabel
 import type { MarketDayRule } from '../marketDate';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
-import type { AssetDto, PaginatedResponse, PortfolioActivity } from '../services/apiTypes';
+import type { Asset, PaginatedResponse, PortfolioActivity } from '../services/apiTypes';
 import { parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
 import type { Dividend, ShareAdjustment } from '../services/holdingEventApi';
 import type { Lang } from '../types';
@@ -647,7 +647,7 @@ const mode = ref<HoldingEventMode>('cashDividend');
 const selectedSymbol = ref<string | null>(null);
 const selectedCurrency = ref<string | null>(null);
 /** typeahead 選定的資產(只用於顯示名稱與幣別);鎖定標的時為 null。 */
-const pickedAsset = ref<AssetDto | null>(null);
+const pickedAsset = ref<Asset | null>(null);
 const amount = ref('');
 const tax = ref('');
 const paidAt = ref('');
@@ -816,7 +816,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 const symQuery = ref('');
 const symOpen = ref(false);
-const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+const symbolState = ref<BlockState<PaginatedResponse<Asset>>>({ status: 'idle' });
 /** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
 const activeQuery = ref('');
 const activeIndex = ref(-1);
@@ -827,7 +827,7 @@ const symbolError = computed(() => (symbolState.value.status === 'error' ? symbo
 const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbolState.value.data : null));
 
 // 唯一允許的本地過濾:只列可交易標的(股利標的須 active + tradeable)。關鍵字過濾是後端的事。
-const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const options = computed<Asset[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
 const visibleOptions = computed(() => (
   activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
 ));
@@ -921,7 +921,7 @@ function resetSymbolSearch() {
   pickedAsset.value = null;
 }
 
-function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
+function pickAsset(asset: Asset, { close = true }: { close?: boolean } = {}) {
   pickedAsset.value = asset;
   selectedSymbol.value = asset.symbol;
   selectedCurrency.value = asset.currency;

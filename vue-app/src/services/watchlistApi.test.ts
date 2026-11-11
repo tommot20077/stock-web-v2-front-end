@@ -6,8 +6,10 @@ import {
   createHttpWatchlistApi,
   createMockWatchlistApi,
   createWatchlistApi,
+  toWatchlistRecord,
   type WatchlistDto,
 } from './watchlistApi';
+import { isDecimal, toWire } from './decimal';
 import { ApiClientError } from './apiClient';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { AssetDto } from './apiTypes';
@@ -18,6 +20,9 @@ import type { AssetDto } from './apiTypes';
  * 1. **路徑只放 UUID**:FX 代號含 `/`,加入項目一律以 body `{symbol}` 指定(T-04.2-39)。
  * 2. **unsafe method 由 apiClient 自動帶 `X-XSRF-TOKEN`**(鐵律 1)。
  * 3. **失敗以 `ApiClientError` 原樣上拋**,保留 code / fields / requestId。
+ *
+ * 4. **報價欄為字串契約**(Phase 5 D-05):wire `AssetDto` 報價欄是字串,adapter 回 domain `WatchlistRecord`
+ *    (items 經 `marketApi.toAsset`,報價為 Decimal;D-08)。
  *
  * fixture 為手寫,逐欄對應後端 `WatchlistDto` / `AssetDto`。
  */
@@ -37,12 +42,12 @@ const AAPL_DTO: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 218.4,
-  change: 1.42,
-  changePercent: 0.66,
+  latestPrice: '218.4',
+  change: '1.42',
+  changePercent: '0.66',
   volumeText: '52.1M',
-  high: 219.1,
-  low: 215.8,
+  high: '219.1',
+  low: '215.8',
 };
 
 const WATCHLIST_DTO: WatchlistDto = {
@@ -111,7 +116,8 @@ describe('watchlistApi http adapter — tracer:列出清單並把 AAPL 加入第
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
     expect(urlAt(0)).toBe('/api/v1/watchlists');
     expect(methodAt(0)).toBe('GET');
-    expect(lists).toEqual([WATCHLIST_DTO]);
+    expect(lists).toEqual([toWatchlistRecord(WATCHLIST_DTO)]);
+    expect(toWire(lists[0].items[0].latestPrice!)).toBe('218.4');
   });
 
   it('httpAddItemPostsSymbolInBodyWithCsrf', async () => {
@@ -124,7 +130,7 @@ describe('watchlistApi http adapter — tracer:列出清單並把 AAPL 加入第
     expect(methodAt(0)).toBe('POST');
     expect(headerValue(initAt(0), 'x-xsrf-token')).toBe('csrf-watchlist');
     expect(bodyAt(0)).toEqual({ symbol: 'AAPL' });
-    expect(dto).toEqual(WATCHLIST_DTO);
+    expect(dto).toEqual(toWatchlistRecord(WATCHLIST_DTO));
   });
 
   it('httpAddItemKeepsSlashSymbolOutOfPathAndEncodesId', async () => {
@@ -236,6 +242,46 @@ describe('watchlistApi http adapter — 錯誤', () => {
   });
 });
 
+describe('watchlistApi — 報價字串契約 → WatchlistRecord(05-22 / D-05 / D-08)', () => {
+  it('http list:items 報價字串 → Decimal(完整精度),null 維持 null', async () => {
+    stubFetchReturning([{
+      ...WATCHLIST_DTO,
+      items: [{ ...AAPL_DTO, latestPrice: '123456789012.12345678', change: '-0.00000001', changePercent: null, high: null }],
+    }]);
+
+    const [list] = await createHttpWatchlistApi('/api/v1').list();
+    const [item] = list.items;
+
+    expect(toWire(item.latestPrice!)).toBe('123456789012.12345678');
+    expect(toWire(item.change!)).toBe('-0.00000001');
+    expect(item.changePercent).toBeNull();
+    expect(item.high).toBeNull();
+    expect(toWire(item.low!)).toBe('215.8');
+  });
+
+  it.each(['addItem', 'removeItem', 'reorder', 'rename', 'create'] as const)('http %s 也回 domain(items 為 Decimal)', async method => {
+    stubFetchReturning(WATCHLIST_DTO);
+    const api = createHttpWatchlistApi('/api/v1');
+    const calls = {
+      addItem: () => api.addItem('wl-uuid', 'AAPL'),
+      removeItem: () => api.removeItem('wl-uuid', AAPL_DTO.uuid),
+      reorder: () => api.reorder('wl-uuid', [AAPL_DTO.uuid]),
+      rename: () => api.rename('wl-uuid', '長線'),
+      create: () => api.create('長線'),
+    };
+
+    const record = await calls[method]();
+
+    expect(isDecimal(record.items[0].latestPrice)).toBe(true);
+  });
+
+  it('http list:wire 報價為 JSON number → 丟 TypeError(T-05-36)', async () => {
+    stubFetchReturning([{ ...WATCHLIST_DTO, items: [{ ...AAPL_DTO, latestPrice: 218.4 }] }]);
+
+    await expect(createHttpWatchlistApi('/api/v1').list()).rejects.toThrow(TypeError);
+  });
+});
+
 describe('watchlistApi mock adapter — tracer', () => {
   it('mockListMapsStoreListsToAssetDtoShapeWithoutNetwork', async () => {
     const fetchSpy = vi.fn();
@@ -249,12 +295,12 @@ describe('watchlistApi mock adapter — tracer', () => {
     expect(lists[0].items[0]).toMatchObject({
       symbol: 'AAPL',
       assetType: 'STOCK',
-      latestPrice: 218.4,
-      change: 1.42,
-      changePercent: 0.66,
       volumeText: '52.1M',
       tradeable: true,
     });
+    const aapl = lists[0].items[0];
+    expect(isDecimal(aapl.latestPrice)).toBe(true);
+    expect([aapl.latestPrice, aapl.change, aapl.changePercent].map(value => toWire(value!))).toEqual(['218.4', '1.42', '0.66']);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -347,11 +393,14 @@ describe('watchlistApi mock adapter — list(D-17)', () => {
     const [list] = await createMockWatchlistApi().list();
     const [fx, bond, unknown] = list.items;
 
-    expect(fx).toMatchObject({ symbol: 'USD/TWD', assetType: 'FX', tradeable: false, latestPrice: 32.418, volumeText: null });
+    expect(fx).toMatchObject({ symbol: 'USD/TWD', assetType: 'FX', tradeable: false, volumeText: null });
+    expect(toWire(fx.latestPrice!)).toBe('32.418');
     expect(bond).toMatchObject({
-      symbol: 'US10Y', assetType: 'BOND', tradeable: false, latestPrice: 4.218, change: 0.014,
+      symbol: 'US10Y', assetType: 'BOND', tradeable: false,
       changePercent: null, volumeText: null, high: null, low: null, sector: null,
     });
+    expect(toWire(bond.latestPrice!)).toBe('4.218');
+    expect(toWire(bond.change!)).toBe('0.014');
     expect(unknown).toMatchObject({
       symbol: 'ZZZZ', latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
     });

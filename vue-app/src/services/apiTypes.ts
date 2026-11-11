@@ -334,18 +334,16 @@ export type TradeRecord = DecimalFields<TradeDto, 'quantity' | 'price' | 'fee'>;
 /**
  * 對應後端 stock-module-asset 的 `AssetDto`(`AssetDto.java:9-24`);逐欄同形,勿增刪(judgment §4)。
  *
- * 五個價格欄位宣告為 `number | null` 是刻意的:後端是 `BigDecimal`(非 primitive),
- * 沒有價格資料的 asset 會是 `null`。宣告成 `number` 會讓報價卡顯示 `NaN`
- * (`04-UI-SPEC.md` §2/§3 已規定 `null` 顯示 `—`)。
+ * 五個價格欄位(latestPrice / change / changePercent / high / low)是後端 `BigDecimal` 掛 `@DecimalString`
+ * → JSON 字串(一般記號,Phase 5 D-05;與 `KlineDto` 一致皆為字串)。後端是 `BigDecimal`(非 primitive),
+ * 沒有價格資料的 asset 會是 `null`,畫面一律顯示 `—`,不當成 0(`04-UI-SPEC.md` §2/§3)。進 domain 前經
+ * `marketApi.toAsset` 轉成 {@link Asset}(Decimal);頁面 / 元件 / composable 只拿 domain(D-08)。
  *
  * `assetType` / `currency` 刻意宣告為 `string` 而非 union:後端是 `AssetType`
  * (`AssetType.java` = STOCK / CRYPTO / FX / BOND)與 `CurrencyCode`
  * (`CurrencyCode.java` = USD / TWD / EUR / JPY)兩個 enum,Jackson 以常數名序列化。
  * 常數名列在此處僅供查閱 —— **不**寫成 union,因為後端新增一個 enum 值就會讓前端
  * 型別檢查紅掉,而 adapter 只是原樣傳遞、不對這兩欄做分支。
- *
- * **注意 `AssetDto` 的 BigDecimal 沒有 `@JsonSerialize(ToStringSerializer)`,是 JSON number
- * —— 與 `KlineDto` 相反。**
  */
 export interface AssetDto {
   uuid: string;
@@ -360,21 +358,26 @@ export interface AssetDto {
   sector: string | null;
   /** 只有 true 才可送出交易(D-01;後端 `TradingService.resolveTradeableAsset` 是最終權威) */
   tradeable: boolean;
-  latestPrice: number | null;
-  change: number | null;
-  changePercent: number | null;
+  latestPrice: string | null;
+  change: string | null;
+  changePercent: string | null;
   /** 已格式化的成交量字串(例:`52.1M`),後端就是 String,前端不得重算;無量為 null(trading-portfolio-contract〈標的報價欄位〉) */
   volumeText: string | null;
-  high: number | null;
-  low: number | null;
+  high: string | null;
+  low: string | null;
 }
+
+/**
+ * domain:可交易標的(搜尋結果、觀察清單項目;由 `marketApi.toAsset` 產生)。五個報價欄為 `Decimal | null`,
+ * 其餘欄位原樣(`volumeText` 是後端已格式化的字串,不轉)。
+ */
+export type Asset = DecimalFields<AssetDto, 'latestPrice' | 'change' | 'changePercent' | 'high' | 'low'>;
 
 /**
  * 對應後端 stock-module-market-data 的 `KlineDto`(`KlineDto.java:23-30`);逐欄同形,勿增刪(judgment §4)。
  *
  * `KlineDto.java` 的五個 BigDecimal 欄位掛 `@JsonSerialize(using = ToStringSerializer.class)`,
- * 序列化為 JSON 字串以避免浮點精度損失。**注意與 `AssetDto` 相反** —— `AssetDto` 的
- * BigDecimal 沒有這個註解,是 JSON number。
+ * 序列化為 JSON 字串以避免浮點精度損失(Phase 5 D-05 後 `AssetDto` 的報價欄也是字串)。
  *
  * 因此 OHLCV 五欄在 TypeScript 必須是 `string`;要當數字用一律經 `marketApi.ts` 的
  * `closeSeries()` 轉換,不要在元件內散落 `Number()`。
