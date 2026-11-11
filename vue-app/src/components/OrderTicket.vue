@@ -583,7 +583,7 @@ import {
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
-import type { Asset, Holding, KlineDto, PaginatedResponse, TradeRecord } from '../services/apiTypes';
+import type { Asset, Holding, PaginatedResponse, TradeRecord } from '../services/apiTypes';
 import { parseDecimal, parseDecimalInput, toWire, ZERO, type Decimal } from '../services/decimal';
 import type { Lang } from '../types';
 
@@ -869,12 +869,12 @@ onBeforeUnmount(() => {
  */
 const KLINE_WINDOW_MS = 48 * 60 * 60 * 1000;
 
-const klineState = ref<BlockState<KlineDto[]>>({ status: 'idle' });
+// state 只存 closeSeries 轉好的圖表座標(number[]),不存 wire 的 KlineDto(05-24 decimalBoundary 守門:
+// 元件 state 不得持有 *Dto 型別);轉換點仍是 closeSeries 一處。
+const klineState = ref<BlockState<number[]>>({ status: 'idle' });
 const chartLoading = computed(() => klineState.value.status === 'loading');
 const chartError = computed(() => (klineState.value.status === 'error' ? klineState.value.error : null));
-const chartSeries = computed(() => (
-  klineState.value.status === 'loaded' ? closeSeries(klineState.value.data) : []
-));
+const chartSeries = computed(() => (klineState.value.status === 'loaded' ? klineState.value.data : []));
 
 let klineSeq = 0;
 
@@ -893,7 +893,7 @@ async function loadKlines(symbol: string) {
       limit: 48,
     });
     if (seq !== klineSeq) return;
-    klineState.value = { status: 'loaded', data: klines };
+    klineState.value = { status: 'loaded', data: closeSeries(klines) };
   } catch (error) {
     if (seq !== klineSeq) return;
     klineState.value = { status: 'error', error: describeError(error) };

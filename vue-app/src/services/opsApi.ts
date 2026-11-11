@@ -1,20 +1,24 @@
 import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
 import type {
+  OpsAction,
   OpsActionDto,
+  OpsJob,
   OpsJobDto,
+  OpsLog,
   OpsLogDto,
   PaginatedResponse,
   RuntimeDataMode,
   TriggerOpsJobRequest,
 } from './apiTypes';
 
+/** Ops 的消費介面;回傳 domain 型別(目前與 wire 同形,見 apiTypes 的 `OpsAction` 註解)。 */
 export interface OpsApi {
   mode: RuntimeDataMode;
-  getActions(): Promise<OpsActionDto[]>;
-  triggerJob(request: TriggerOpsJobRequest): Promise<OpsJobDto>;
-  getCurrentJob(): Promise<OpsJobDto | null>;
-  getJob(jobId: string): Promise<OpsJobDto>;
-  listLogs(params?: { page?: number; size?: number }): Promise<PaginatedResponse<OpsLogDto>>;
+  getActions(): Promise<OpsAction[]>;
+  triggerJob(request: TriggerOpsJobRequest): Promise<OpsJob>;
+  getCurrentJob(): Promise<OpsJob | null>;
+  getJob(jobId: string): Promise<OpsJob>;
+  listLogs(params?: { page?: number; size?: number }): Promise<PaginatedResponse<OpsLog>>;
 }
 
 const actions: OpsActionDto[] = [

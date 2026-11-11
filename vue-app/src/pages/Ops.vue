@@ -56,7 +56,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { t } from '../i18n';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import type { OpsActionDto, OpsJobDto, OpsLogDto } from '../services/apiTypes';
+import type { OpsAction, OpsJob, OpsLog } from '../services/apiTypes';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
@@ -67,9 +67,9 @@ const sysStats: [string, string, number][] = [
   ['CPU', '32%', 0.32], ['Memory', '6.2 / 16 GB', 0.39], ['JVM Heap', '1.8 / 4 GB', 0.45],
   ['DB connections', '12 / 50', 0.24], ['WebSocket', '847 active', 0.5],
 ];
-const actions = ref<OpsActionDto[]>([]);
-const logs = ref<OpsLogDto[]>([]);
-const currentJob = ref<OpsJobDto | null>(null);
+const actions = ref<OpsAction[]>([]);
+const logs = ref<OpsLog[]>([]);
+const currentJob = ref<OpsJob | null>(null);
 const confirm = ref<{ k: string; d: string } | null>(null);
 const isSubmitting = ref(false);
 const isBusy = computed(() => isSubmitting.value || Boolean(currentJob.value));
@@ -104,7 +104,7 @@ async function refreshOpsData() {
   }
 }
 
-function openConfirm(action: OpsActionDto) {
+function openConfirm(action: OpsAction) {
   if (isBusy.value) return;
   confirm.value = { k: action.key, d: action.description };
 }

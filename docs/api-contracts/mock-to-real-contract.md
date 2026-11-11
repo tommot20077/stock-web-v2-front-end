@@ -120,6 +120,12 @@ Auth requirements:
 
 ## Backtest Contract
 
+> **Phase 5 D-05:BigDecimal 一律 JSON 字串。** 本節範例中 Java `BigDecimal` 欄位(`initialCapital`、`progress`、
+> KPI 的八個比率 / 倍數欄、`equityCurve.strategy` / `benchmark`、`monthlyReturns.returnPct`、`drawdownCurve.drawdownPct`、
+> `trades.entry` / `exit` / `pnl` / `pnlPct`)在請求與回應都是一般記號的字串;Java `int` 欄(`drawdownDays`、`tradeCount`、
+> `year`、`month`、`bars`)與分頁欄位維持 JSON number。回應保留後端 scale(範例小數位數僅示意),前端以 `parseDecimal`
+> 轉 Decimal 後比較,不逐字比對(後端權威:`ai-docs/trading-portfolio-contract.md`〈序列化格式〉;2026-11-11 依 05-24 同步)。
+
 ### UI Needs
 
 Current UI needs:
@@ -161,7 +167,7 @@ Request:
   "strategyCode": null,
   "symbol": "AAPL",
   "period": "3Y",
-  "initialCapital": 100000,
+  "initialCapital": "100000",
   "currency": "USD",
   "benchmark": "buy_hold",
   "dataMode": "cached"
@@ -172,7 +178,7 @@ Rules:
 
 - `strategyId` is one of `ma_cross`, `rsi`, `momentum`, `dca`, `custom`.
 - `strategyCode` is required only when `strategyId = custom`.
-- `initialCapital` must be finite and greater than zero.
+- `initialCapital` is a decimal string (D-05) and must be greater than zero; the frontend sends it via `toWire` from a `Decimal`.
 - `period` is initially one of `1Y`, `3Y`, `5Y`.
 - 後端目前只接受 `currency = "USD"`、`benchmark = "buy_hold"`(否則 400 `VALIDATION_FAILED`)與 `dataMode = "cached"`(否則 400 `BACKTEST_UNSUPPORTED_DATA_MODE`);`symbol` 必填、最長 32 字。
 - 後端目前**同步執行**:`createRun` 回傳時 `status` 已為 `succeeded`(編譯失敗則 400 `BACKTEST_STRATEGY_COMPILE_FAILED`);`queued` / `running` 狀態保留給日後非同步化。
@@ -188,10 +194,10 @@ Response:
     "label": "MA Cross (20/50)",
     "symbol": "AAPL",
     "period": "3Y",
-    "initialCapital": 100000,
+    "initialCapital": "100000.000000",
     "currency": "USD",
     "status": "succeeded",
-    "progress": 1,
+    "progress": "1.00000",
     "createdAt": "2026-05-16T01:30:00Z",
     "startedAt": "2026-05-16T01:30:00Z",
     "completedAt": "2026-05-16T01:30:01Z",
@@ -262,7 +268,7 @@ Response:
   "data": {
     "id": "bt_01HZX...",
     "status": "running",
-    "progress": 0.62,
+    "progress": "0.62000",
     "label": "MA Cross (20/50)",
     "symbol": "AAPL",
     "period": "3Y",
@@ -291,35 +297,35 @@ Response:
     "runId": "bt_01HZX...",
     "status": "succeeded",
     "kpis": {
-      "totalReturnPct": 42.5,
-      "buyHoldReturnPct": 31.2,
-      "sharpe": 1.42,
-      "cagrPct": 14.1,
-      "maxDrawdownPct": -12.8,
+      "totalReturnPct": "42.500000",
+      "buyHoldReturnPct": "31.200000",
+      "sharpe": "1.420000",
+      "cagrPct": "14.100000",
+      "maxDrawdownPct": "-12.800000",
       "drawdownDays": 54,
-      "winRatePct": 58,
+      "winRatePct": "58.000000",
       "tradeCount": 64,
-      "profitFactor": 1.8,
-      "avgTradePct": 0.74
+      "profitFactor": "1.800000",
+      "avgTradePct": "0.740000"
     },
     "equityCurve": [
-      { "t": "2024-01-01", "strategy": 100000, "benchmark": 100000 }
+      { "t": "2024-01-01", "strategy": "100000.000000", "benchmark": "100000.000000" }
     ],
     "monthlyReturns": [
-      { "year": 2026, "month": 1, "returnPct": 2.4 }
+      { "year": 2026, "month": 1, "returnPct": "2.400000" }
     ],
     "drawdownCurve": [
-      { "t": "2024-01-01", "drawdownPct": 0 }
+      { "t": "2024-01-01", "drawdownPct": "0.000000" }
     ],
     "trades": [
       {
         "date": "2026-01-12",
         "side": "BUY",
-        "entry": 182.1,
-        "exit": 195.4,
+        "entry": "182.100000",
+        "exit": "195.400000",
         "bars": 12,
-        "pnl": 420,
-        "pnlPct": 2.2
+        "pnl": "420.000000",
+        "pnlPct": "2.200000"
       }
     ]
   },

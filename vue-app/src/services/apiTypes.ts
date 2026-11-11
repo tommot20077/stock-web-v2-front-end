@@ -594,6 +594,18 @@ export interface OpsLogDto {
   message: string;
 }
 
+/*
+ * Ops 的 domain 型別:三個 wire DTO 都沒有 BigDecimal 欄位,domain 與 wire 同形,直接別名。
+ * 頁面只拿 domain 名稱(05-24 decimalBoundary 守門:元件 props / state 不得用 *Dto);
+ * 日後後端若加入 BigDecimal 欄位,改成 `DecimalFields<…>` 並在 opsApi 加 mapper 即可,頁面不必改。
+ */
+/** domain:Ops 動作(與 {@link OpsActionDto} 同形)。 */
+export type OpsAction = OpsActionDto;
+/** domain:Ops 工作(與 {@link OpsJobDto} 同形)。 */
+export type OpsJob = OpsJobDto;
+/** domain:Ops 紀錄(與 {@link OpsLogDto} 同形)。 */
+export type OpsLog = OpsLogDto;
+
 export type AiProviderKind = 'crypto' | 'stocks' | 'news' | 'fx';
 export type AiKeyPermission = 'read' | 'trade';
 export type AiKeyEnvironment = 'sandbox' | 'live';
