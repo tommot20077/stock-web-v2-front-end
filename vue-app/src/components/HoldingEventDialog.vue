@@ -578,7 +578,7 @@ import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
 import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
 import { numberToWire, parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
-import type { Dividend, ShareAdjustmentDto } from '../services/holdingEventApi';
+import type { Dividend, ShareAdjustment } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
 /** 三種記錄模式;名稱依 D-11(「股利與股數調整」)。 */
@@ -620,7 +620,7 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'recorded', event: Dividend | ShareAdjustmentDto): void;
+  (e: 'recorded', event: Dividend | ShareAdjustment): void;
   (e: 'reversalConflict', code: string): void;
 }>();
 
@@ -662,7 +662,8 @@ const note = ref('');
 const touched = reactive({ symbol: false, amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
 
 const submitting = ref(false);
-type RecordedEvent = { kind: 'dividend'; dto: Dividend } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
+/** `dto`:後端回傳的權威快照,已經 adapter 轉成 domain(金額 / 股數為 Decimal,Phase 5 D-08)。 */
+type RecordedEvent = { kind: 'dividend'; dto: Dividend } | { kind: 'shareAdjustment'; dto: ShareAdjustment };
 const recorded = ref<RecordedEvent | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
@@ -1190,9 +1191,9 @@ function decimalWithin(text: string, max: Decimal, allowZero: boolean): boolean 
 }
 
 /** 送出用:只在自檢通過後呼叫,所以解析失敗代表程式錯誤,大聲失敗而不是送出 0。 */
-function requireAmount(text: string): Decimal {
+function requireDecimalText(text: string): Decimal {
   const value = parseAmountText(text);
-  if (value === null) throw new TypeError('[HoldingEventDialog] amount input was not validated before submit');
+  if (value === null) throw new TypeError('[HoldingEventDialog] decimal input was not validated before submit');
   return value;
 }
 
@@ -1401,9 +1402,9 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
   if (mode.value === 'cashDividend') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: requireAmount(amount.value),
+      amount: requireDecimalText(amount.value),
       // 選填:未填送 null(不送空字串,後端把 "" 視為未提供)。
-      withholdingTax: tax.value.trim() === '' ? null : requireAmount(tax.value),
+      withholdingTax: tax.value.trim() === '' ? null : requireDecimalText(tax.value),
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       paidAt: toLocalIso(new Date(paidAt.value)),
       note: noteValue,
@@ -1415,7 +1416,8 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
   const dto = await clients.holdingEvents.createShareAdjustment({
     symbol,
     type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
-    quantity: isStock ? Number(shares.value.trim()) : null,
+    quantity: isStock ? requireDecimalText(shares.value) : null,
+    // 比例是後端 Integer(1–1000),維持 number。
     ratioNew: isStock ? null : Number(ratioNew.value.trim()),
     ratioOld: isStock ? null : Number(ratioOld.value.trim()),
     // 原字串送出,不轉時區(它是標的市場的交易日)。
@@ -1457,7 +1459,7 @@ async function createReversal(
   const dto = await clients.holdingEvents.createShareAdjustment({
     symbol,
     type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
-    quantity: isStock ? original.quantity : null,
+    quantity: isStock ? fromRow(original.quantity) : null,
     ratioNew: isStock ? null : original.ratioNew,
     ratioOld: isStock ? null : original.ratioOld,
     effectiveDate: original.effectiveDate ?? '',

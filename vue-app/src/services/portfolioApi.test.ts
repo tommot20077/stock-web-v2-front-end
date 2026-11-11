@@ -933,7 +933,7 @@ describe('portfolioApi mock adapter — listActivities', () => {
     const events = createMockHoldingEventApi();
     await events.createDividend({ symbol: 'AAPL', amount: parseDecimal('50') }, 'k-1');
     await events.createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-05-01' },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: parseDecimal('10'), effectiveDate: '2026-05-01' },
       'k-2',
     );
     const api = createMockPortfolioApi();
@@ -950,7 +950,7 @@ describe('portfolioApi mock adapter — listActivities', () => {
   it('sorts by total with null amounts last and paginates', async () => {
     seedTrades();
     await createMockHoldingEventApi().createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-05-01' },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: parseDecimal('10'), effectiveDate: '2026-05-01' },
       'k-1',
     );
     const api = createMockPortfolioApi();

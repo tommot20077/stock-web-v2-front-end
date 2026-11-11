@@ -7,8 +7,9 @@ import {
   listMockHoldingEvents,
   resetMockHoldingEventsForTests,
   toDividend,
+  toShareAdjustment,
   type CreateDividendInput,
-  type CreateShareAdjustmentRequest,
+  type CreateShareAdjustmentInput,
   type DividendDto,
   type ShareAdjustmentDto,
 } from './holdingEventApi';
@@ -54,7 +55,7 @@ const DIVIDEND_DTO: DividendDto = {
   reversed: false,
 };
 
-const SPLIT_REQUEST: CreateShareAdjustmentRequest = {
+const SPLIT_REQUEST: CreateShareAdjustmentInput = {
   symbol: 'AAPL',
   type: 'SPLIT',
   ratioNew: 4,
@@ -67,7 +68,7 @@ const SPLIT_DTO: ShareAdjustmentDto = {
   symbol: 'AAPL',
   currency: 'USD',
   type: 'SPLIT',
-  quantityDelta: 300,
+  quantityDelta: '300.00000000',
   ratioNew: 4,
   ratioOld: 1,
   effectiveDate: '2026-10-30',
@@ -220,7 +221,7 @@ describe('holdingEventApi http adapter — createShareAdjustment', () => {
       note: null,
       reversalOfId: null,
     });
-    expect(dto).toEqual(SPLIT_DTO);
+    expect(dto).toEqual(toShareAdjustment(SPLIT_DTO));
   });
 
   it('httpCreateShareAdjustmentErrorsSurfaceAsApiClientError', async () => {
@@ -434,7 +435,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     seedAaplPosition();
 
     const dto = await createMockHoldingEventApi().createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 50, effectiveDate: '2026-01-10' },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50'), effectiveDate: '2026-01-10' },
       'k-1',
     );
 
@@ -443,13 +444,13 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
       symbol: 'AAPL',
       currency: 'USD',
       type: 'STOCK_DIVIDEND',
-      quantityDelta: 50,
       ratioNew: null,
       ratioOld: null,
       effectiveDate: '2026-01-10',
       reversalOfId: null,
       reversed: false,
     });
+    expect(toWire(dto.quantityDelta)).toBe('50');
     expect(Object.keys(dto).sort()).toEqual(Object.keys(SPLIT_DTO).sort());
     expect(listMockHoldingEvents()[0]).toMatchObject({
       kind: 'STOCK_DIVIDEND',
@@ -466,7 +467,8 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     const dto = await createMockHoldingEventApi().createShareAdjustment(SPLIT_REQUEST, 'k-1');
 
     expect(aaplPosition()).toMatchObject({ qty: 4000, avg: 25 });
-    expect(dto).toMatchObject({ type: 'SPLIT', quantityDelta: 3000, ratioNew: 4, ratioOld: 1 });
+    expect(dto).toMatchObject({ type: 'SPLIT', ratioNew: 4, ratioOld: 1 });
+    expect(toWire(dto.quantityDelta)).toBe('3000');
   });
 
   it('reverse split 1:10 yields a negative quantityDelta', async () => {
@@ -478,12 +480,12 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     );
 
     expect(aaplPosition()).toMatchObject({ qty: 100, avg: 1000 });
-    expect(dto.quantityDelta).toBe(-900);
+    expect(toWire(dto.quantityDelta)).toBe('-900');
   });
 
   it('rejects an adjustment without a holding as TRADE_INSUFFICIENT_HOLDING', async () => {
     const error = await thrownBy(createMockHoldingEventApi().createShareAdjustment(
-      { symbol: 'TSLA', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-01-10' },
+      { symbol: 'TSLA', type: 'STOCK_DIVIDEND', quantity: d('10'), effectiveDate: '2026-01-10' },
       'k-1',
     ));
 
@@ -510,7 +512,7 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     await api.createShareAdjustment({ ...SPLIT_REQUEST, effectiveDate: '2026-03-01' }, 'k-1');
 
     const error = await thrownBy(api.createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 10, effectiveDate: '2026-02-01' },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('10'), effectiveDate: '2026-02-01' },
       'k-2',
     ));
 
@@ -534,14 +536,14 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
     seedAaplPosition();
     const api = createMockHoldingEventApi();
     const first = await api.createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 50, effectiveDate: '2026-01-10' },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50'), effectiveDate: '2026-01-10' },
       'k-1',
     );
     const second = await api.createShareAdjustment({ ...SPLIT_REQUEST, effectiveDate: '2026-02-10' }, 'k-2');
     expect(aaplPosition()?.qty).toBe(4200);
 
     const notLatest = await thrownBy(api.createShareAdjustment(
-      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: 50, effectiveDate: '2026-01-10', reversalOfId: first.id },
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50'), effectiveDate: '2026-01-10', reversalOfId: first.id },
       'k-3',
     ));
     expect(notLatest).toMatchObject({ status: 409, code: 'SHARE_ADJUSTMENT_NOT_REVERSIBLE' });
@@ -555,7 +557,8 @@ describe('holdingEventApi mock adapter — 配股 / 拆股攤薄 mock 持倉', (
       'k-4',
     );
 
-    expect(reversal).toMatchObject({ reversalOfId: second.id, quantityDelta: 3150 });
+    expect(reversal).toMatchObject({ reversalOfId: second.id });
+    expect(toWire(reversal.quantityDelta)).toBe('3150');
     // 沖銷撤銷已記錄的 ΔQ、總成本不變。
     expect(aaplPosition()?.qty).toBe(1050);
     expect(aaplPosition()?.avg).toBe(95.23809524);
@@ -596,7 +599,7 @@ describe('holdingEventApi mock adapter — 回傳 clone 與 reset', () => {
     const adjustment = await api.createShareAdjustment(SPLIT_REQUEST, 'k-2');
 
     dividend.amount = d('999');
-    adjustment.quantityDelta = 999;
+    adjustment.quantityDelta = d('999');
     const listed = listMockHoldingEvents();
     listed[0].amount = 999;
     listed.pop();
@@ -714,5 +717,103 @@ describe('holdingEventApi — 現金股利字串契約(05-20 / D-05 / D-08)', ()
 
     expect(reversal.reversalOfId).toBe(original.id);
     expect(toWire(reversal.amount)).toBe('120');
+  });
+});
+
+describe('holdingEventApi — 股數調整字串契約(05-20 / D-05 / D-08)', () => {
+  it('http 配股:quantity 以 toWire 送字串、比例送 null;回應 quantityDelta 字串 → Decimal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
+      ...SPLIT_DTO,
+      type: 'STOCK_DIVIDEND',
+      quantityDelta: '50.12345678',
+      ratioNew: null,
+      ratioOld: null,
+    }))));
+
+    const adjustment = await createHttpHoldingEventApi('/api/v1').createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50.12345678'), ratioNew: null, ratioOld: null, effectiveDate: '2026-10-30' },
+      'k-stock',
+    );
+
+    expect(String(initAt(0).body)).toContain('"quantity":"50.12345678"');
+    expect(bodyAt(0)).toMatchObject({ quantity: '50.12345678', ratioNew: null, ratioOld: null });
+    expect(toWire(adjustment.quantityDelta)).toBe('50.12345678');
+  });
+
+  it('http 拆股:ratioNew / ratioOld 仍是 number(後端 Integer)、quantity 送 null;合股的負 ΔQ 保留符號', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
+      ...SPLIT_DTO,
+      quantityDelta: '-900.00000000',
+      ratioNew: 1,
+      ratioOld: 10,
+    }))));
+
+    const adjustment = await createHttpHoldingEventApi('/api/v1').createShareAdjustment(
+      { symbol: 'AAPL', type: 'SPLIT', quantity: null, ratioNew: 1, ratioOld: 10, effectiveDate: '2026-10-30' },
+      'k-split',
+    );
+
+    expect(bodyAt(0)).toMatchObject({ quantity: null, ratioNew: 1, ratioOld: 10 });
+    expect(adjustment.quantityDelta.eq(d('-900'))).toBe(true);
+    expect(adjustment.ratioNew).toBe(1);
+  });
+
+  it('http:回應 quantityDelta 仍是 number → 丟 TypeError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...SPLIT_DTO, quantityDelta: 300 }))));
+
+    await expect(createHttpHoldingEventApi('/api/v1').createShareAdjustment(SPLIT_REQUEST, 'k-1'))
+      .rejects.toBeInstanceOf(TypeError);
+  });
+
+  it('mock 配股:同 key 的 "10" 與 "10.00000000" 視為同一筆、只調整一次;不同股數為 KEY_REUSED', async () => {
+    seedAaplPosition();
+    const api = createMockHoldingEventApi();
+    const request = { symbol: 'AAPL', type: 'STOCK_DIVIDEND' as const, effectiveDate: '2026-01-10' };
+
+    const first = await api.createShareAdjustment({ ...request, quantity: d('10') }, 'k-10');
+    const second = await api.createShareAdjustment({ ...request, quantity: d('10.00000000') }, 'k-10');
+
+    expect(second.id).toBe(first.id);
+    expect(aaplPosition()?.qty).toBe(1010);
+    const reused = await thrownBy(api.createShareAdjustment({ ...request, quantity: d('10.00000001') }, 'k-10'));
+    expect(reused).toMatchObject({ status: 409, code: 'SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED' });
+  });
+
+  it('mock 配股:股數上下限以 Decimal 比較(10^9 + 0.00000001 超出)', async () => {
+    seedAaplPosition();
+    const api = createMockHoldingEventApi();
+
+    const error = await thrownBy(api.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('1000000000.00000001'), effectiveDate: '2026-01-10' },
+      'k-1',
+    ));
+
+    expect(error).toMatchObject({ status: 400, code: 'VALIDATION_FAILED' });
+    expect(error.fields).toHaveProperty('quantity');
+    expect(aaplPosition()).toMatchObject({ qty: 1000, avg: 100 });
+  });
+
+  it('mock 沖銷配股:quantity 以 Decimal 比對原 ΔQ("50" 與 "50.0" 相同),不同值點名 fields.quantity', async () => {
+    seedAaplPosition();
+    const api = createMockHoldingEventApi();
+    const original = await api.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50'), effectiveDate: '2026-01-10' },
+      'k-1',
+    );
+
+    const mismatch = await thrownBy(api.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('49'), effectiveDate: '2026-01-10', reversalOfId: original.id },
+      'k-2',
+    ));
+    expect(mismatch.fields).toHaveProperty('quantity');
+
+    const reversal = await api.createShareAdjustment(
+      { symbol: 'AAPL', type: 'STOCK_DIVIDEND', quantity: d('50.0'), effectiveDate: '2026-01-10', reversalOfId: original.id },
+      'k-3',
+    );
+    expect(toWire(reversal.quantityDelta)).toBe('50');
+    expect(aaplPosition()?.qty).toBe(1000);
+    // mock 活動列(MockHoldingEvent)在 05-21 之前仍是 number。
+    expect(listMockHoldingEvents().map(event => event.quantity)).toEqual([50, 50]);
   });
 });

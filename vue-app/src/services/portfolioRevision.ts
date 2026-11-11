@@ -194,7 +194,7 @@ export function clearLastFill(): void {
  * `lastCreatedTradeId` / `lastCreatedCashEntryId`。先設 id 與 cause、最後才 bump。
  * 契約要求記錄後重讀 summary、holdings 與活動列表 —— 已掛載的頁 watch {@link portfolioRevision} 即可。
  *
- * @param event 後端回傳的 `DividendDto` / `ShareAdjustmentDto`(只需要 `id`)。
+ * @param event adapter 回傳的 domain `Dividend` / `ShareAdjustment`(`holdingEventApi.ts`;只需要 `id`,不讀金額 / 股數)。
  * @param cause `'dividend'` 或 `'shareAdjustment'`,決定重讀失敗時的提示文案。
  */
 export function notifyHoldingEventCreated(event: { id: string }, cause: HoldingEventRevisionCause): void {
