@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createQuoteStream, type QuoteStream, type WsTicketResponse } from './quoteStream';
 import { createFakeSocketFactory } from '../testing/fakeWebSocket';
-import { isDecimal, toWire } from './decimal';
+import { isDecimal, numberToWire, toWire } from './decimal';
 
 const TICKET = 'tk_Secret-Ticket_abc123';
 
@@ -733,6 +733,23 @@ describe('createQuoteStream(mock) — 明確的假推播(鐵律 3)', () => {
     expect(stream.ticks.value.get('AAPL')).toBe(second);
     expect(sockets.sockets).toHaveLength(0);
     expect(issueTicket).not.toHaveBeenCalled();
+  });
+
+  it('產出的 LiveTick.price 為 Decimal,toWire 等於 random walk(mock-only number)的 numberToWire(05-23 / D-08)', async () => {
+    const randoms = [1, 0.123, 0];
+    let call = 0;
+    const stream = track(createQuoteStream('mock', { random: () => randoms[call++ % randoms.length] }));
+    stream.watch(['AAPL']);
+
+    // 與 createMockQuoteStream.step() 相同的 number 漫步(±0.5%、4 位小數),起點為 data.ts 的 218.40
+    let walk = 218.40;
+    for (const r of randoms) {
+      await vi.advanceTimersByTimeAsync(1000);
+      walk = Math.round(walk * (1 + (r * 2 - 1) * 0.005) * 10000) / 10000;
+      const tick = stream.ticks.value.get('AAPL');
+      expect(isDecimal(tick?.price)).toBe(true);
+      expect(toWire(tick!.price)).toBe(numberToWire(walk));
+    }
   });
 
   it('不在 data.ts 可交易清單的代號(FX / 債券 / 未知)不產生 tick', async () => {

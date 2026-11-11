@@ -170,6 +170,26 @@ describe('useLiveQuotes — Decimal 疊加(05-22 / D-08)', () => {
     expect(big.low).toBeNull();
   });
 
+  it('WS 字串 tick 超過 number 精度:前收 123456789012.12345677、tick "123456789012.12345679" → change 0.00000002(05-23)', () => {
+    const rows = ref<readonly Asset[]>([
+      asset({ symbol: 'BIG', latestPrice: '123456789012.12345678', change: '0.00000001', changePercent: '0', high: null, low: null }),
+    ]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('BIG', '123456789012.12345679');
+    const [big] = live.rows.value;
+
+    expect(w(big.latestPrice)).toBe('123456789012.12345679');
+    expect(w(big.change)).toBe('0.00000002');
+    // 0.00000002 × 100 ÷ 123456789012.12345677 ≈ 1.6e-17 → 2 位 HALF_UP 為 0
+    expect(w(big.changePercent)).toBe('0');
+    expect(big.quoteSource).toBe('ws');
+    // 對照:同一組值走 JS number 會失真(證明本案例確實需要 Decimal)
+    const numberChange = Number('123456789012.12345679') - (Number('123456789012.12345678') - Number('0.00000001'));
+    expect(numberChange).not.toBe(0.00000002);
+  });
+
   it('負值的 .5 捨入遠離 0(與後端 BigDecimal HALF_UP 一致),正值亦然', () => {
     // 前收 = 200;pct = change × 100 ÷ 200 = change ÷ 2
     const rows = ref<readonly Asset[]>([
