@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { effectScope, ref, shallowRef, type EffectScope, type Ref } from 'vue';
 import type { Asset } from '../services/apiTypes';
-import { parseNullableDecimal, toWire, type Decimal } from '../services/decimal';
+import { isDecimal, parseNullableDecimal, toWire, type Decimal } from '../services/decimal';
 import type { LiveTick, QuoteStream, QuoteStreamStatus } from '../services/quoteStream';
 import { useLiveQuotes } from './useLiveQuotes';
 
@@ -125,6 +125,94 @@ describe('useLiveQuotes — tick 疊加(RESEARCH W5、P-W5)', () => {
     expect(w(noChange.latestPrice)).toBe('51');
     expect(noChange.change).toBeNull();
     expect(noChange.changePercent).toBeNull();
+  });
+});
+
+describe('useLiveQuotes — Decimal 疊加(05-22 / D-08)', () => {
+  it('row 100 / 2、tick 103 → change 5、changePercent 5.1(5 × 100 ÷ 98 = 5.102… → 2 位 HALF_UP)', () => {
+    const rows = ref<readonly Asset[]>([asset({ symbol: 'AAPL', latestPrice: '100', change: '2', high: '101', low: '97' })]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('AAPL', 103);
+    const row = live.rows.value[0];
+
+    expect(isDecimal(row.latestPrice)).toBe(true);
+    expect(isDecimal(row.change)).toBe(true);
+    expect(isDecimal(row.changePercent)).toBe(true);
+    expect(w(row.latestPrice)).toBe('103');
+    expect(w(row.change)).toBe('5');
+    expect(w(row.changePercent)).toBe('5.1');
+    // cmp 取極值:tick 高於 high → high 擴張;low 不變
+    expect(w(row.high)).toBe('103');
+    expect(w(row.low)).toBe('97');
+  });
+
+  it('change 是精確差值(沒有浮點殘差):218.4 − 198 = 20.4;大額 8 位小數不失真', () => {
+    const rows = ref<readonly Asset[]>([
+      asset({ symbol: 'AAPL', latestPrice: '200', change: '2' }),
+      asset({ symbol: 'BIG', latestPrice: '123456789012.12345678', change: '0.00000001', high: null, low: null }),
+    ]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('AAPL', 218.4);
+    s.pushTick('BIG', 123456789013);
+    const [aapl, big] = live.rows.value;
+
+    // number 版:218.4 - 198 = 20.400000000000006,需另外清殘差;Decimal 直接精確。
+    expect(w(aapl.change)).toBe('20.4');
+    // 前收 = 123456789012.12345677;change = 123456789013 − 前收
+    expect(w(big.change)).toBe('0.87654323');
+    expect(big.high).toBeNull();
+    expect(big.low).toBeNull();
+  });
+
+  it('負值的 .5 捨入遠離 0(與後端 BigDecimal HALF_UP 一致),正值亦然', () => {
+    // 前收 = 200;pct = change × 100 ÷ 200 = change ÷ 2
+    const rows = ref<readonly Asset[]>([
+      asset({ symbol: 'DOWN', latestPrice: '198', change: '-2' }),
+      asset({ symbol: 'UP', latestPrice: '198', change: '-2' }),
+    ]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('DOWN', 199.75);
+    s.pushTick('UP', 200.25);
+    const [down, up] = live.rows.value;
+
+    expect(w(down.change)).toBe('-0.25');
+    // -0.125 → -0.13(Math.round 會往 +∞ 得 -0.12)
+    expect(w(down.changePercent)).toBe('-0.13');
+    expect(w(up.change)).toBe('0.25');
+    expect(w(up.changePercent)).toBe('0.13');
+    // tick 低於 low(195)?否:low 不變;tick 199.75 < high 205 → high 不變
+    expect(w(down.low)).toBe('195');
+    expect(w(down.high)).toBe('205');
+  });
+
+  it('previousClose = 0 → changePercent 維持原值(不除以 0),change 仍更新', () => {
+    const rows = ref<readonly Asset[]>([asset({ symbol: 'ZERO', latestPrice: '2', change: '2', changePercent: '1.01' })]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('ZERO', 3);
+    const row = live.rows.value[0];
+
+    expect(w(row.change)).toBe('3');
+    expect(w(row.changePercent)).toBe('1.01');
+  });
+
+  it('tick 與 high / low 相等時保留原值(cmp 取極值)', () => {
+    const rows = ref<readonly Asset[]>([asset({ symbol: 'EDGE', high: '205', low: '195' })]);
+    const s = fakeStream();
+    const live = setup(rows, s.stream);
+
+    s.pushTick('EDGE', 205);
+    expect(w(live.rows.value[0].high)).toBe('205');
+    s.pushTick('EDGE', 195, 2000);
+    expect(w(live.rows.value[0].low)).toBe('195');
+    expect(w(live.rows.value[0].high)).toBe('205');
   });
 });
 

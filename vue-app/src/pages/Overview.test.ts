@@ -1747,6 +1747,42 @@ describe('Overview — 觀察清單卡(D-26,API mode)', () => {
     expect(wlCard().querySelector('.live-dot.solid')).toBeNull();
   });
 
+  it('05-22(D-08):觀察清單卡以 Decimal 顯示 —— 大額不失真、tick 疊加的漲跌幅以 Decimal HALF_UP 計算、缺價顯示 —', async () => {
+    const items = [
+      assetDto('AAPL', { latestPrice: '100', change: '2', changePercent: '2.04' }),
+      assetDto('BIG', { latestPrice: '9007199254740993.005', change: '-0.00000001', changePercent: '-0.00000001' }),
+      assetDto('US10Y', { assetType: 'BOND', market: 'US', tradeable: false, latestPrice: '4.2185', change: '0.0125', changePercent: null }),
+      assetDto('NOPX', { latestPrice: null, change: null, changePercent: null }),
+    ];
+    await mountApiOverview(wlFetch(() => success(wlLists(items))));
+
+    expect(wlRow('BIG').querySelector('.wl-price')?.textContent?.trim()).toBe('9,007,199,254,740,993.01');
+    // 捨入後為 0.00,正負與色彩依未捨入的原值(同 Phase 5 前的 number 版)
+    expect(wlRow('BIG').querySelector('.wl-chg')?.textContent?.trim()).toBe('-0.00%');
+    expect(wlRow('BIG').querySelector('.wl-chg')?.classList.contains('dn')).toBe(true);
+    expect(wlRow('US10Y').querySelector('.wl-price')?.textContent?.trim()).toBe('4.219');
+    expect(wlRow('US10Y').querySelector('.wl-chg')?.textContent?.trim()).toBe('+0.013');
+    expect(wlRow('US10Y').querySelector('.wl-chg')?.classList.contains('up')).toBe(true);
+    expect(wlRow('NOPX').querySelector('.wl-price')?.textContent?.trim()).toBe('—');
+    expect(wlRow('NOPX').querySelector('.wl-chg')?.textContent?.trim()).toBe('—');
+    expect(wlRow('NOPX').querySelector('.wl-chg')?.classList.contains('na')).toBe(true);
+
+    // tick 103(前收 98):change 5、pct 5 × 100 ÷ 98 = 5.102… → 5.10
+    quotes.setStatus('live');
+    quotes.pushTick('AAPL', 103);
+    await flushAsync(1);
+    expect(wlRow('AAPL').getAttribute('data-quote-source')).toBe('ws');
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent).toContain('103.00');
+    expect(wlRow('AAPL').querySelector('.wl-chg')?.textContent?.trim()).toBe('+5.10%');
+    expect(wlRow('AAPL').querySelector('.wl-chg')?.classList.contains('up')).toBe(true);
+  });
+
+  it('05-22:觀察清單卡只用 domain 型別,顯示函式不對報價做 Number() / 算術', () => {
+    expect(overviewSource).not.toMatch(/^import .*\b(AssetDto|WatchlistDto)\b/m);
+    const fns = overviewSource.slice(overviewSource.indexOf('function wlFixed'), overviewSource.indexOf('function wlChangeTone'));
+    expect(fns).not.toMatch(/Math\.abs|toLocaleString|Number\(/);
+  });
+
   it('replaced:卡片內狀態列提供「在此分頁重新連線」→ quotes.reconnect() 一次', async () => {
     await mountApiOverview(wlFetch(() => success(wlLists())));
     quotes.setStatus('replaced');
