@@ -37,7 +37,8 @@ function entry(over: Partial<CashEntryDto> & { id: string }): CashEntryDto {
   return {
     type: 'DEPOSIT',
     currency: 'TWD',
-    amount: 50000,
+    // wire 為十進位字串(Phase 5 D-05 / D-08)。
+    amount: '50000',
     note: null,
     occurredAt: '2026-10-20T09:30:00+08:00',
     createdAt: '2026-10-20T09:30:05+08:00',
@@ -54,7 +55,7 @@ const REVERSAL_ENTRY = entry({
   id: 'cash-reversal-1',
   type: 'DEPOSIT',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   occurredAt: '2026-10-19T11:00:00+08:00',
   reversalOfId: ORIGINAL_ID,
   reversalOfOccurredAt: '2026-10-18T10:00:00+08:00',
@@ -63,7 +64,7 @@ const REVERSED_WITHDRAWAL = entry({
   id: ORIGINAL_ID,
   type: 'WITHDRAWAL',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   occurredAt: '2026-10-18T10:00:00+08:00',
   reversed: true,
 });
@@ -109,15 +110,15 @@ interface CashRoutes {
   summary?: (call: number) => Response | Promise<Response>;
 }
 
-/** 頁首餘額列需要的 summary(其餘欄位對現金頁無意義,給中性值)。 */
+/** 頁首餘額列需要的 summary(其餘欄位對現金頁無意義,給中性值);BigDecimal 欄位是 wire 字串(Phase 5 D-05)。 */
 function summaryDto(over: Record<string, unknown> = {}) {
   return {
-    totalMarketValue: 0,
-    totalCostBasis: 0,
-    realizedPnl: 0,
-    unrealizedPnl: 0,
-    totalPnl: 0,
-    roi: 0,
+    totalMarketValue: '0',
+    totalCostBasis: '0',
+    realizedPnl: '0',
+    unrealizedPnl: '0',
+    totalPnl: '0',
+    roi: '0',
     holdingCount: 0,
     baseCurrency: 'TWD',
     fxExcludedCount: 0,
@@ -125,13 +126,13 @@ function summaryDto(over: Record<string, unknown> = {}) {
     dayPricePnl: null,
     dayPricePnlRatio: null,
     dayPnlExcludedCount: 0,
-    cash: 880000,
-    totalEquity: 880000,
-    cashBalances: [{ currency: 'TWD', amount: 880000 }],
+    cash: '880000',
+    totalEquity: '880000',
+    cashBalances: [{ currency: 'TWD', amount: '880000' }],
     allocation: [],
     sectorAllocation: [],
-    dividendIncome: 0,
-    dividendTaxWithheld: 0,
+    dividendIncome: '0',
+    dividendTaxWithheld: '0',
     ...over,
   };
 }
@@ -162,7 +163,7 @@ function cashFetch(initial: CashEntryDto[] = THREE_ENTRIES, routes: CashRoutes =
           id: `created-${created}`,
           type: String(body.type),
           currency: String(body.currency),
-          amount: Number(body.amount),
+          amount: String(body.amount),
           note: (body.note as string | null) ?? null,
           occurredAt: '2026-10-24T12:00:00+08:00',
           reversalOfId: original ? original.id : null,
@@ -307,6 +308,15 @@ describe('Cash page — list rendering (API mode)', () => {
     const withdrawal = rows()[2]!;
     expect(withdrawal.textContent).toContain(t('zh', 'cashTypeWithdrawal'));
     expect(withdrawal.textContent).toContain('-1,000.00 USD');
+  });
+
+  // Phase 5 D-08:wire 字串 → Decimal → fmtMoney,全程不經 JS number。超過 2^53 的值經 number 會變成 ...992.00。
+  it('renders wire amount strings beyond double precision exactly (Decimal end to end)', async () => {
+    await mountApiCash(cashFetch([entry({ id: 'cash-huge-1', currency: 'USD', amount: '9007199254740993.005' })]));
+
+    const row = rows()[0]!;
+    expect(row.textContent).toContain('+9,007,199,254,740,993.01\u00A0USD');
+    expect(row.textContent).not.toContain('740,992');
   });
 
   it('marks the reversed original with a 已沖銷 pill and a struck-through amount, and offers no reverse button', async () => {
@@ -719,12 +729,12 @@ describe('Cash page — re-read rules by revision cause (U-10)', () => {
 
 describe('Cash page — balances row (API mode)', () => {
   const NEGATIVE_USD = summaryDto({
-    cash: 880000,
+    cash: '880000',
     cashBalances: [
-      { currency: 'USD', amount: -1200 },
-      { currency: 'TWD', amount: 50000 },
-      { currency: 'EUR', amount: 0 },
-      { currency: 'JPY', amount: 0 },
+      { currency: 'USD', amount: '-1200' },
+      { currency: 'TWD', amount: '50000' },
+      { currency: 'EUR', amount: '0' },
+      { currency: 'JPY', amount: '0' },
     ],
   });
 
@@ -751,10 +761,24 @@ describe('Cash page — balances row (API mode)', () => {
     expect(testid('cash-page-negative')).toBeNull();
   });
 
+  it('shows balances beyond double precision exactly and treats -0.00000001 as negative (Decimal, D-08)', async () => {
+    await mountApiCash(cashFetch(THREE_ENTRIES, {
+      summary: () => success(summaryDto({
+        cash: '9007199254740993',
+        cashBalances: [{ currency: 'TWD', amount: '9007199254740993' }, { currency: 'USD', amount: '-0.00000001' }],
+      })),
+    }));
+
+    const row = requireTestid('cash-page-balances');
+    expect(row.textContent).toContain('9,007,199,254,740,993');
+    expect(row.textContent).toContain('TWD 9,007,199,254,740,993.00');
+    expect(requireTestid('cash-page-negative').textContent).toContain(tf('zh', 'cashNegativeHint', { codes: 'USD' }));
+  });
+
   it('shows the missing-rate hint for cash currencies the backend could not convert', async () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
       summary: () => success(summaryDto({
-        cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'USD', amount: 50 }],
+        cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'USD', amount: '50' }],
         unconvertedCurrencies: ['USD'],
       })),
     }));
@@ -804,7 +828,7 @@ describe('Cash page — 入金 / 出金 buttons', () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
       summary: () => success(summaryDto({
         baseCurrency: 'EUR',
-        cashBalances: [{ currency: 'TWD', amount: 10 }, { currency: 'USD', amount: -5 }, { currency: 'JPY', amount: -9 }],
+        cashBalances: [{ currency: 'TWD', amount: '10' }, { currency: 'USD', amount: '-5' }, { currency: 'JPY', amount: '-9' }],
       })),
     }));
 
@@ -821,7 +845,7 @@ describe('Cash page — 入金 / 出金 buttons', () => {
 
   it('opens the withdrawal dialog on the base currency and passes the balances so an overdraw is flagged', async () => {
     await mountApiCash(cashFetch(THREE_ENTRIES, {
-      summary: () => success(summaryDto({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: 100 }] })),
+      summary: () => success(summaryDto({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: '100' }] })),
     }));
 
     await click(requireTestid('cash-page-withdraw'));

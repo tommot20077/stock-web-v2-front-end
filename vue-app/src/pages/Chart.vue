@@ -182,7 +182,7 @@ import { SYMBOLS, CRYPTO, FX, BONDS } from '../data';
 import { t } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import type { WatchlistDto } from '../services/watchlistApi';
+import type { WatchlistRecord } from '../services/watchlistApi';
 import WatchlistPicker, { WATCHLIST_PICKER_ID } from '../components/WatchlistPicker.vue';
 import type { Lang, Theme } from '../types';
 import { resolveTvWidgetTheme } from '../chartTvTheme';
@@ -193,7 +193,7 @@ defineEmits<{ order: [preset: { sym: string; side?: 'BUY' | 'SELL' }]; back: [] 
 
 // WATCH-03 / judgment §3:觀察清單只經 watchlist service(不 import mock store);頁級 ref 是 Watch 按鈕
 // 與選擇器的唯一狀態來源,選擇器寫入後以回應 DTO 回填(不樂觀更新)。行情與 LIVE pill 仍是示範資料(D-21)。
-const lists = ref<WatchlistDto[] | null>(null);
+const lists = ref<WatchlistRecord[] | null>(null);
 const listsLoading = ref(false);
 const listsError = ref<ApiClientError | null>(null);
 const pickerOpen = ref(false);
@@ -226,12 +226,12 @@ async function loadLists() {
   }
 }
 
-function onListChanged(updated: WatchlistDto) {
+function onListChanged(updated: WatchlistRecord) {
   listsSeq += 1;
   lists.value = (lists.value ?? []).map(list => (list.id === updated.id ? updated : list));
 }
 
-function onListCreated(created: WatchlistDto) {
+function onListCreated(created: WatchlistRecord) {
   listsSeq += 1;
   lists.value = [...(lists.value ?? []).filter(list => list.id !== created.id), created];
 }

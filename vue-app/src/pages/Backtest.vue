@@ -38,7 +38,7 @@
       </div>
       <div class="cfg-grp">
         <span class="lab">{{ lang === 'zh' ? '初始資金' : 'Initial' }}</span>
-        <input type="number" v-model.number="initial" class="inp" style="width:120px" min="1" required data-testid="backtest-initial" />
+        <input type="text" inputmode="decimal" v-model="initialText" class="inp" style="width:120px" required data-testid="backtest-initial" />
       </div>
       <button class="btn-ghost" @click="showEditor = !showEditor" :class="{ active: showEditor }">
         <span class="caret">{{ showEditor ? '▾' : '▸' }}</span>
@@ -198,7 +198,8 @@ import { t } from '../i18n';
 import StrategyEditor from '../components/StrategyEditor.vue';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { ApiClientError } from '../services/apiClient';
-import type { BacktestPeriod, BacktestRunDto, BacktestStrategyId } from '../services/apiTypes';
+import type { BacktestPeriod, BacktestRunRecord, BacktestStrategyId } from '../services/apiTypes';
+import { parseDecimal, parseDecimalInput, toChartNumber, ZERO } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
@@ -214,15 +215,18 @@ const runError = ref('');
 const strategy = ref('ma_cross');
 const sym = ref('AAPL');
 const period = ref('3Y');
-const initial = ref(100000);
-const latestRun = ref<BacktestRunDto | null>(null);
+const DEFAULT_INITIAL = '100000';
+// 初始資金以文字輸入、parseDecimalInput 解析成 Decimal 後送出(Phase 5 D-08);不經 JS number。
+const initialText = ref(DEFAULT_INITIAL);
+const latestRun = ref<BacktestRunRecord | null>(null);
 const running = ref(false);
-const history = ref<BacktestRunDto[]>([]);
+const history = ref<BacktestRunRecord[]>([]);
 
 interface ActiveRunConfig {
   strategy: string;
   sym: string;
   period: string;
+  /** 只給權益曲線軸標籤這類圖表顯示用(經 toChartNumber 的有損出口);送出的初始資金是 Decimal。 */
   initial: number;
   runNonce: number;
   customSeed: number;
@@ -252,12 +256,12 @@ function strategyLabel(strategyId: string) {
 
 const latestRunLabel = computed(() => latestRun.value ? strategyLabel(latestRun.value.strategyId) : '');
 
-function makeRunConfig(strategyId: string, symbol: string, runPeriod: string, capital: number, nonce: number, custom: number): ActiveRunConfig {
+function makeRunConfig(strategyId: string, symbol: string, runPeriod: string, chartCapital: number, nonce: number, custom: number): ActiveRunConfig {
   return {
     strategy: strategyId,
     sym: symbol,
     period: runPeriod,
-    initial: capital,
+    initial: chartCapital,
     runNonce: nonce,
     customSeed: custom,
     seed: computeSeed(strategyId, symbol, runPeriod, nonce, custom),
@@ -266,7 +270,7 @@ function makeRunConfig(strategyId: string, symbol: string, runPeriod: string, ca
 }
 
 const activeRunConfig = ref<ActiveRunConfig>(
-  makeRunConfig(strategy.value, sym.value, period.value, initial.value, runNonce.value, customSeed.value)
+  makeRunConfig(strategy.value, sym.value, period.value, toChartNumber(parseDecimal(DEFAULT_INITIAL)), runNonce.value, customSeed.value)
 );
 
 async function onRun(code: string) {
@@ -313,13 +317,15 @@ onMounted(() => { void loadHistory(); });
 
 async function run() {
   if (running.value) return;
-  if (!Number.isFinite(initial.value) || initial.value <= 0) {
+  const capital = parseDecimalInput(initialText.value);
+  if (capital === null || capital.lte(ZERO)) {
     runError.value = props.lang === 'zh' ? '初始資金必須大於 0' : 'Initial capital must be greater than 0';
     return;
   }
 
   const nextRunNonce = runNonce.value + 1;
-  const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, initial.value, nextRunNonce, customSeed.value);
+  // makeRunConfig 的 initial 只供圖表軸標籤(mock-only 顯示),故經 toChartNumber;請求帶的是 capital(Decimal)。
+  const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, toChartNumber(capital), nextRunNonce, customSeed.value);
   runError.value = '';
   strategyError.value = '';
   running.value = true;
@@ -329,7 +335,7 @@ async function run() {
       strategyCode: nextConfig.strategy === 'custom' ? customStrategyCode.value : null,
       symbol: nextConfig.sym,
       period: nextConfig.period as BacktestPeriod,
-      initialCapital: nextConfig.initial,
+      initialCapital: capital,
       currency: 'USD',
       benchmark: 'buy_hold',
       dataMode: 'cached',

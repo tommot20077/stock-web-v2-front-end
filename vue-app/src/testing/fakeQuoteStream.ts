@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import { ref, shallowRef } from 'vue';
+import { numberToWire, parseDecimal } from '../services/decimal';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import type { LiveTick, QuoteStream, QuoteStreamStatus } from '../services/quoteStream';
 
@@ -19,7 +20,11 @@ export interface FakeQuoteStream {
   /** 目前未釋放的 watch 集合 */
   activeSets: () => string[][];
   setStatus: (status: QuoteStreamStatus) => void;
-  /** 推一筆新 tick(每次都是新的 LiveTick 物件,useLiveQuotes 據此判斷「GET 之後的新 tick」) */
+  /**
+   * 推一筆新 tick(每次都是新的 LiveTick 物件,useLiveQuotes 據此判斷「GET 之後的新 tick」)。
+   * 價格參數維持 number 方便頁面測試撰寫,內部以 `numberToWire` → `parseDecimal` 轉成 Decimal
+   * (LiveTick.price 是 Decimal,Phase 5 D-08)。需要超過 number 精度的價格請直接操作 `stream.ticks`。
+   */
   pushTick: (symbol: string, price: number, receivedAt?: number) => void;
   /** 模擬 WELCOME:resyncSeq + 1 */
   bumpResync: () => void;
@@ -73,7 +78,7 @@ export function createFakeQuoteStream(initialStatus: QuoteStreamStatus = 'idle')
     },
     pushTick: (symbol, price, receivedAt = Date.now()) => {
       const next = new Map(ticks.value);
-      next.set(symbol, { symbol, price, time: new Date(receivedAt).toISOString(), receivedAt });
+      next.set(symbol, { symbol, price: parseDecimal(numberToWire(price)), time: new Date(receivedAt).toISOString(), receivedAt });
       ticks.value = next;
       lastDataAt.value = Math.max(lastDataAt.value ?? 0, receivedAt);
     },

@@ -1,15 +1,26 @@
 import { apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
-import { isMockHoldingEventTradeRow, listMockHoldingEvents } from './holdingEventApi';
+import { isMockHoldingEventTradeRow, listMockHoldingEvents, type MockHoldingEvent } from './holdingEventApi';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
+import { numberToWire, parseDecimal, parseNullableDecimal, toWire, type Decimal } from './decimal';
+import type { LastFill } from './portfolioRevision';
+import { toMockLastFill, toTradeRecord } from './tradingApi';
 import type {
+  AllocationSlice,
   AllocationSliceDto,
+  CashBalance,
+  CashBalanceDto,
+  Holding,
   HoldingDto,
   PaginatedResponse,
+  PortfolioActivity,
   PortfolioActivityDto,
+  PortfolioSummary,
   PortfolioSummaryDto,
   RuntimeDataMode,
+  SectorAllocation,
   SectorAllocationDto,
   TradeDto,
+  TradeRecord,
 } from './apiTypes';
 import type { Position, Trade } from '../types';
 
@@ -46,13 +57,19 @@ export type ActivityListParams = Omit<TradeListParams, 'type' | 'sort'> & {
 export interface PortfolioLiveMockData {
   readonly trades: Trade[];
   readonly positions: Position[];
-  readonly lastFill: { sym: string; type: 'BUY' | 'SELL'; qty: number; px: number } | null;
   /**
-   * 04.2-21:本 session 由 mock holdingEventApi 記錄的股利 / 股數調整(活動列形狀,依建立順序,回傳 clone)。
+   * 與 `tradingApi.ts` 的 `TradingLiveMockData.lastFill`、`portfolioRevision.ts` 的 `LastFill` 三處同形
+   * (Phase 5 D-08 起 `qty` / `px` 為 Decimal;getter 以 `toMockLastFill` 從 mock store 的 number 轉換)。
+   * 兩頁的 fresh 高亮只比 `sym`。
+   */
+  readonly lastFill: LastFill | null;
+  /**
+   * 04.2-21:本 session 由 mock holdingEventApi 記錄的股利 / 股數調整(活動列形狀,依建立順序,每次存取重新建立)。
+   * mock 事件列是 wire 形狀,getter 經 {@link toPortfolioActivity} 轉成 domain(金額為 Decimal,Phase 5 D-08)。
    * Trades mock 模式以此與靜態交易列合併(UI-SPEC §Interaction 0)。**不是** reactive:事件狀態在 adapter 模組內,
    * 頁面於 `portfolioRevision` 變動時重讀。
    */
-  readonly holdingEvents: PortfolioActivityDto[];
+  readonly holdingEvents: PortfolioActivity[];
   /** 04.2-21:這列 mock 交易是否由 mock 股利寫入 —— 該筆已由 {@link holdingEvents} 代表,靜態列表需排除以免出現兩次。 */
   isHoldingEventTrade(trade: Trade): boolean;
 }
@@ -67,11 +84,17 @@ export interface PortfolioLiveMockData {
  */
 export interface PortfolioApi {
   mode: RuntimeDataMode;
-  getSummary(): Promise<PortfolioSummaryDto>;
-  listHoldings(): Promise<HoldingDto[]>;
-  listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeDto>>;
-  /** 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。 */
-  listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivityDto>>;
+  /** portfolio summary 的 domain 形狀(金額為 Decimal);http 與 mock 都經 {@link toPortfolioSummary}。 */
+  getSummary(): Promise<PortfolioSummary>;
+  /** 持倉的 domain 形狀(股數 / 金額為 Decimal);http 與 mock 都經 {@link toHolding}。 */
+  listHoldings(): Promise<Holding[]>;
+  /** 手動交易分頁的 domain 形狀(數量 / 價格 / 手續費為 Decimal);http 與 mock 都經 `tradingApi.toTradeRecord`。 */
+  listTrades(params?: TradeListParams): Promise<PaginatedResponse<TradeRecord>>;
+  /**
+   * 交易、現金股利、股數調整的統一分頁列表(PORT-13);篩選與排序皆由後端處理。
+   * 回傳 domain 形狀(數量 / 價格 / 手續費 / 金額 / 預扣稅為 Decimal);http 與 mock 都經 {@link toPortfolioActivity}。
+   */
+  listActivities(params?: ActivityListParams): Promise<PaginatedResponse<PortfolioActivity>>;
   /** 僅 mock 實作提供(Q3 裁決)。 */
   live?: PortfolioLiveMockData;
 }
@@ -86,9 +109,109 @@ const DEFAULT_SIZE = 20;
  */
 const MOCK_CURRENCY = 'USD';
 
-/** 依產業分組,value 降冪(同值以產業名稱穩定排序,不含亂數);權重加總為 1。 */
+/** wire → domain:單一幣別現金餘額(Phase 5 D-08;http 與 mock 共用)。 */
+export function toCashBalance(wire: CashBalanceDto): CashBalance {
+  return { ...wire, amount: parseDecimal(wire.amount) };
+}
+
+/** wire → domain:資產類別配置的一塊。 */
+export function toAllocationSlice(wire: AllocationSliceDto): AllocationSlice {
+  return { ...wire, value: parseDecimal(wire.value), weight: parseDecimal(wire.weight) };
+}
+
+/** wire → domain:產業配置的一塊(`holdingCount` 仍是 number)。 */
+export function toSectorAllocation(wire: SectorAllocationDto): SectorAllocation {
+  return {
+    ...wire,
+    value: parseDecimal(wire.value),
+    weight: parseDecimal(wire.weight),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+  };
+}
+
+/**
+ * wire → domain 的唯一 summary mapper(http 與 mock adapter 共用,Phase 5 D-08)。
+ * 金額 / 比值欄位若仍是 JSON number,`parseDecimal` 會在這裡丟 TypeError(契約違反在邊界大聲失敗)。
+ */
+export function toPortfolioSummary(wire: PortfolioSummaryDto): PortfolioSummary {
+  return {
+    ...wire,
+    totalMarketValue: parseDecimal(wire.totalMarketValue),
+    totalCostBasis: parseDecimal(wire.totalCostBasis),
+    realizedPnl: parseDecimal(wire.realizedPnl),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+    totalPnl: parseDecimal(wire.totalPnl),
+    roi: parseDecimal(wire.roi),
+    dayPricePnl: parseNullableDecimal(wire.dayPricePnl),
+    dayPricePnlRatio: parseNullableDecimal(wire.dayPricePnlRatio),
+    cash: parseDecimal(wire.cash),
+    totalEquity: parseDecimal(wire.totalEquity),
+    dividendIncome: parseDecimal(wire.dividendIncome),
+    dividendTaxWithheld: parseDecimal(wire.dividendTaxWithheld),
+    // 舊形狀 / 快取的 summary 可能缺少 Phase 04.1 的清單欄位:視為空清單(頁面原本的容錯行為移到邊界)。
+    unconvertedCurrencies: [...(wire.unconvertedCurrencies ?? [])],
+    cashBalances: (wire.cashBalances ?? []).map(toCashBalance),
+    allocation: (wire.allocation ?? []).map(toAllocationSlice),
+    sectorAllocation: (wire.sectorAllocation ?? []).map(toSectorAllocation),
+  };
+}
+
+/**
+ * wire → domain 的唯一持倉 mapper(http 與 mock adapter 共用,Phase 5 D-08)。
+ * 必填金額欄位若仍是 JSON number(或缺漏),`parseDecimal` 在這裡丟 TypeError;nullable 欄位缺漏(舊形狀 / 快取)
+ * 視為 null,畫面依既有 null 分支顯示 `—`。
+ */
+export function toHolding(wire: HoldingDto): Holding {
+  return {
+    ...wire,
+    totalQuantity: parseDecimal(wire.totalQuantity),
+    avgCost: parseDecimal(wire.avgCost),
+    costBasis: parseDecimal(wire.costBasis),
+    marketPrice: parseDecimal(wire.marketPrice),
+    marketValue: parseDecimal(wire.marketValue),
+    realizedPnl: parseDecimal(wire.realizedPnl),
+    unrealizedPnl: parseDecimal(wire.unrealizedPnl),
+    roi: parseDecimal(wire.roi),
+    marketValueInBase: parseNullableDecimal(wire.marketValueInBase),
+    unrealizedPnlInBase: parseNullableDecimal(wire.unrealizedPnlInBase),
+    previousClose: parseNullableDecimal(wire.previousClose),
+    dayPricePnl: parseNullableDecimal(wire.dayPricePnl),
+    dayPricePnlRatio: parseNullableDecimal(wire.dayPricePnlRatio),
+    dayPnlBasis: parseNullableDecimal(wire.dayPnlBasis),
+  };
+}
+
+/**
+ * wire → domain 的唯一活動列 mapper(http 與 mock adapter 共用,Phase 5 D-08)。
+ * 五個金額欄位若仍是 JSON number,`parseNullableDecimal` 在這裡丟 TypeError;不適用的欄位(null)維持 null。
+ * `ratioNew` / `ratioOld` 是後端 Integer,原樣保留為 number。
+ */
+export function toPortfolioActivity(wire: PortfolioActivityDto): PortfolioActivity {
+  return {
+    ...wire,
+    quantity: parseNullableDecimal(wire.quantity),
+    price: parseNullableDecimal(wire.price),
+    fee: parseNullableDecimal(wire.fee),
+    amount: parseNullableDecimal(wire.amount),
+    withholdingTax: parseNullableDecimal(wire.withholdingTax),
+  };
+}
+
+/** mock 內部計算用(number);組 wire DTO 時才經 `numberToWire` 轉字串。 */
+interface MockSectorSlice {
+  sector: string;
+  value: number;
+  weight: number;
+  holdingCount: number;
+  unrealizedPnl: number;
+}
+
+/**
+ * 依產業分組,value 降冪(同值以產業名稱穩定排序,不含亂數);權重加總為 1。
+ * mock 宇宙的靜態資料是 number,計算後投影成 wire 字串,再與 http 走同一個 mapper。
+ */
 function sectorAllocationFrom(positions: Position[], totalMarketValue: number): SectorAllocationDto[] {
-  const bySector = new Map<string, SectorAllocationDto>();
+  const bySector = new Map<string, MockSectorSlice>();
   for (const position of positions) {
     const value = position.qty * position.price;
     const unrealizedPnl = value - position.qty * position.avg;
@@ -105,9 +228,18 @@ function sectorAllocationFrom(positions: Position[], totalMarketValue: number): 
   for (const slice of slices) {
     slice.weight = totalMarketValue === 0 ? 0 : slice.value / totalMarketValue;
   }
-  return slices.sort((a, b) => b.value - a.value || String(a.sector).localeCompare(String(b.sector)));
+  return slices
+    .sort((a, b) => b.value - a.value || String(a.sector).localeCompare(String(b.sector)))
+    .map(slice => ({
+      sector: slice.sector,
+      value: numberToWire(slice.value),
+      weight: numberToWire(slice.weight),
+      holdingCount: slice.holdingCount,
+      unrealizedPnl: numberToWire(slice.unrealizedPnl),
+    }));
 }
 
+/** mock 持倉 → summary wire DTO(與後端同形;金額欄位以 `numberToWire` 轉字串)。 */
 function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   const totalMarketValue = positions.reduce((sum, p) => sum + p.qty * p.price, 0);
   const totalCostBasis = positions.reduce((sum, p) => sum + p.qty * p.avg, 0);
@@ -116,12 +248,12 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
   const realizedPnl = 0;
   const totalPnl = realizedPnl + unrealizedPnl;
   return {
-    totalMarketValue,
-    totalCostBasis,
-    realizedPnl,
-    unrealizedPnl,
-    totalPnl,
-    roi: totalCostBasis === 0 ? 0 : totalPnl / totalCostBasis,
+    totalMarketValue: numberToWire(totalMarketValue),
+    totalCostBasis: numberToWire(totalCostBasis),
+    realizedPnl: numberToWire(realizedPnl),
+    unrealizedPnl: numberToWire(unrealizedPnl),
+    totalPnl: numberToWire(totalPnl),
+    roi: numberToWire(totalCostBasis === 0 ? 0 : totalPnl / totalCostBasis),
     holdingCount: positions.length,
     baseCurrency: MOCK_CURRENCY,
     fxExcludedCount: 0,
@@ -131,19 +263,23 @@ function summaryFrom(positions: Position[]): PortfolioSummaryDto {
     dayPricePnlRatio: null,
     dayPnlExcludedCount: positions.length,
     // mock 沒有現金帳本。
-    cash: 0,
-    totalEquity: totalMarketValue,
+    cash: numberToWire(0),
+    totalEquity: numberToWire(totalMarketValue),
     cashBalances: [],
     // mock KPI 是寫死值、不隨 mock 股利變動;股利收入附加列在 mock 不渲染(UI-SPEC §Interaction 0)。
-    dividendIncome: 0,
-    dividendTaxWithheld: 0,
+    dividendIncome: numberToWire(0),
+    dividendTaxWithheld: numberToWire(0),
     allocation: positions.length === 0
       ? []
-      : ([{ category: 'STOCK', value: totalMarketValue, weight: 1 }] satisfies AllocationSliceDto[]),
+      : ([{ category: 'STOCK', value: numberToWire(totalMarketValue), weight: numberToWire(1) }] satisfies AllocationSliceDto[]),
     sectorAllocation: sectorAllocationFrom(positions, totalMarketValue),
   };
 }
 
+/**
+ * mock 持倉 → holding wire DTO(與後端同形)。mock 宇宙的靜態資料是 number,先以 number 計算,
+ * 再經 `numberToWire` 投影成 wire 字串,最後與 http 走同一個 {@link toHolding}。
+ */
 function holdingFrom(position: Position): HoldingDto {
   const costBasis = position.qty * position.avg;
   const marketValue = position.qty * position.price;
@@ -152,14 +288,14 @@ function holdingFrom(position: Position): HoldingDto {
     assetId: `mock-asset-${position.sym}`,
     symbol: position.sym,
     assetName: position.name,
-    totalQuantity: position.qty,
-    avgCost: position.avg,
-    costBasis,
-    marketPrice: position.price,
-    marketValue,
-    realizedPnl: 0,
-    unrealizedPnl,
-    roi: costBasis === 0 ? 0 : unrealizedPnl / costBasis,
+    totalQuantity: numberToWire(position.qty),
+    avgCost: numberToWire(position.avg),
+    costBasis: numberToWire(costBasis),
+    marketPrice: numberToWire(position.price),
+    marketValue: numberToWire(marketValue),
+    realizedPnl: numberToWire(0),
+    unrealizedPnl: numberToWire(unrealizedPnl),
+    roi: numberToWire(costBasis === 0 ? 0 : unrealizedPnl / costBasis),
     priceTime: null,
     lastUpdated: null,
     currency: MOCK_CURRENCY,
@@ -168,15 +304,18 @@ function holdingFrom(position: Position): HoldingDto {
     sector: position.sector,
     market: position.market ?? null,
     baseCurrency: MOCK_CURRENCY,
-    marketValueInBase: marketValue,
+    marketValueInBase: numberToWire(marketValue),
     // mock 單一幣別(原幣 = 基準幣),基準幣未實現損益即原幣值,與 marketValueInBase 同做法。
-    unrealizedPnlInBase: unrealizedPnl,
+    unrealizedPnlInBase: numberToWire(unrealizedPnl),
+    // mock 沒有前收盤:今日損益相關欄位皆為 null。
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
+    dayPnlBasis: null,
   };
 }
 
+/** mock store 的交易(number)→ wire `TradeDto`(金額以 `numberToWire` 轉字串),之後與 http 同走 `toTradeRecord`。 */
 function tradeDtoFrom(trade: Trade, index: number): TradeDto {
   return {
     // store trade 沒有 id;用陣列索引組穩定合成值,頁面才有可用的 :key。
@@ -185,9 +324,9 @@ function tradeDtoFrom(trade: Trade, index: number): TradeDto {
     // mock 專屬的 DIV 型別原樣通過(後端契約只有 BUY/SELL,頁面在 mock mode
     // 不經 listTrades 消費 —— mock mode 走 live.trades)。
     type: trade.type as TradeDto['type'],
-    quantity: trade.qty,
-    price: trade.px,
-    fee: trade.fee,
+    quantity: numberToWire(trade.qty),
+    price: numberToWire(trade.px),
+    fee: numberToWire(trade.fee),
     note: trade.note,
     // mock `Trade` 沒有幣別,不猜測(UI-SPEC U-29);mock 畫面不讀此欄位。
     currency: null,
@@ -196,14 +335,15 @@ function tradeDtoFrom(trade: Trade, index: number): TradeDto {
   };
 }
 
-function sortValue(trade: TradeDto, sort: NonNullable<TradeListParams['sort']>): number {
-  if (sort === 'quantity') return trade.quantity;
+/** 兩筆交易依 `sort` 欄位比較(升冪);數量與總額以 Decimal `cmp` 比較。 */
+function compareTrades(a: TradeRecord, b: TradeRecord, sort: NonNullable<TradeListParams['sort']>): number {
+  if (sort === 'quantity') return a.quantity.cmp(b.quantity);
   // total = quantity × price(與後端 D-06 定義一致,不含 fee)
-  if (sort === 'total') return trade.quantity * trade.price;
-  return Date.parse(trade.executedAt);
+  if (sort === 'total') return a.quantity.times(a.price).cmp(b.quantity.times(b.price));
+  return Date.parse(a.executedAt) - Date.parse(b.executedAt);
 }
 
-function applyTradeParams(trades: TradeDto[], params: TradeListParams): TradeDto[] {
+function applyTradeParams(trades: TradeRecord[], params: TradeListParams): TradeRecord[] {
   const from = params.dateFrom ? Date.parse(params.dateFrom) : null;
   const to = params.dateTo ? Date.parse(params.dateTo) : null;
   const filtered = trades.filter(trade => {
@@ -218,16 +358,19 @@ function applyTradeParams(trades: TradeDto[], params: TradeListParams): TradeDto
 
   const sort = params.sort ?? 'executedAt';
   const factor = (params.direction ?? 'desc') === 'asc' ? 1 : -1;
-  return filtered.sort((a, b) => (sortValue(a, sort) - sortValue(b, sort)) * factor);
+  return filtered.sort((a, b) => compareTrades(a, b, sort) * factor);
 }
 
 /**
- * mock 交易 → 活動列。靜態 `DIV` 示範列沒有可沖銷的 id,`reversible` 恆 false(UI-SPEC §Interaction 0:
+ * mock 交易 → 活動列 wire 形狀(金額以 `numberToWire` 轉字串),之後與 http 同走 {@link toPortfolioActivity}。
+ * 靜態 `DIV` 示範列沒有可沖銷的 id,`reversible` 恆 false(UI-SPEC §Interaction 0:
  * 不顯示比顯示了卻 no-op 誠實)。mock `Trade` 沒有幣別,不猜測(U-29)。
  */
 function activityFromTrade(trade: Trade, index: number): PortfolioActivityDto {
   const occurredAt = `${trade.d}T00:00:00Z`;
   const isDividend = trade.type === 'DIV';
+  const quantity = numberToWire(trade.qty);
+  const price = numberToWire(trade.px);
   return {
     id: `mock-${index}`,
     kind: trade.type === 'DIV' ? 'CASH_DIVIDEND' : trade.type,
@@ -236,12 +379,12 @@ function activityFromTrade(trade: Trade, index: number): PortfolioActivityDto {
     occurredAt,
     effectiveDate: null,
     createdAt: occurredAt,
-    quantity: isDividend ? null : trade.qty,
-    price: isDividend ? null : trade.px,
-    fee: isDividend ? null : trade.fee,
-    // 交易 = quantity × price(不含 fee);靜態 DIV 列的「每股股利 × 股數」即實領總額。
-    amount: trade.qty * trade.px,
-    withholdingTax: isDividend ? 0 : null,
+    quantity: isDividend ? null : quantity,
+    price: isDividend ? null : price,
+    fee: isDividend ? null : numberToWire(trade.fee),
+    // 交易 = quantity × price(不含 fee);靜態 DIV 列的「每股股利 × 股數」即實領總額。以 Decimal 相乘,不經 JS 浮點。
+    amount: toWire(parseDecimal(quantity).times(parseDecimal(price))),
+    withholdingTax: isDividend ? '0' : null,
     ratioNew: null,
     ratioOld: null,
     note: trade.note,
@@ -260,15 +403,29 @@ const ACTIVITY_KINDS_BY_TYPE: Record<NonNullable<ActivityListParams['type']>, Po
   SHARE_ADJUSTMENT: ['STOCK_DIVIDEND', 'SPLIT'],
 };
 
-function activitySortValue(activity: PortfolioActivityDto, sort: NonNullable<ActivityListParams['sort']>): number | null {
-  if (sort === 'quantity') return activity.quantity;
-  if (sort === 'total') return activity.amount;
-  if (sort === 'createdAt') return Date.parse(activity.createdAt);
-  return Date.parse(activity.occurredAt);
+/** NULLS LAST(不受升降冪影響);兩邊都有值時以 `compare` 比較後乘上方向。 */
+function compareNullsLast<T>(left: T | null, right: T | null, compare: (l: T, r: T) => number, factor: number): number {
+  if (left === null || right === null) return left === right ? 0 : left === null ? 1 : -1;
+  return compare(left, right) * factor;
+}
+
+const compareDecimal = (left: Decimal, right: Decimal): number => left.cmp(right);
+
+/** 兩筆活動列依 `sort` 欄位比較;數量與總額以 Decimal `cmp` 比較(不經 JS number)。 */
+function compareActivities(
+  a: PortfolioActivity,
+  b: PortfolioActivity,
+  sort: NonNullable<ActivityListParams['sort']>,
+  factor: number,
+): number {
+  if (sort === 'quantity') return compareNullsLast(a.quantity, b.quantity, compareDecimal, factor);
+  if (sort === 'total') return compareNullsLast(a.amount, b.amount, compareDecimal, factor);
+  const field = sort === 'createdAt' ? 'createdAt' : 'occurredAt';
+  return (Date.parse(a[field]) - Date.parse(b[field])) * factor;
 }
 
 /** 與後端同義:篩選 type / symbol / 半開區間 [dateFrom, dateTo)(作用於 occurredAt);排序欄位 NULLS LAST。 */
-function applyActivityParams(activities: PortfolioActivityDto[], params: ActivityListParams): PortfolioActivityDto[] {
+function applyActivityParams(activities: PortfolioActivity[], params: ActivityListParams): PortfolioActivity[] {
   const from = params.dateFrom ? Date.parse(params.dateFrom) : null;
   const to = params.dateTo ? Date.parse(params.dateTo) : null;
   const kinds = params.type ? ACTIVITY_KINDS_BY_TYPE[params.type] : null;
@@ -283,12 +440,12 @@ function applyActivityParams(activities: PortfolioActivityDto[], params: Activit
 
   const sort = params.sort ?? 'executedAt';
   const factor = (params.direction ?? 'desc') === 'asc' ? 1 : -1;
-  return filtered.sort((a, b) => {
-    const left = activitySortValue(a, sort);
-    const right = activitySortValue(b, sort);
-    if (left === null || right === null) return left === right ? 0 : left === null ? 1 : -1;
-    return (left - right) * factor;
-  });
+  return filtered.sort((a, b) => compareActivities(a, b, sort, factor));
+}
+
+/** mock 事件列(wire 形狀,少 `price` / `fee`)→ domain;兩欄對股利與股數調整恆為 null。 */
+function mockEventActivity(event: MockHoldingEvent): PortfolioActivity {
+  return toPortfolioActivity({ ...event, price: null, fee: null });
 }
 
 export function createMockPortfolioApi(): PortfolioApi {
@@ -302,10 +459,10 @@ export function createMockPortfolioApi(): PortfolioApi {
       return useMockPortfolioStore().positions;
     },
     get lastFill() {
-      return useMockPortfolioStore().lastFill;
+      return toMockLastFill(useMockPortfolioStore().lastFill);
     },
     get holdingEvents() {
-      return listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
+      return listMockHoldingEvents().map(mockEventActivity);
     },
     isHoldingEventTrade(trade) {
       return isMockHoldingEventTradeRow(trade);
@@ -316,13 +473,13 @@ export function createMockPortfolioApi(): PortfolioApi {
     mode: 'mock',
     live,
     async getSummary() {
-      return summaryFrom(useMockPortfolioStore().positions);
+      return toPortfolioSummary(summaryFrom(useMockPortfolioStore().positions));
     },
     async listHoldings() {
-      return useMockPortfolioStore().positions.map(holdingFrom);
+      return useMockPortfolioStore().positions.map(position => toHolding(holdingFrom(position)));
     },
     async listTrades(params = {}) {
-      const all = useMockPortfolioStore().trades.map(tradeDtoFrom);
+      const all = useMockPortfolioStore().trades.map((trade, index) => toTradeRecord(tradeDtoFrom(trade, index)));
       const matched = applyTradeParams(all, params);
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;
@@ -340,18 +497,19 @@ export function createMockPortfolioApi(): PortfolioApi {
       const fromTrades = store.trades
         .map((trade, index) => ({ trade, index }))
         .filter(({ trade }) => !isMockHoldingEventTradeRow(trade))
-        .map(({ trade, index }) => activityFromTrade(trade, index));
-      const fromEvents = listMockHoldingEvents().map(event => ({ ...event, price: null, fee: null }));
+        .map(({ trade, index }) => toPortfolioActivity(activityFromTrade(trade, index)));
+      const fromEvents = listMockHoldingEvents().map(mockEventActivity);
       const matched = applyActivityParams([...fromTrades, ...fromEvents], params);
       const page = params.page ?? DEFAULT_PAGE;
       const size = params.size ?? DEFAULT_SIZE;
-      return structuredClone({
+      // 每次呼叫都由 mapper 建立新物件,呼叫端修改不會回灌 mock 狀態;不用 structuredClone(會丟掉 big.js 的 prototype)。
+      return {
         items: matched.slice(page * size, page * size + size),
         page,
         size,
         totalElements: matched.length,
         totalPages: Math.ceil(matched.length / size),
-      });
+      };
     },
   };
 }
@@ -359,32 +517,38 @@ export function createMockPortfolioApi(): PortfolioApi {
 export function createHttpPortfolioApi(basePath = '/api/v1'): PortfolioApi {
   return {
     mode: 'api',
-    getSummary: () => apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`),
-    listHoldings: () => apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`),
-    listTrades: params => apiPaginatedRequest<TradeDto>(
-      `${basePath}/trades${buildQueryString({
-        symbol: params?.symbol,
-        type: params?.type,
-        dateFrom: params?.dateFrom,
-        dateTo: params?.dateTo,
-        sort: params?.sort,
-        direction: params?.direction,
-        page: params?.page ?? DEFAULT_PAGE,
-        size: params?.size ?? DEFAULT_SIZE,
-      })}`,
-    ),
-    listActivities: params => apiPaginatedRequest<PortfolioActivityDto>(
-      `${basePath}/portfolio/activities${buildQueryString({
-        symbol: params?.symbol,
-        type: params?.type,
-        dateFrom: params?.dateFrom,
-        dateTo: params?.dateTo,
-        sort: params?.sort,
-        direction: params?.direction,
-        page: params?.page ?? DEFAULT_PAGE,
-        size: params?.size ?? DEFAULT_SIZE,
-      })}`,
-    ),
+    getSummary: async () => toPortfolioSummary(await apiRequest<PortfolioSummaryDto>(`${basePath}/portfolio/summary`)),
+    listHoldings: async () => (await apiRequest<HoldingDto[]>(`${basePath}/portfolio/holdings`)).map(toHolding),
+    listTrades: async params => {
+      const page = await apiPaginatedRequest<TradeDto>(
+        `${basePath}/trades${buildQueryString({
+          symbol: params?.symbol,
+          type: params?.type,
+          dateFrom: params?.dateFrom,
+          dateTo: params?.dateTo,
+          sort: params?.sort,
+          direction: params?.direction,
+          page: params?.page ?? DEFAULT_PAGE,
+          size: params?.size ?? DEFAULT_SIZE,
+        })}`,
+      );
+      return { ...page, items: page.items.map(toTradeRecord) };
+    },
+    listActivities: async params => {
+      const page = await apiPaginatedRequest<PortfolioActivityDto>(
+        `${basePath}/portfolio/activities${buildQueryString({
+          symbol: params?.symbol,
+          type: params?.type,
+          dateFrom: params?.dateFrom,
+          dateTo: params?.dateTo,
+          sort: params?.sort,
+          direction: params?.direction,
+          page: params?.page ?? DEFAULT_PAGE,
+          size: params?.size ?? DEFAULT_SIZE,
+        })}`,
+      );
+      return { ...page, items: page.items.map(toPortfolioActivity) };
+    },
   };
 }
 

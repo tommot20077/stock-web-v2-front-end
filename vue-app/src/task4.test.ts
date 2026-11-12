@@ -248,13 +248,13 @@ describe('Task 4 trade flow', () => {
     mountOrderTicketWithState(state);
 
     await openTicket(state, { sym: 'AAPL' });
-    const qtyInput = [...document.body.querySelectorAll<HTMLInputElement>('input[type="number"]')][0];
+    const qtyInput = document.body.querySelector<HTMLInputElement>('[data-testid="ticket-qty"]')!;
     await setInput(qtyInput, '77');
     expect(qtyInput.value).toBe('77');
 
     await closeTicket(state);
     await openTicket(state, { sym: 'MSFT' });
-    const reopenedQtyInput = [...document.body.querySelectorAll<HTMLInputElement>('input[type="number"]')][0];
+    const reopenedQtyInput = document.body.querySelector<HTMLInputElement>('[data-testid="ticket-qty"]')!;
 
     expect(reopenedQtyInput.value).toBe('10');
   });
@@ -364,7 +364,7 @@ describe('Task 4 trade flow', () => {
     portfolio.positions = customPositions();
     await openTicket(state, { sym: 'AAPL', side: 'SELL' });
 
-    const qtyInput = [...document.body.querySelectorAll<HTMLInputElement>('input[type="number"]')][0];
+    const qtyInput = document.body.querySelector<HTMLInputElement>('[data-testid="ticket-qty"]')!;
     await setInput(qtyInput, '121');
 
     expect(buttonByText(document.body, 'Review').disabled).toBe(true);

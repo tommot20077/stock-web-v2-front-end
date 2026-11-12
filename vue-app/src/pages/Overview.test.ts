@@ -7,6 +7,8 @@ import overviewSource from './Overview.vue?raw';
 import { t, tf } from '../i18n';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtWeightPct } from '../moneyFormat';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
+import { parseDecimal } from '../services/decimal';
+import { toTradeRecord } from '../services/tradingApi';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   bumpPortfolioRevision,
@@ -29,38 +31,38 @@ import type { WatchlistDto } from '../services/watchlistApi';
 // 四態與 traceId 見 D-11 / D-12,全域 banner 邊界見 D-13。mock mode 必須與 Phase 3 之前完全一致。
 
 const SUMMARY: PortfolioSummaryDto = {
-  totalMarketValue: 1234567.89,
-  totalCostBasis: 1098765.43,
-  realizedPnl: 12345.67,
-  unrealizedPnl: 123456.79,
-  totalPnl: 135802.46,
-  roi: 0.1234,
+  totalMarketValue: '1234567.89',
+  totalCostBasis: '1098765.43',
+  realizedPnl: '12345.67',
+  unrealizedPnl: '123456.79',
+  totalPnl: '135802.46',
+  roi: '0.1234',
   holdingCount: 3,
   // Phase 04.1 欄位:值刻意不等於 mock 值(+$12,481 / $84,210 / 約 1,000,000),
   // 「資料來自 API 而非 mock」的斷言才有意義(T-04.1-55)。
   baseCurrency: 'TWD',
   fxExcludedCount: 0,
   unconvertedCurrencies: [],
-  dayPricePnl: 12345,
-  dayPricePnlRatio: 0.0104,
+  dayPricePnl: '12345',
+  dayPricePnlRatio: '0.0104',
   dayPnlExcludedCount: 0,
-  cash: 84210.5,
-  totalEquity: 7654321,
-  cashBalances: [{ currency: 'TWD', amount: 84210.5 }],
-  allocation: [{ category: 'STOCK', value: 1234567.89, weight: 1 }],
-  sectorAllocation: [{ sector: 'Tech', value: 1234567.89, weight: 1, holdingCount: 1, unrealizedPnl: 123456.79 }],
+  cash: '84210.5',
+  totalEquity: '7654321',
+  cashBalances: [{ currency: 'TWD', amount: '84210.5' }],
+  allocation: [{ category: 'STOCK', value: '1234567.89', weight: '1' }],
+  sectorAllocation: [{ sector: 'Tech', value: '1234567.89', weight: '1', holdingCount: 1, unrealizedPnl: '123456.79' }],
   // Phase 04.2 欄位(04.2-16 只補型別)
-  dividendIncome: 0,
-  dividendTaxWithheld: 0,
+  dividendIncome: '0',
+  dividendTaxWithheld: '0',
 };
 
 // 刻意用 mock 種子資料裡不存在的代號,才能證明畫面上的交易來自 API 而非 mock store。
 const API_TRADES: TradeDto[] = [
-  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: 10, price: 11.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
-  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: 20, price: 12.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
-  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: 30, price: 13.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
-  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: 40, price: 14.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
-  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: 50, price: 15.5, fee: 1, note: null, currency: 'TWD', executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
+  { id: 'tr-1', symbol: 'ZZA', type: 'BUY', quantity: '10', price: '11.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-05T09:30:00Z', createdAt: '2026-06-05T09:30:00Z' },
+  { id: 'tr-2', symbol: 'ZZB', type: 'SELL', quantity: '20', price: '12.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-04T09:30:00Z', createdAt: '2026-06-04T09:30:00Z' },
+  { id: 'tr-3', symbol: 'ZZC', type: 'BUY', quantity: '30', price: '13.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-03T09:30:00Z', createdAt: '2026-06-03T09:30:00Z' },
+  { id: 'tr-4', symbol: 'ZZD', type: 'SELL', quantity: '40', price: '14.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-02T09:30:00Z', createdAt: '2026-06-02T09:30:00Z' },
+  { id: 'tr-5', symbol: 'ZZE', type: 'BUY', quantity: '50', price: '15.5', fee: '1', note: null, currency: 'TWD', executedAt: '2026-06-01T09:30:00Z', createdAt: '2026-06-01T09:30:00Z' },
 ];
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -96,7 +98,7 @@ type Handler = () => Response | Promise<Response>;
 
 /** 04.2-24:API mode 的觀察清單卡讀 GET /watchlists;未覆寫時回一個兩檔的預設清單。 */
 const DEFAULT_WATCHLISTS: WatchlistDto[] = [
-  { id: 'wl-default', name: 'My list', items: [assetDto('ZWA', { latestPrice: 12.5 }), assetDto('ZWB', { latestPrice: 34.5 })] },
+  { id: 'wl-default', name: 'My list', items: [assetDto('ZWA', { latestPrice: '12.5' }), assetDto('ZWB', { latestPrice: '34.5' })] },
 ];
 
 function routedFetch(handlers: {
@@ -229,7 +231,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     expect(ratio, 'ratio row').toBeTruthy();
     expect(ratio!.textContent).toContain('↗');
     expect(ratio!.textContent).toContain('+1.04%');
-    expect(ratio!.textContent).toContain(fmtRatioPct(SUMMARY.dayPricePnlRatio)!);
+    expect(ratio!.textContent).toContain(fmtRatioPct(parseDecimal(SUMMARY.dayPricePnlRatio!))!);
     expect(ratio!.querySelector('[aria-hidden="true"]')?.textContent).toBe('↗');
     expect(ratio!.getAttribute('style')).toContain('var(--up-text)');
     // 數值本身維持 --fg(不上色)
@@ -247,12 +249,35 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
 
     // 卡 4:總報酬率 = roi × 100(D-04 允許的格式化縮放),副標為帶號總損益 + 代碼
     expect(totalReturn.textContent).toContain(t('en', 'totalReturn'));
-    expect(kpiValue(totalReturn)).toBe(fmtRatioPct(SUMMARY.roi));
+    expect(kpiValue(totalReturn)).toBe(fmtRatioPct(parseDecimal(SUMMARY.roi)));
     expect(kpiValue(totalReturn)).toBe('+12.34%');
     expect(totalReturn.textContent).toContain(t('en', 'totalPnlLabel'));
-    expect(totalReturn.textContent).toContain(fmtSignedMoney(SUMMARY.totalPnl, 'TWD', 0));
+    expect(totalReturn.textContent).toContain(fmtSignedMoney(parseDecimal(SUMMARY.totalPnl), 'TWD', 0));
     expect(totalReturn.textContent).toContain('+135,802');
     expect(totalReturn.textContent).not.toContain(t('en', 'annualized'));
+  });
+
+  it('KPI 與資產配置以 Decimal 呈現超過 double 精度的金額(Phase 5 D-08)', async () => {
+    // 9007199254740993 經 JS number 會變成 ...992;顯示必須是後端原值。
+    const fetchMock = routedFetch({
+      summary: () => success(summaryWith({
+        totalEquity: '9007199254740993',
+        cash: '0.00000000',
+        dayPricePnl: '-0.4',
+        allocation: [{ category: 'STOCK', value: '9007199254740993', weight: '1.00000000' }],
+      })),
+      trades: () => tradePage(API_TRADES),
+    });
+    await mountApiOverview(fetchMock);
+
+    const [totalAssets, dayPnl, cash] = allTestids('overview-kpi');
+    expect(kpiValue(totalAssets)).toBe('9,007,199,254,740,993');
+    expect(kpiValue(cash)).toBe('0');
+    // HALF_UP 到 0 位:-0.4 → -0(帶號規則同 moneyFormat 對 number 的處理)
+    expect(kpiValue(dayPnl)).toBe(fmtSignedMoney(parseDecimal('-0.4'), 'TWD', 0).replace(/\s*TWD$/, ''));
+    const row = allTestids('overview-allocation-row')[0];
+    expect(row.textContent).toContain('9,007,199,254,740,993');
+    expect(row.textContent).toContain('100.0%');
   });
 
   it('基準幣代碼來自 summary.baseCurrency,不寫死 TWD', async () => {
@@ -314,7 +339,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     });
 
     it('真實為零:0 TWD,無號、無箭頭、無比率列,與 null 的 — 不同', async () => {
-      const card = await mountWith({ dayPricePnl: 0, dayPricePnlRatio: null, dayPnlExcludedCount: 0 });
+      const card = await mountWith({ dayPricePnl: '0', dayPricePnlRatio: null, dayPnlExcludedCount: 0 });
       expect(kpiValue(card)).toBe('0');
       expect(kpiCcy(card)).toBe('TWD');
       expect(kpiValue(card)).not.toContain('+');
@@ -326,7 +351,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
     });
 
     it('負值:- 號、↘、dn 色,數值本身不上色', async () => {
-      const card = await mountWith({ dayPricePnl: -3200, dayPricePnlRatio: -0.0215 });
+      const card = await mountWith({ dayPricePnl: '-3200', dayPricePnlRatio: '-0.0215' });
       expect(kpiValue(card)).toBe('-3,200');
       const ratio = requireTestid('overview-kpi-day-pnl-ratio');
       expect(ratio.textContent).toContain('↘');
@@ -338,7 +363,7 @@ describe('Overview — API mode(D-09 / D-11 / D-12 / D-13 / D-14 / D-16)', () =>
 
   it('總報酬率為負時副標帶 - 號並用 dn 色', async () => {
     const fetchMock = routedFetch({
-      summary: () => success(summaryWith({ roi: -0.05, totalPnl: -50000 })),
+      summary: () => success(summaryWith({ roi: '-0.05', totalPnl: '-50000' })),
       trades: () => tradePage(API_TRADES),
     });
     await mountApiOverview(fetchMock);
@@ -622,7 +647,7 @@ function deferred<T>() {
 }
 
 const REFRESHED_TRADES: TradeDto[] = [
-  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null, currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
+  { id: 'tr-new', symbol: 'ZNEW', type: 'BUY', quantity: '1', price: '2', fee: '0', note: null, currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z' },
 ];
 
 describe('Overview — post-trade refetch(04-12 / D-10 / D-12 / U-05 / U-06)', () => {
@@ -1052,9 +1077,9 @@ describe('Overview — 基準幣工具列(D-03,API mode)', () => {
 
 describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () => {
   const MIXED = [
-    { currency: 'USD', amount: -1200 },
-    { currency: 'TWD', amount: 50000 },
-    { currency: 'JPY', amount: 0 },
+    { currency: 'USD', amount: '-1200' },
+    { currency: 'TWD', amount: '50000' },
+    { currency: 'JPY', amount: '0' },
   ];
 
   async function mountCash(overrides: Partial<PortfolioSummaryDto>, props: Record<string, unknown> = {}) {
@@ -1077,20 +1102,20 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
 
   it('JPY 餘額 0 位小數、EUR 排在 USD 之後', async () => {
     const { card } = await mountCash({
-      cashBalances: [{ currency: 'JPY', amount: 1500 }, { currency: 'EUR', amount: 10.5 }, { currency: 'USD', amount: 3 }],
+      cashBalances: [{ currency: 'JPY', amount: '1500' }, { currency: 'EUR', amount: '10.5' }, { currency: 'USD', amount: '3' }],
     });
     expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')!.textContent?.trim())
       .toBe('USD 3.00 · EUR 10.50 · JPY 1,500');
   });
 
   it('全為 0:不渲染各幣別餘額列', async () => {
-    const { card } = await mountCash({ cashBalances: [{ currency: 'TWD', amount: 0 }, { currency: 'USD', amount: 0 }] });
+    const { card } = await mountCash({ cashBalances: [{ currency: 'TWD', amount: '0' }, { currency: 'USD', amount: '0' }] });
     expect(card.querySelector('[data-testid="overview-kpi-cash-balances"]')).toBeNull();
     expect(card.querySelector('[data-testid="overview-kpi-cash-negative"]')).toBeNull();
   });
 
   it('任一幣別為負:顯示「USD cash is negative…」,⚠ aria-hidden,數值不變紅;總額為正仍提示', async () => {
-    const { card } = await mountCash({ cash: 84210.5, cashBalances: MIXED });
+    const { card } = await mountCash({ cash: '84210.5', cashBalances: MIXED });
     const negative = requireTestid('overview-kpi-cash-negative');
     expect(negative.textContent).toContain(tf('en', 'cashNegativeHint', { codes: 'USD' }));
     expect(negative.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚠');
@@ -1101,7 +1126,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('多個負值幣別以 ", " 連接(zh 為「、」)', async () => {
-    const cashBalances = [{ currency: 'USD', amount: -5 }, { currency: 'TWD', amount: -9 }];
+    const cashBalances = [{ currency: 'USD', amount: '-5' }, { currency: 'TWD', amount: '-9' }];
     const en = await mountCash({ cashBalances });
     expect(requireTestid('overview-kpi-cash-negative').textContent)
       .toContain(tf('en', 'cashNegativeHint', { codes: 'TWD, USD' }));
@@ -1114,14 +1139,14 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('總額為負(已折算)也顯示帶 - 號的數值,不夾成 0', async () => {
-    const { card } = await mountCash({ cash: -1200, cashBalances: [{ currency: 'USD', amount: -1200 }] });
+    const { card } = await mountCash({ cash: '-1200', cashBalances: [{ currency: 'USD', amount: '-1200' }] });
     expect(kpiValue(card)).toBe('-1,200');
   });
 
   it('現金幣別缺匯率:顯示 cashFxExcludedHint;該幣別餘額為 0 時不提示', async () => {
     const { card } = await mountCash({
       unconvertedCurrencies: ['EUR'],
-      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 20 }],
+      cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'EUR', amount: '20' }],
     });
     expect(card.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')!.textContent)
       .toContain(tf('en', 'cashFxExcludedHint', { codes: 'EUR', base: 'TWD' }));
@@ -1129,7 +1154,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
 
     const { card: other } = await mountCash({
       unconvertedCurrencies: ['EUR'],
-      cashBalances: [{ currency: 'TWD', amount: 100 }, { currency: 'EUR', amount: 0 }],
+      cashBalances: [{ currency: 'TWD', amount: '100' }, { currency: 'EUR', amount: '0' }],
     });
     expect(other.querySelector('[data-testid="overview-kpi-cash-fx-excluded"]')).toBeNull();
   });
@@ -1145,7 +1170,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('入金鈕:沒有負值幣別時預設基準幣', async () => {
-    await mountCash({ baseCurrency: 'EUR', cashBalances: [{ currency: 'TWD', amount: 10 }] });
+    await mountCash({ baseCurrency: 'EUR', cashBalances: [{ currency: 'TWD', amount: '10' }] });
     click(button('overview-cash-deposit'));
     await flushAsync();
 
@@ -1153,7 +1178,7 @@ describe('Overview — 可用現金卡(D-07 / D-08 / D-11 / D-29,API mode)', () 
   });
 
   it('出金鈕:預設類型 WITHDRAWAL、幣別為基準幣,並把 cashBalances 傳給對話框(超額提示)', async () => {
-    await mountCash({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: 100 }, { currency: 'TWD', amount: -50 }] });
+    await mountCash({ baseCurrency: 'USD', cashBalances: [{ currency: 'USD', amount: '100' }, { currency: 'TWD', amount: '-50' }] });
     click(button('overview-cash-withdraw'));
     await flushAsync();
 
@@ -1221,7 +1246,7 @@ describe('Overview — mock mode 的可用現金卡(鐵律 6:不得有無效果�
 
 describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () => {
   const TRADE_FOR_NOTIFY: TradeDto = {
-    id: 'tr-n', symbol: 'ZNEW', type: 'BUY', quantity: 1, price: 2, fee: 0, note: null,
+    id: 'tr-n', symbol: 'ZNEW', type: 'BUY', quantity: '1', price: '2', fee: '0', note: null,
     currency: 'TWD', executedAt: '2026-06-06T09:30:00Z', createdAt: '2026-06-06T09:30:00Z',
   };
 
@@ -1241,7 +1266,7 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
   }
 
   it('交易 → portfolioStaleAfterTrade', async () => {
-    const text = await staleTextAfter(() => notifyTradeCreated(TRADE_FOR_NOTIFY));
+    const text = await staleTextAfter(() => notifyTradeCreated(toTradeRecord(TRADE_FOR_NOTIFY)));
     expect(text).toContain(t('en', 'portfolioStaleAfterTrade'));
     expect(text).not.toContain(t('en', 'portfolioStaleAfterCashEntry'));
     expect(text).not.toContain(t('en', 'portfolioStaleAfterBaseCurrency'));
@@ -1290,9 +1315,9 @@ describe('Overview — 重讀失敗文案依觸發來源(U-09 / T-04.1-56)', () 
 // =====================================================================================
 
 const ALLOCATION = [
-  { category: 'CASH', value: 35164, weight: 0.35164 },
-  { category: 'CRYPTO', value: 32418, weight: 0.32418 },
-  { category: 'STOCK', value: 32418, weight: 0.32418 },
+  { category: 'CASH', value: '35164', weight: '0.35164' },
+  { category: 'CRYPTO', value: '32418', weight: '0.32418' },
+  { category: 'STOCK', value: '32418', weight: '0.32418' },
 ];
 
 function allocationCard(): HTMLElement {
@@ -1315,7 +1340,7 @@ async function mountAllocation(overrides: Partial<PortfolioSummaryDto>) {
 
 describe('Overview — 資產配置(D-18,API mode)', () => {
   it('以 summary.allocation 渲染:ul / li 三列,每列可讀出類別、金額、權重', async () => {
-    await mountAllocation({ baseCurrency: 'TWD', cash: 35164, allocation: ALLOCATION });
+    await mountAllocation({ baseCurrency: 'TWD', cash: '35164', allocation: ALLOCATION });
 
     const card = allocationCard();
     expect(card.textContent).toContain(t('en', 'allocation'));
@@ -1349,7 +1374,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('金額帶 summary.baseCurrency,不寫死 TWD', async () => {
-    await mountAllocation({ baseCurrency: 'JPY', allocation: [{ category: 'STOCK', value: 1500000, weight: 1 }] });
+    await mountAllocation({ baseCurrency: 'JPY', allocation: [{ category: 'STOCK', value: '1500000', weight: '1' }] });
     const row = requireTestid('overview-allocation-row');
     expect(plain(row.textContent)).toBe('Stocks 1,500,000 JPY 100.0%');
   });
@@ -1361,7 +1386,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
     ['BOND', 'Bonds', '#f59e0b'],
     ['CASH', 'Cash', '#94a3b8'],
   ])('已知類別 %s → 標籤 %s、色 %s', async (category, label, color) => {
-    await mountAllocation({ allocation: [{ category, value: 100, weight: 1 }] });
+    await mountAllocation({ allocation: [{ category, value: '100', weight: '1' }] });
     const row = requireTestid('overview-allocation-row');
     expect(plain(row.textContent)).toContain(label);
     expect(row.querySelector('.alloc-swatch')!.getAttribute('data-color')).toBe(color);
@@ -1369,7 +1394,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
 
   it('未知類別(WARRANT):標籤 assetTypeOther、色 --fg-dim,不崩潰也不外露原始字串', async () => {
     await mountAllocation({
-      allocation: [{ category: 'WARRANT', value: 500, weight: 0.5 }, { category: 'STOCK', value: 500, weight: 0.5 }],
+      allocation: [{ category: 'WARRANT', value: '500', weight: '0.5' }, { category: 'STOCK', value: '500', weight: '0.5' }],
     });
     const rows = allTestids('overview-allocation-row');
     expect(rows).toHaveLength(2);
@@ -1379,7 +1404,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('只有一類:donut 單色環 + legend 一列', async () => {
-    await mountAllocation({ allocation: [{ category: 'STOCK', value: 100, weight: 1 }] });
+    await mountAllocation({ allocation: [{ category: 'STOCK', value: '100', weight: '1' }] });
     expect(allTestids('overview-allocation-row')).toHaveLength(1);
     expect(allocationCard().querySelectorAll('svg circle').length).toBe(2); // 軌道 + 一段
   });
@@ -1400,9 +1425,9 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
 
   it('cash < 0:legend 下方顯示 allocationNegativeCash', async () => {
     await mountAllocation({
-      cash: -1200,
-      cashBalances: [{ currency: 'TWD', amount: -1200 }],
-      allocation: [{ category: 'STOCK', value: 100, weight: 1 }],
+      cash: '-1200',
+      cashBalances: [{ currency: 'TWD', amount: '-1200' }],
+      allocation: [{ category: 'STOCK', value: '100', weight: '1' }],
     });
     expect(requireTestid('overview-allocation-negative-cash').textContent)
       .toContain(t('en', 'allocationNegativeCash'));
@@ -1410,7 +1435,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
   });
 
   it('cash < 0 且 allocation 為空:兩個提示都在', async () => {
-    await mountAllocation({ cash: -5, allocation: [] });
+    await mountAllocation({ cash: '-5', allocation: [] });
     expect(testid('overview-allocation-empty')).not.toBeNull();
     expect(testid('overview-allocation-negative-cash')).not.toBeNull();
   });
@@ -1441,7 +1466,7 @@ describe('Overview — 資產配置(D-18,API mode)', () => {
     await mountApiOverview(fetchMock);
     expect(allTestids('overview-allocation-row')).toHaveLength(3);
 
-    allocation = [{ category: 'STOCK', value: 1, weight: 1 }];
+    allocation = [{ category: 'STOCK', value: '1', weight: '1' }];
     bumpPortfolioRevision('trade');
     await flushAsync();
     expect(allTestids('overview-allocation-row')).toHaveLength(1);
@@ -1480,9 +1505,9 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
 
   it('標的後一個 overview-trade-ccy-tag = trade.currency;價格 / 總額為裸數字,整列無 $', async () => {
     const rows = await mountTrades([
-      trade({ id: 'a', symbol: 'ZZA', currency: 'USD', quantity: 10, price: 12.5 }),
-      trade({ id: 'b', symbol: 'ZZB', currency: 'JPY', quantity: 3, price: 150 }),
-      trade({ id: 'c', symbol: 'ZZC', currency: 'TWD', quantity: 10, price: 11.5 }),
+      trade({ id: 'a', symbol: 'ZZA', currency: 'USD', quantity: '10', price: '12.5' }),
+      trade({ id: 'b', symbol: 'ZZB', currency: 'JPY', quantity: '3', price: '150' }),
+      trade({ id: 'c', symbol: 'ZZC', currency: 'TWD', quantity: '10', price: '11.5' }),
     ]);
 
     expect(rows).toHaveLength(3);
@@ -1505,7 +1530,7 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
   });
 
   it('currency 缺值:不渲染標籤、金額仍顯示裸數字,不出現 $ 或 undefined / null', async () => {
-    const rows = await mountTrades([trade({ id: 'n', symbol: 'ZZN', currency: null, quantity: 3, price: 100 })]);
+    const rows = await mountTrades([trade({ id: 'n', symbol: 'ZZN', currency: null, quantity: '3', price: '100' })]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].querySelector('[data-testid="overview-trade-ccy-tag"]')).toBeNull();
@@ -1515,6 +1540,29 @@ describe('Overview — 近期交易的幣別(D-28,API mode)', () => {
     expect(rows[0].textContent).not.toContain('$');
     expect(rows[0].textContent).not.toContain('undefined');
     expect(rows[0].textContent).not.toContain('null');
+  });
+
+  it('05-19(D-08):近期交易以 TradeRecord 顯示 —— 尾零正規化、8 位小數股數原值、總額在 Decimal 內相乘', async () => {
+    const rows = await mountTrades([
+      // 後端 setScale(8) 的尾零:渲染文字與改字串前的 number 相同(10 / 12.50 / 125)。
+      trade({ id: 'z', symbol: 'ZZA', currency: 'USD', quantity: '10.00000000', price: '12.50000000', fee: '0E-8' }),
+      trade({ id: 'f', symbol: 'ZZF', currency: 'USD', quantity: '0.12345678', price: '100' }),
+      // 9007199254740993 超過 double 的精確整數範圍(number 會變成 …992)。
+      trade({ id: 'b', symbol: 'ZZB', currency: 'TWD', quantity: '9007199254740993', price: '1' }),
+    ]);
+
+    const cells = rows.map(row => [...row.querySelectorAll('td')].map(td => td.textContent?.trim()));
+    expect(cells[0].slice(3)).toEqual(['10', '12.50', '125']);
+    expect(cells[1].slice(3)).toEqual(['0.12345678', '100.00', '12']);
+    expect(cells[2][3]).toBe('9007199254740993');
+    expect(cells[2][5]).toBe('9,007,199,254,740,993');
+  });
+
+  it('05-19:近期交易的頁面原始碼不對金額用算術運算子,也不 import wire TradeDto', () => {
+    const tbody = overviewSource.slice(overviewSource.indexOf('<tbody v-else'), overviewSource.indexOf('</tbody>', overviewSource.indexOf('<tbody v-else')));
+    expect(tbody).not.toMatch(/tr\.quantity \* tr\.price/);
+    expect(tbody).toContain('tr.quantity.times(tr.price)');
+    expect(overviewSource).not.toMatch(/^import .*\bTradeDto\b/m);
   });
 
   it('API tbody 的原始碼不再有 `${{`(不寫死 $)', () => {
@@ -1590,14 +1638,14 @@ describe('Overview — 格線重排(U-27)', () => {
 // =====================================================================================
 
 const WL_ITEMS = [
-  assetDto('AAPL', { name: 'Apple Inc.', latestPrice: 215.75, change: 2.65, changePercent: 1.24 }),
-  assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', latestPrice: 67000, change: 100, changePercent: 0.15 }),
-  assetDto('USD/TWD', { name: 'USD/TWD', assetType: 'FX', market: 'FX', currency: 'TWD', latestPrice: 32.1, change: 0.05, changePercent: 0.16 }),
-  assetDto('MSFT', { latestPrice: 410 }),
-  assetDto('NVDA', { latestPrice: 120 }),
-  assetDto('TSLA', { latestPrice: 250, change: -5, changePercent: -1.96 }),
-  assetDto('GOOG', { latestPrice: 170 }),
-  assetDto('AMZN', { latestPrice: 185 }),
+  assetDto('AAPL', { name: 'Apple Inc.', latestPrice: '215.75', change: '2.65', changePercent: '1.24' }),
+  assetDto('BTC', { name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', latestPrice: '67000', change: '100', changePercent: '0.15' }),
+  assetDto('USD/TWD', { name: 'USD/TWD', assetType: 'FX', market: 'FX', currency: 'TWD', latestPrice: '32.1', change: '0.05', changePercent: '0.16' }),
+  assetDto('MSFT', { latestPrice: '410' }),
+  assetDto('NVDA', { latestPrice: '120' }),
+  assetDto('TSLA', { latestPrice: '250', change: '-5', changePercent: '-1.96' }),
+  assetDto('GOOG', { latestPrice: '170' }),
+  assetDto('AMZN', { latestPrice: '185' }),
 ];
 
 function wlLists(items = WL_ITEMS): WatchlistDto[] {
@@ -1699,6 +1747,42 @@ describe('Overview — 觀察清單卡(D-26,API mode)', () => {
     expect(wlCard().querySelector('.live-dot.solid')).toBeNull();
   });
 
+  it('05-22(D-08):觀察清單卡以 Decimal 顯示 —— 大額不失真、tick 疊加的漲跌幅以 Decimal HALF_UP 計算、缺價顯示 —', async () => {
+    const items = [
+      assetDto('AAPL', { latestPrice: '100', change: '2', changePercent: '2.04' }),
+      assetDto('BIG', { latestPrice: '9007199254740993.005', change: '-0.00000001', changePercent: '-0.00000001' }),
+      assetDto('US10Y', { assetType: 'BOND', market: 'US', tradeable: false, latestPrice: '4.2185', change: '0.0125', changePercent: null }),
+      assetDto('NOPX', { latestPrice: null, change: null, changePercent: null }),
+    ];
+    await mountApiOverview(wlFetch(() => success(wlLists(items))));
+
+    expect(wlRow('BIG').querySelector('.wl-price')?.textContent?.trim()).toBe('9,007,199,254,740,993.01');
+    // 捨入後為 0.00,正負與色彩依未捨入的原值(同 Phase 5 前的 number 版)
+    expect(wlRow('BIG').querySelector('.wl-chg')?.textContent?.trim()).toBe('-0.00%');
+    expect(wlRow('BIG').querySelector('.wl-chg')?.classList.contains('dn')).toBe(true);
+    expect(wlRow('US10Y').querySelector('.wl-price')?.textContent?.trim()).toBe('4.219');
+    expect(wlRow('US10Y').querySelector('.wl-chg')?.textContent?.trim()).toBe('+0.013');
+    expect(wlRow('US10Y').querySelector('.wl-chg')?.classList.contains('up')).toBe(true);
+    expect(wlRow('NOPX').querySelector('.wl-price')?.textContent?.trim()).toBe('—');
+    expect(wlRow('NOPX').querySelector('.wl-chg')?.textContent?.trim()).toBe('—');
+    expect(wlRow('NOPX').querySelector('.wl-chg')?.classList.contains('na')).toBe(true);
+
+    // tick 103(前收 98):change 5、pct 5 × 100 ÷ 98 = 5.102… → 5.10
+    quotes.setStatus('live');
+    quotes.pushTick('AAPL', 103);
+    await flushAsync(1);
+    expect(wlRow('AAPL').getAttribute('data-quote-source')).toBe('ws');
+    expect(wlRow('AAPL').querySelector('.wl-price')?.textContent).toContain('103.00');
+    expect(wlRow('AAPL').querySelector('.wl-chg')?.textContent?.trim()).toBe('+5.10%');
+    expect(wlRow('AAPL').querySelector('.wl-chg')?.classList.contains('up')).toBe(true);
+  });
+
+  it('05-22:觀察清單卡只用 domain 型別,顯示函式不對報價做 Number() / 算術', () => {
+    expect(overviewSource).not.toMatch(/^import .*\b(AssetDto|WatchlistDto)\b/m);
+    const fns = overviewSource.slice(overviewSource.indexOf('function wlFixed'), overviewSource.indexOf('function wlChangeTone'));
+    expect(fns).not.toMatch(/Math\.abs|toLocaleString|Number\(/);
+  });
+
   it('replaced:卡片內狀態列提供「在此分頁重新連線」→ quotes.reconnect() 一次', async () => {
     await mountApiOverview(wlFetch(() => success(wlLists())));
     quotes.setStatus('replaced');
@@ -1764,7 +1848,7 @@ describe('Overview — 觀察清單卡(D-26,API mode)', () => {
     expect(wlRows()).toHaveLength(6);
 
     const refreshed = wlLists();
-    refreshed[0].items = [{ ...WL_ITEMS[0], latestPrice: 220.5 }, ...WL_ITEMS.slice(1)];
+    refreshed[0].items = [{ ...WL_ITEMS[0], latestPrice: '220.5' }, ...WL_ITEMS.slice(1)];
     second.resolve(success(refreshed));
     await flushAsync();
     expect(wlRow('AAPL').querySelector('.wl-price')?.textContent?.trim()).toBe('220.50');
@@ -1827,7 +1911,7 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   }
 
   it('dividendIncome 3840 + 預扣稅 960 → dividendIncomeLineWithTax,位在總報酬率卡、總損益副標之後', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, baseCurrency: 'TWD' });
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '960', baseCurrency: 'TWD' });
 
     const line = requireTestid('overview-kpi-dividend-income');
     expect(line.textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
@@ -1844,13 +1928,13 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   });
 
   it('預扣稅 0 → dividendIncomeLine(不列稅)', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 0, baseCurrency: 'USD' });
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '0', baseCurrency: 'USD' });
     expect(requireTestid('overview-kpi-dividend-income').textContent?.trim())
       .toBe(tf('en', 'dividendIncomeLine', { amount: fmtSignedMoney(3840, 'USD', 0) }));
   });
 
   it('股利收入 0 但有預扣稅 → 仍渲染(只有兩者皆 0 才不渲染)', async () => {
-    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 960 });
+    await mountDividend({ dividendIncome: '0', dividendTaxWithheld: '960' });
     expect(requireTestid('overview-kpi-dividend-income').textContent?.trim()).toBe(tf('en', 'dividendIncomeLineWithTax', {
       amount: fmtSignedMoney(0, 'TWD', 0),
       tax: fmtMoney(960, 'TWD', 0),
@@ -1858,13 +1942,13 @@ describe('Overview — KPI #4 股利收入附加列(DIV-02,API mode)', () => {
   });
 
   it('兩者皆 0 → 不渲染', async () => {
-    await mountDividend({ dividendIncome: 0, dividendTaxWithheld: 0 });
+    await mountDividend({ dividendIncome: '0', dividendTaxWithheld: '0' });
     expect(allTestids('overview-kpi')).toHaveLength(4);
     expect(testid('overview-kpi-dividend-income')).toBeNull();
   });
 
   it('今日損益說明 = dayPnlNote(不含匯差與股利);總報酬率顯示後端 roi、不重算不加註', async () => {
-    await mountDividend({ dividendIncome: 3840, dividendTaxWithheld: 960, roi: 0.1567 }, 'zh');
+    await mountDividend({ dividendIncome: '3840', dividendTaxWithheld: '960', roi: '0.1567' }, 'zh');
     const note = requireTestid('overview-kpi-day-pnl-note');
     expect(note.textContent?.trim()).toBe(t('zh', 'dayPnlNote'));
     expect(note.textContent).toContain('不含匯差與股利');

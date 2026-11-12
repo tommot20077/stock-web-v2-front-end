@@ -5,7 +5,10 @@ import {
   createHttpMarketApi,
   createMarketApi,
   createMockMarketApi,
+  toAsset,
 } from './marketApi';
+import { SYMBOLS } from '../data';
+import { isDecimal, numberToWire, toWire } from './decimal';
 import type { AssetDto } from './apiTypes';
 
 /**
@@ -14,16 +17,15 @@ import type { AssetDto } from './apiTypes';
  * 1. **分頁**:`GET /api/v1/assets` 回 `ApiResponse<PageResponse<AssetDto>>`
  *    (`AssetController.java:24`),必須走 `apiPaginatedRequest`。誤用 `apiRequest`
  *    會拿到整包 PageResponse 當 data —— 執行時才炸,`vue-tsc` 不會紅。
- * 2. **string → number**:`KlineDto` 的 OHLCV 在 JSON 裡是**字串**
- *    (`KlineDto.java:25-29` 掛 `@JsonSerialize(using = ToStringSerializer.class)`),
- *    與 `AssetDto` 的 BigDecimal(JSON number)相反。fixture 必須用帶引號的字串,
- *    寫成 number 這些測試就失去意義。
+ * 2. **字串契約**:`KlineDto` 的 OHLCV 與 `AssetDto` 的報價欄(Phase 5 D-05)在 JSON 裡都是**字串**。
+ *    K 線只經 `closeSeries` 轉 number(圖表出口);`AssetDto` 經 `toAsset` 轉 Decimal(D-08)。
+ *    fixture 必須用帶引號的字串,寫成 number 這些測試就失去意義。
  *
  * fixture 為手寫,**不宣稱**與真實 payload 逐位元一致(那屬 Phase 5 / VER-03);
  * 每個 fixture 都標註後端 `file:line` 出處以降低漂移(`04-VALIDATION.md` 要求)。
  */
 
-/** 逐欄對應 `AssetDto.java:9-24`。價格是 JSON **number**(後端 BigDecimal 未掛 ToStringSerializer)。 */
+/** 逐欄對應 `AssetDto.java`。報價是 JSON **字串**(後端 BigDecimal 掛 `@DecimalString`,Phase 5 D-05)。 */
 const ASSET_FIXTURE: AssetDto = {
   uuid: '11111111-2222-3333-4444-555555555555',
   symbol: 'AAPL',
@@ -33,12 +35,12 @@ const ASSET_FIXTURE: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 218.4,
-  change: 1.42,
-  changePercent: 0.66,
+  latestPrice: '218.4',
+  change: '1.42',
+  changePercent: '0.66',
   volumeText: '52.1M',
-  high: 219.1,
-  low: 215.8,
+  high: '219.1',
+  low: '215.8',
 };
 
 /**
@@ -98,7 +100,9 @@ describe('marketApi http adapter — searchAssets', () => {
     const page = await createHttpMarketApi('/api/v1').searchAssets({ query: 'AAP', page: 0, size: 10 });
 
     expect(Array.isArray(page.items)).toBe(true);
-    expect(page.items).toEqual([ASSET_FIXTURE]);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({ uuid: ASSET_FIXTURE.uuid, symbol: 'AAPL', volumeText: '52.1M', tradeable: true });
+    expect(toWire(page.items[0].latestPrice!)).toBe('218.4');
     expect(page.totalElements).toBe(37);
     expect(page).toMatchObject({ page: 0, size: 10, totalPages: 4 });
   });
@@ -128,6 +132,74 @@ describe('marketApi http adapter — searchAssets', () => {
 
     const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
     expect(init.signal).toBe(controller.signal);
+  });
+});
+
+describe('marketApi — AssetDto 字串契約 → Asset(05-22 / D-05 / D-08)', () => {
+  it('toAsset:五個報價欄字串 → Decimal,null 維持 null,其餘欄位原樣', () => {
+    const asset = toAsset({
+      ...ASSET_FIXTURE,
+      latestPrice: '187.45000000',
+      change: null,
+      changePercent: '-0.00000001',
+      high: '123456789012.12345678',
+      low: null,
+    });
+
+    expect(isDecimal(asset.latestPrice)).toBe(true);
+    // big.js 正規化尾零:數值相等、字面去尾零(LEARNINGS 2026-11-11)。
+    expect(toWire(asset.latestPrice!)).toBe('187.45');
+    expect(asset.change).toBeNull();
+    expect(toWire(asset.changePercent!)).toBe('-0.00000001');
+    expect(toWire(asset.high!)).toBe('123456789012.12345678');
+    expect(asset.low).toBeNull();
+    expect(asset).toMatchObject({ uuid: ASSET_FIXTURE.uuid, symbol: 'AAPL', volumeText: '52.1M', sector: 'Tech' });
+  });
+
+  it('http searchAssets:items 經 toAsset,保留完整精度', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(pagedAssets([
+      { ...ASSET_FIXTURE, latestPrice: '9007199254740993.01', change: null, high: null, low: null },
+    ]))));
+
+    const page = await createHttpMarketApi('/api/v1').searchAssets({ query: 'AAP' });
+
+    expect(toWire(page.items[0].latestPrice!)).toBe('9007199254740993.01');
+    expect(page.items[0].change).toBeNull();
+    expect(toWire(page.items[0].changePercent!)).toBe('0.66');
+  });
+
+  it.each(['latestPrice', 'change', 'changePercent', 'high', 'low'] as const)(
+    'wire 的 %s 為 JSON number → 丟 TypeError(T-05-36)',
+    async field => {
+      const wire = { ...ASSET_FIXTURE, [field]: 1.5 } as unknown as AssetDto;
+      expect(() => toAsset(wire)).toThrow(TypeError);
+
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(pagedAssets([wire]))));
+      await expect(createHttpMarketApi('/api/v1').searchAssets({ query: 'AAP' })).rejects.toThrow(TypeError);
+    },
+  );
+
+  it('mock searchAssets:回 domain,價格等於 data.ts 值(以 toWire 比較)', async () => {
+    const page = await createMockMarketApi().searchAssets({ query: 'aapl' });
+    const source = SYMBOLS.find(symbol => symbol.sym === 'AAPL')!;
+    const [asset] = page.items;
+
+    expect(isDecimal(asset.latestPrice)).toBe(true);
+    expect(toWire(asset.latestPrice!)).toBe(numberToWire(source.price));
+    expect(toWire(asset.change!)).toBe(numberToWire(source.chg));
+    expect(toWire(asset.changePercent!)).toBe(numberToWire(source.chgPct));
+    expect(toWire(asset.high!)).toBe(numberToWire(source.high));
+    expect(toWire(asset.low!)).toBe(numberToWire(source.low));
+  });
+
+  it('mock searchAssets:每次回新物件,呼叫端改動不影響下一次結果', async () => {
+    const api = createMockMarketApi();
+    const first = await api.searchAssets({ query: 'aapl' });
+    const expected = toWire(first.items[0].latestPrice!);
+    first.items[0].latestPrice = null;
+
+    const second = await api.searchAssets({ query: 'aapl' });
+    expect(toWire(second.items[0].latestPrice!)).toBe(expected);
   });
 });
 
@@ -212,7 +284,7 @@ describe('marketApi http adapter — listKlines', () => {
 });
 
 describe('marketApi mock adapter', () => {
-  it('returns AssetDto-shaped items without touching the network', async () => {
+  it('returns domain Asset items without touching the network', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
 

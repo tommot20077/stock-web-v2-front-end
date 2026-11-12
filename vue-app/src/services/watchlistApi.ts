@@ -1,7 +1,9 @@
 import { ApiClientError, apiRequest } from './apiClient';
 import { BONDS, CRYPTO, FX, SYMBOLS } from '../data';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
-import type { AssetDto, RuntimeDataMode } from './apiTypes';
+import { numberToWire } from './decimal';
+import { toAsset } from './marketApi';
+import type { Asset, AssetDto, RuntimeDataMode } from './apiTypes';
 import type { Bond, Symbol as MockSymbol } from '../types';
 
 /** 每位使用者的清單上限(watchlist-contract〈上限與併發保證〉)。 */
@@ -10,8 +12,8 @@ export const WATCHLIST_MAX_LISTS = 20;
 export const WATCHLIST_MAX_ITEMS = 100;
 
 /**
- * 後端 `WatchlistDto`,逐欄同形(04.2-02 凍結契約 `ai-docs/watchlist-contract.md`)。
- * `items` 依 `position` 排序,每列與 `GET /api/v1/assets` 的 `AssetDto` 逐欄同形。
+ * 後端 `WatchlistDto`(wire),逐欄同形(04.2-02 凍結契約 `ai-docs/watchlist-contract.md`)。
+ * `items` 依 `position` 排序,每列與 `GET /api/v1/assets` 的 `AssetDto` 逐欄同形(報價欄為字串,Phase 5 D-05)。
  */
 export interface WatchlistDto {
   id: string;
@@ -20,18 +22,33 @@ export interface WatchlistDto {
 }
 
 /**
+ * domain:一份觀察清單(由 {@link toWatchlistRecord} 產生),`items` 為 domain {@link Asset}(報價欄 Decimal)。
+ * 名稱加 `Record` 後綴以免與 `src/types.ts` 的 mock 型別 `Watchlist` 撞名(05-16 規約)。
+ */
+export interface WatchlistRecord {
+  id: string;
+  name: string;
+  items: Asset[];
+}
+
+/** wire `WatchlistDto` → domain {@link WatchlistRecord};items 逐列經 `marketApi.toAsset`(http 與 mock 共用)。 */
+export function toWatchlistRecord(wire: WatchlistDto): WatchlistRecord {
+  return { id: wire.id, name: wire.name, items: wire.items.map(toAsset) };
+}
+
+/**
  * watchlist domain 的唯一消費介面。Markets / Chart / Watchlist 頁永遠只經此介面
- * (judgment §3:元件不 import mock store)。
+ * (judgment §3:元件不 import mock store)。所有方法回 domain {@link WatchlistRecord}。
  */
 export interface WatchlistApi {
   mode: RuntimeDataMode;
-  list(): Promise<WatchlistDto[]>;
-  create(name: string): Promise<WatchlistDto>;
-  rename(id: string, name: string): Promise<WatchlistDto>;
+  list(): Promise<WatchlistRecord[]>;
+  create(name: string): Promise<WatchlistRecord>;
+  rename(id: string, name: string): Promise<WatchlistRecord>;
   remove(id: string): Promise<void>;
-  addItem(id: string, symbol: string): Promise<WatchlistDto>;
-  removeItem(id: string, assetId: string): Promise<WatchlistDto>;
-  reorder(id: string, assetIds: string[]): Promise<WatchlistDto>;
+  addItem(id: string, symbol: string): Promise<WatchlistRecord>;
+  removeItem(id: string, assetId: string): Promise<WatchlistRecord>;
+  reorder(id: string, assetIds: string[]): Promise<WatchlistRecord>;
 }
 
 /**
@@ -44,22 +61,28 @@ export function createHttpWatchlistApi(basePath = '/api/v1'): WatchlistApi {
   const listPath = (id: string) => `${basePath}/watchlists/${encodeURIComponent(id)}`;
   return {
     mode: 'api',
-    list: () => apiRequest<WatchlistDto[]>(`${basePath}/watchlists`),
-    create: name => apiRequest<WatchlistDto>(`${basePath}/watchlists`, { method: 'POST', json: { name } }),
-    rename: (id, name) => apiRequest<WatchlistDto>(listPath(id), { method: 'PATCH', json: { name } }),
+    list: async () => (await apiRequest<WatchlistDto[]>(`${basePath}/watchlists`)).map(toWatchlistRecord),
+    create: async name => toWatchlistRecord(
+      await apiRequest<WatchlistDto>(`${basePath}/watchlists`, { method: 'POST', json: { name } }),
+    ),
+    rename: async (id, name) => toWatchlistRecord(
+      await apiRequest<WatchlistDto>(listPath(id), { method: 'PATCH', json: { name } }),
+    ),
     // 後端回 `ApiResponse<Void>`(data 為 null);對外契約是 void,不把 null 漏給呼叫端。
     remove: async id => {
       await apiRequest<null>(listPath(id), { method: 'DELETE' });
     },
-    addItem: (id, symbol) => apiRequest<WatchlistDto>(`${listPath(id)}/items`, { method: 'POST', json: { symbol } }),
-    removeItem: (id, assetId) => apiRequest<WatchlistDto>(
+    addItem: async (id, symbol) => toWatchlistRecord(
+      await apiRequest<WatchlistDto>(`${listPath(id)}/items`, { method: 'POST', json: { symbol } }),
+    ),
+    removeItem: async (id, assetId) => toWatchlistRecord(await apiRequest<WatchlistDto>(
       `${listPath(id)}/items/${encodeURIComponent(assetId)}`,
       { method: 'DELETE' },
-    ),
-    reorder: (id, assetIds) => apiRequest<WatchlistDto>(
+    )),
+    reorder: async (id, assetIds) => toWatchlistRecord(await apiRequest<WatchlistDto>(
       `${listPath(id)}/items/order`,
       { method: 'PUT', json: { assetIds: [...assetIds] } },
-    ),
+    )),
   };
 }
 
@@ -80,7 +103,8 @@ function mockCurrencyOf(symbol: MockSymbol): string {
 }
 
 /**
- * `data.ts` 的報價列投影成 `AssetDto` 形狀(逐欄同形,watchlist-contract〈WatchlistDto〉)。
+ * `data.ts` 的報價列投影成 wire `AssetDto` 形狀(逐欄同形,watchlist-contract〈WatchlistDto〉);報價 number 以
+ * `numberToWire` 轉字串,之後與 http 同走 `toWatchlistRecord` / `toAsset`。
  *
  * - STOCK / CRYPTO 可交易;FX 不可交易(契約:觀察清單可含不可交易資產,前端據此隱藏下單入口)。
  * - `volumeText` 取示範值;FX 的示範值是 `—`(無量),依契約輸出 null 讓畫面自己畫「—」。
@@ -95,12 +119,12 @@ function assetDtoFromSymbol(symbol: MockSymbol): AssetDto {
     currency: mockCurrencyOf(symbol),
     sector: symbol.sector ?? null,
     tradeable: symbol.cat !== 'fx',
-    latestPrice: symbol.price,
-    change: symbol.chg,
-    changePercent: symbol.chgPct,
+    latestPrice: numberToWire(symbol.price),
+    change: numberToWire(symbol.chg),
+    changePercent: numberToWire(symbol.chgPct),
     volumeText: symbol.vol === '—' ? null : symbol.vol,
-    high: symbol.high,
-    low: symbol.low,
+    high: numberToWire(symbol.high),
+    low: numberToWire(symbol.low),
   };
 }
 
@@ -118,8 +142,8 @@ function assetDtoFromBond(bond: Bond): AssetDto {
     currency: BOND_CURRENCY[bond.country] ?? 'USD',
     sector: null,
     tradeable: false,
-    latestPrice: bond.yld,
-    change: bond.chg,
+    latestPrice: numberToWire(bond.yld),
+    change: numberToWire(bond.chg),
     changePercent: null,
     volumeText: null,
     high: null,
@@ -158,8 +182,9 @@ function assetDtoForStored(symbol: string): AssetDto {
   };
 }
 
-function toDto(list: { id: string; name: string; syms: string[] }): WatchlistDto {
-  return { id: list.id, name: list.name, items: list.syms.map(assetDtoForStored) };
+/** store 清單 → wire → domain;每次都建立新物件(不 structuredClone:會丟掉 big.js prototype)。 */
+function toRecord(list: { id: string; name: string; syms: string[] }): WatchlistRecord {
+  return toWatchlistRecord({ id: list.id, name: list.name, items: list.syms.map(assetDtoForStored) });
 }
 
 /** 契約〈上限與併發保證〉:預設清單名稱與清單名稱長度。 */
@@ -219,7 +244,7 @@ export function createMockWatchlistApi(): WatchlistApi {
     async list() {
       const store = useMockPortfolioStore();
       ensureDefaultList(store);
-      return store.watchlists.map(toDto);
+      return store.watchlists.map(toRecord);
     },
     async create(name) {
       const normalized = normalizeName(name);
@@ -231,7 +256,7 @@ export function createMockWatchlistApi(): WatchlistApi {
       }
       if (store.watchlists.some(candidate => candidate.name === normalized)) throw duplicateName();
       store.addWatchlist(normalized);
-      return toDto(lastList(store));
+      return toRecord(lastList(store));
     },
     async rename(id, name) {
       const normalized = normalizeName(name);
@@ -239,7 +264,7 @@ export function createMockWatchlistApi(): WatchlistApi {
       const list = findList(store, id);
       if (store.watchlists.some(candidate => candidate.id !== id && candidate.name === normalized)) throw duplicateName();
       store.renameWatchlist(id, normalized);
-      return toDto(list);
+      return toRecord(list);
     },
     async remove(id) {
       const store = useMockPortfolioStore();
@@ -255,19 +280,19 @@ export function createMockWatchlistApi(): WatchlistApi {
         throw new ApiClientError({ status: 404, code: 'ASSET_NOT_FOUND', message: 'Asset not found', fields: { symbol: 'not found' } });
       }
       // 已在清單中 → 原樣回傳(冪等,不報錯、不改順序)。
-      if (list.syms.includes(trimmed)) return toDto(list);
+      if (list.syms.includes(trimmed)) return toRecord(list);
       if (list.syms.length >= WATCHLIST_MAX_ITEMS) {
         throw validationFailed('items', `at most ${WATCHLIST_MAX_ITEMS} items`);
       }
       store.setWatchlistOrder(id, [...list.syms, trimmed]);
-      return toDto(findList(store, id));
+      return toRecord(findList(store, id));
     },
     async removeItem(id, assetId) {
       const store = useMockPortfolioStore();
       const list = findList(store, id);
       const remaining = list.syms.filter(sym => assetDtoForStored(sym).uuid !== assetId);
       if (remaining.length !== list.syms.length) store.setWatchlistOrder(id, remaining);
-      return toDto(findList(store, id));
+      return toRecord(findList(store, id));
     },
     async reorder(id, assetIds) {
       if (!Array.isArray(assetIds)) throw validationFailed('assetIds', 'must be an array');
@@ -285,7 +310,7 @@ export function createMockWatchlistApi(): WatchlistApi {
         });
       }
       store.setWatchlistOrder(id, assetIds.map(assetId => symByUuid.get(assetId)!));
-      return toDto(findList(store, id));
+      return toRecord(findList(store, id));
     },
   };
 }

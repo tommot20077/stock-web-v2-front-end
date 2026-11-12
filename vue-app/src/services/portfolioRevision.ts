@@ -1,5 +1,6 @@
-import { readonly, ref, type Ref } from 'vue';
-import type { TradeDto } from './apiTypes';
+import { readonly, ref, shallowReadonly, shallowRef, type Ref } from 'vue';
+import type { TradeRecord } from './apiTypes';
+import type { Decimal } from './decimal';
 
 /**
  * 一次成功的交易建立所產生的三個共用訊號:「要重讀」「哪一列是新的」「新交易的 id」。
@@ -63,16 +64,21 @@ export type HoldingEventRevisionCause = 'dividend' | 'shareAdjustment';
  * 這不是命名品味問題,是最小改動路徑:兩頁的模板因此可以寫成
  * `const effectiveLastFill = computed(() => live ? live.lastFill : apiLastFill.value)`,
  * **fresh class 的綁定表達式完全不用改,只是來源換了**。
+ *
+ * Phase 5 D-08:`qty` / `px` 是 domain Decimal(由後端回傳的 `TradeRecord` 推導;mock 的
+ * `PortfolioLiveMockData.lastFill` / `TradingLiveMockData.lastFill` 由 adapter getter 從 mock store 的 number 轉換),
+ * 三處同形。fresh 高亮只比 `sym`,不比數量或價格。
  */
 export interface LastFill {
   sym: string;
   type: 'BUY' | 'SELL';
-  qty: number;
-  px: number;
+  qty: Decimal;
+  px: Decimal;
 }
 
 const revision = ref(0);
-const lastFill = ref<LastFill | null>(null);
+// shallowRef:值一律整筆替換,而 Decimal(big.js 實例)不該被包成深層 reactive / readonly proxy。
+const lastFill = shallowRef<LastFill | null>(null);
 const lastTradeId = ref<string | null>(null);
 const revisionCause = ref<PortfolioRevisionCause | null>(null);
 const lastCashEntryId = ref<string | null>(null);
@@ -92,7 +98,7 @@ export const portfolioRevisionCause: Readonly<Ref<PortfolioRevisionCause | null>
  * mock mode 有 `portfolioApi.live.lastFill`(Pinia reactivity),API mode 沒有成交事件來源,
  * 由本訊號補上 —— Phase 3 在 `Positions.vue:264` 與 `Trades.vue:109` 留的接點消費的就是它。
  */
-export const apiLastFill: Readonly<Ref<LastFill | null>> = readonly(lastFill);
+export const apiLastFill: Readonly<Ref<LastFill | null>> = shallowReadonly(lastFill);
 
 /**
  * D-11:剛建立的交易 id。Trades 頁用它判斷「新交易是否在當前結果集內」——
@@ -115,10 +121,10 @@ export const lastCreatedHoldingEventId: Readonly<Ref<string | null>> = readonly(
 /**
  * 交易建立成功後的**唯一**入口:一次呼叫同時產生三個訊號。
  *
- * @param trade 後端回傳的 `TradeDto`(權威快照)。三個訊號全部由它推導,
+ * @param trade 後端回傳的交易(domain `TradeRecord`,權威快照)。三個訊號全部由它推導,
  *              不從表單值推導 —— 表單值與後端記錄的可能不同(D-09)。
  */
-export function notifyTradeCreated(trade: TradeDto): void {
+export function notifyTradeCreated(trade: TradeRecord): void {
   lastFill.value = { sym: trade.symbol, type: trade.type, qty: trade.quantity, px: trade.price };
   lastTradeId.value = trade.id;
   revisionCause.value = 'trade';
@@ -188,7 +194,7 @@ export function clearLastFill(): void {
  * `lastCreatedTradeId` / `lastCreatedCashEntryId`。先設 id 與 cause、最後才 bump。
  * 契約要求記錄後重讀 summary、holdings 與活動列表 —— 已掛載的頁 watch {@link portfolioRevision} 即可。
  *
- * @param event 後端回傳的 `DividendDto` / `ShareAdjustmentDto`(只需要 `id`)。
+ * @param event adapter 回傳的 domain `Dividend` / `ShareAdjustment`(`holdingEventApi.ts`;只需要 `id`,不讀金額 / 股數)。
  * @param cause `'dividend'` 或 `'shareAdjustment'`,決定重讀失敗時的提示文案。
  */
 export function notifyHoldingEventCreated(event: { id: string }, cause: HoldingEventRevisionCause): void {

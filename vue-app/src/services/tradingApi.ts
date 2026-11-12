@@ -1,9 +1,12 @@
 import { ApiClientError, apiRequest } from './apiClient';
-import { CRYPTO, FX, SYMBOLS, fmtNum } from '../data';
+import { CRYPTO, FX, SYMBOLS } from '../data';
+import { fmtMoneyAmount } from '../moneyFormat';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import { mockMarketOf } from './marketApi';
-import type { RuntimeDataMode, TradeDto } from './apiTypes';
+import { numberToWire, parseDecimal, toWire, type Decimal } from './decimal';
+import type { LastFill } from './portfolioRevision';
+import type { RuntimeDataMode, TradeDto, TradeRecord } from './apiTypes';
 import type { Symbol as MockSymbol } from '../types';
 
 /**
@@ -26,24 +29,87 @@ import type { Symbol as MockSymbol } from '../types';
 export interface CreateTradeRequest {
   symbol: string;
   type: 'BUY' | 'SELL';
-  quantity: number;
-  price: number;
+  /** wire 為十進位字串(後端 `BigDecimal`,Phase 5 D-05),由 `services/decimal.ts` 的 `toWire` 產出。 */
+  quantity: string;
+  price: string;
   /** D-02:使用者手動輸入,預設 0。前端不發明費率。 */
-  fee: number;
+  fee: string;
   note: string | null;
   /** D-03:ISO-8601 **含 offset**(後端 `OffsetDateTime`)。 */
   executedAt: string;
 }
 
 /**
+ * domain 側的建立交易輸入(Phase 5 D-08):數量 / 價格 / 手續費為 Decimal,其餘同 {@link CreateTradeRequest}。
+ * OrderTicket 把文字輸入以 `parseDecimalInput` 解析成 Decimal 後傳進來;轉成 wire 字串是 adapter 的事。
+ */
+export type CreateTradeInput = Omit<CreateTradeRequest, 'quantity' | 'price' | 'fee'> & {
+  quantity: Decimal;
+  price: Decimal;
+  fee: Decimal;
+};
+
+/**
+ * domain → wire 的逐欄投影(TRAD-02 在執行期唯一真正的保證):
+ * TypeScript 的 excess property check 只對**物件字面量**生效,呼叫端若把整包表單狀態當
+ * CreateTradeInput 傳進來(結構相容即通過型別檢查),多餘欄位不得原封不動送到後端。
+ * 金額欄位經 `toWire`(一般記號,不出現 `1e-8`;同一份 input 每次投影逐位元相同,D-07 冪等比對才成立)。
+ */
+function toCreateTradeRequest(input: CreateTradeInput): CreateTradeRequest {
+  return {
+    symbol: input.symbol,
+    type: input.type,
+    quantity: toWire(input.quantity),
+    price: toWire(input.price),
+    fee: toWire(input.fee),
+    note: input.note,
+    executedAt: input.executedAt,
+  };
+}
+
+/**
+ * wire `TradeDto` → domain {@link TradeRecord}。http 與 mock adapter(以及 `portfolioApi.listTrades`)共用。
+ *
+ * @throws TypeError 數量 / 價格 / 手續費不是字串(例如後端仍回 JS number)時 —— 契約違反要在邊界大聲失敗(T-05-27)。
+ */
+export function toTradeRecord(wire: TradeDto): TradeRecord {
+  return {
+    ...wire,
+    quantity: parseDecimal(wire.quantity),
+    price: parseDecimal(wire.price),
+    fee: parseDecimal(wire.fee),
+  };
+}
+
+/**
+ * mock store 的 `lastFill`(number,mock-only 資料)→ {@link LastFill}(Decimal)。
+ * 只在 mock adapter 的 getter 使用(`numberToWire` 只允許出現在 mock adapter 與測試,05-16 規約);
+ * `portfolioApi` 的 mock getter 共用同一個轉換,三處同形。
+ */
+export function toMockLastFill(fill: ReturnType<typeof useMockPortfolioStore>['lastFill']): LastFill | null {
+  if (!fill) return null;
+  return {
+    sym: fill.sym,
+    type: fill.type,
+    qty: parseDecimal(numberToWire(fill.qty)),
+    px: parseDecimal(numberToWire(fill.px)),
+  };
+}
+
+/**
  * mock mode 專用的 reactive 資料視窗。
  *
- * 形狀與 `portfolioApi.ts:36` 的 `PortfolioLiveMockData.lastFill` **逐字一致**,
- * 也與 `portfolioRevision.ts` 的 `LastFill` 一致 —— 三處同形,兩頁的 fresh 高亮
- * 綁定表達式才不需要因為換了來源而改寫。
+ * `lastFill` 的形狀與 `portfolioApi.ts` 的 `PortfolioLiveMockData.lastFill`、`portfolioRevision.ts` 的
+ * `LastFill` **三處同形**(Phase 5 D-08 起 `qty` / `px` 為 Decimal,由 getter 從 mock store 的 number 轉換),
+ * 兩頁的 fresh 高亮綁定表達式才不需要因為換了來源而改寫(高亮只比 `sym`)。
  */
 export interface TradingLiveMockData {
-  readonly lastFill: { sym: string; type: 'BUY' | 'SELL'; qty: number; px: number } | null;
+  readonly lastFill: LastFill | null;
+  /**
+   * mock 持倉中該標的的股數(Decimal);沒有持倉為 `null`。供 OrderTicket 的 mock 同步預檢以 Decimal 比較,
+   * 元件不必自己把 mock store 的 number 轉成 Decimal(05-19:數量輸入改為文字 + Decimal)。
+   */
+  heldQuantityOf(symbol: string): Decimal | null;
 }
 
 /**
@@ -59,17 +125,17 @@ export interface TradingApi {
   /**
    * 建立一筆手動已成交交易。
    *
-   * @param request 後端 `CreateTradeRequest` 的七個欄位,不多不少。
+   * @param input 後端 `CreateTradeRequest` 的七個欄位(金額為 Decimal);adapter 逐欄投影成 wire 字串,不多不少。
    * @param idempotencyKey D-05:**必填**。同一次送出嘗試的重試(自動或手動)必須沿用
    *        同一把 key(D-14);使用者改過任何欄位後才換新 key(那是新意圖,judgment §5)。
    *        **key 是參數不是 adapter 自產** —— 「哪一次算同一次嘗試」只有 UI 層知道,
    *        adapter 自產會讓每次重試都變成新交易,冪等保護等於不存在。
    *        key 的隨機來源由呼叫端用 `crypto.randomUUID()`(CSPRNG)提供,T-04-10。
-   * @returns 後端回傳的 `TradeDto`(權威快照)。成功畫面顯示它,不顯示表單值(D-09)。
+   * @returns 後端回傳的交易(經 {@link toTradeRecord} 轉成 domain,權威快照)。成功畫面顯示它,不顯示表單值(D-09)。
    * @throws ApiClientError 原樣上拋,不 catch 也不重包:UI 層靠 `code` 分派文案、
    *         靠 `fields` 綁欄位(D-16)、靠 `requestId` 回報(T-04-09)。
    */
-  createTrade(request: CreateTradeRequest, idempotencyKey: string): Promise<TradeDto>;
+  createTrade(input: CreateTradeInput, idempotencyKey: string): Promise<TradeRecord>;
   /** 僅 mock 實作提供。 */
   live?: TradingLiveMockData;
 }
@@ -85,23 +151,13 @@ export function createHttpTradingApi(basePath = '/api/v1'): TradingApi {
     // (本檔刻意不出現任何 transport 層字面,好讓「未另造轉接層」可被字面檢查機械驗證。)
     // 而 replay 用的是**同一份 options**(apiClient.ts:319),所以同一把 key 自動沿用
     // —— 這是 D-14 的免費紅利,也是安全上必要的行為(T-04-01)。
-    createTrade: (request, idempotencyKey) => apiRequest<TradeDto>(`${basePath}/trades`, {
+    createTrade: async (input, idempotencyKey) => toTradeRecord(await apiRequest<TradeDto>(`${basePath}/trades`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
-      // 逐欄投影而不是 `json: request`:TypeScript 的 excess property check 只對
-      // **物件字面量**生效,呼叫端若把整包表單狀態當 CreateTradeRequest 傳進來
-      // (結構相容即通過型別檢查),多餘欄位會原封不動送到後端。逐欄投影是 TRAD-02
-      // 在執行期唯一真正的保證。
-      json: {
-        symbol: request.symbol,
-        type: request.type,
-        quantity: request.quantity,
-        price: request.price,
-        fee: request.fee,
-        note: request.note,
-        executedAt: request.executedAt,
-      },
-    }),
+      // 逐欄投影而不是 `json: input`(見 toCreateTradeRequest):多餘欄位不得送到後端,
+      // Decimal 也不得直接進 JSON body(big.js 的 toJSON 會走 toString,極小值會變成 `1e-8`)。
+      json: toCreateTradeRequest(input),
+    })),
   };
 }
 
@@ -129,7 +185,11 @@ export function createMockTradingApi(): TradingApi {
   // (testSetup 每個測試換 pinia)的關鍵,不可改成在此捕捉 store(portfolioApi.ts:141-142)。
   const live: TradingLiveMockData = {
     get lastFill() {
-      return useMockPortfolioStore().lastFill;
+      return toMockLastFill(useMockPortfolioStore().lastFill);
+    },
+    heldQuantityOf(symbol) {
+      const position = useMockPortfolioStore().positions.find(p => p.sym === symbol);
+      return position ? parseDecimal(numberToWire(position.qty)) : null;
     },
   };
 
@@ -138,17 +198,21 @@ export function createMockTradingApi(): TradingApi {
     live,
     // 刻意不接 idempotencyKey:冪等防護落在後端的唯一約束(judgment §5),
     // mock 沒有帳本也沒有並發,收下這個參數只會暗示它在 mock mode 有作用。
-    async createTrade(request) {
+    async createTrade(input) {
       const portfolio = useMockPortfolioStore();
+      // 與 http adapter 相同的逐欄投影:mock 回傳的結果先組成 wire 形狀,再走同一個 toTradeRecord。
+      const request = toCreateTradeRequest(input);
       const asset = mockSymbolOf(request.symbol);
 
       const filled = portfolio.executeOrder({
         sym: request.symbol,
         name: asset?.name ?? request.symbol,
         side: request.type,
-        qty: request.quantity,
-        px: request.price,
-        fee: request.fee,
+        // mock store 是 mock-only 的 number 資料(05-16 規約:data.ts / mock store 維持 number);
+        // 只有這裡把 wire 字串轉成 number 交給它,API 路徑不經過這段。
+        qty: Number(request.quantity),
+        px: Number(request.price),
+        fee: Number(request.fee),
         sector: mockSectorOf(asset),
         // quick-261107-1j4 E2:與 mock market adapter 的 AssetDto 同值(assetType = cat 大寫、market = mockMarketOf)。
         assetType: asset?.cat.toUpperCase(),
@@ -173,13 +237,13 @@ export function createMockTradingApi(): TradingApi {
       useMockNotificationsStore().pushNotification({
         kind: 'order',
         sym: request.symbol,
-        text: `${request.type} ${request.quantity} ${request.symbol} @ ${fmtNum(request.price)} filled`,
+        text: `${request.type} ${request.quantity} ${request.symbol} @ ${fmtMoneyAmount(input.price, null, 2)} filled`,
         time: 'now',
         unread: true,
       });
 
-      return {
-        // 沿用 portfolioApi.ts:98-113 `tradeDtoFrom` 的 `mock-{index}` 合成 id 慣例。
+      return toTradeRecord({
+        // 沿用 portfolioApi.ts `tradeDtoFrom` 的 `mock-{index}` 合成 id 慣例。
         // `executeOrder` 是 `trades.unshift(...)`,新交易永遠落在 index 0,所以這個 id
         // 與 `listTrades` 之後合成出來的 id 對得上。**絕不**用亂數產生器合成 id 或成交價
         // (U-16 已裁定移除 OrderTicket.vue:373-375 的亂數 slippage 與亂數 orderId)。
@@ -196,7 +260,7 @@ export function createMockTradingApi(): TradingApi {
         // 才是誠實的值 —— 它也是 D-13 高亮與 D-09 成功畫面要顯示的東西。
         executedAt: request.executedAt,
         createdAt: new Date().toISOString(),
-      };
+      });
     },
   };
 }

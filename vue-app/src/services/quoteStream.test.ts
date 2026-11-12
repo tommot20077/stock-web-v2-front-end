@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createQuoteStream, type QuoteStream, type WsTicketResponse } from './quoteStream';
 import { createFakeSocketFactory } from '../testing/fakeWebSocket';
+import { isDecimal, numberToWire, toWire } from './decimal';
 
 const TICKET = 'tk_Secret-Ticket_abc123';
 
@@ -91,15 +92,15 @@ describe('createQuoteStream(api) — tracer:watch → ticket → 連線 → SUBS
 
     await vi.advanceTimersByTimeAsync(150);
     const first = stream.ticks.value.get('AAPL');
-    expect(first?.price).toBe(218.4);
-    expect(typeof first?.price).toBe('number');
+    expect(isDecimal(first?.price)).toBe(true);
+    expect(toWire(first!.price)).toBe('218.4');
     expect(first?.time).toBe('2026-10-31T01:23:45.678Z');
     expect(stream.lastDataAt.value).not.toBeNull();
 
     sockets.last().serverSend(tickMessage('AAPL', '219.0'));
     sockets.last().serverSend(tickMessage('AAPL', '219.25'));
     await vi.advanceTimersByTimeAsync(250);
-    expect(stream.ticks.value.get('AAPL')?.price).toBe(219.25);
+    expect(toWire(stream.ticks.value.get('AAPL')!.price)).toBe('219.25');
   });
 
   it('Test 2b:非有限數價格或未訂閱 channel 的 TICK 被丟棄', async () => {
@@ -121,6 +122,58 @@ describe('createQuoteStream(api) — tracer:watch → ticket → 連線 → SUBS
     await vi.advanceTimersByTimeAsync(300);
 
     expect(stream.ticks.value.size).toBe(0);
+  });
+
+  describe('TICK 價格字串 → Decimal(05-23 / D-08)', () => {
+    /** 連線到 live 後送出單一 TICK(data 原樣),過一個 flush 週期回傳 AAPL 的 LiveTick */
+    async function priceOf(price: unknown) {
+      const sockets = createFakeSocketFactory();
+      const stream = track(createQuoteStream('api', {
+        socketFactory: sockets.factory,
+        issueTicket: async () => ticketResponse(),
+      }));
+      stream.watch(['AAPL']);
+      await vi.advanceTimersByTimeAsync(0);
+      sockets.last().serverOpen();
+      sockets.last().serverSend({ type: 'WELCOME' });
+      await vi.advanceTimersByTimeAsync(0);
+      sockets.last().serverSend({
+        type: 'TICK',
+        channel: 'tick.AAPL',
+        data: { symbol: 'AAPL', price, volume: '10', time: '2026-10-31T01:23:45.678Z' },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      return stream.ticks.value.get('AAPL');
+    }
+
+    it('字串價格以 parseDecimal 解析(LiveTick.price 為 Decimal,逐字保留)', async () => {
+      const tick = await priceOf('187.45');
+      expect(isDecimal(tick?.price)).toBe(true);
+      expect(toWire(tick!.price)).toBe('187.45');
+    });
+
+    it('最小單位與超過 number 精度的價格不失真', async () => {
+      expect(toWire((await priceOf('0.00000001'))!.price)).toBe('0.00000001');
+      expect(toWire((await priceOf('123456789012.12345679'))!.price)).toBe('123456789012.12345679');
+      expect(toWire((await priceOf('9007199254740993.01'))!.price)).toBe('9007199254740993.01');
+    });
+
+    it('後端 toPlainString 的尾零被 big.js 正規化(值相等)', async () => {
+      const tick = await priceOf('187.45000000');
+      expect(tick!.price.eq('187.45')).toBe(true);
+    });
+
+    it('JSON number 價格視為無效 tick 丟棄(契約是字串;number 已在 JSON.parse 失真)', async () => {
+      expect(await priceOf(187.45)).toBeUndefined();
+    });
+
+    it('空字串、無效字串、null、缺欄位都視為無效 tick 丟棄', async () => {
+      expect(await priceOf('')).toBeUndefined();
+      expect(await priceOf('abc')).toBeUndefined();
+      expect(await priceOf(' 187.45')).toBeUndefined();
+      expect(await priceOf(null)).toBeUndefined();
+      expect(await priceOf(undefined)).toBeUndefined();
+    });
   });
 
   it('Test 3:預設 issueTicket 經 apiClient POST /api/v1/market/ws/ticket(credentials include + X-XSRF-TOKEN)', async () => {
@@ -599,7 +652,7 @@ describe('createQuoteStream(api) — channel 自檢與安全', () => {
     await vi.advanceTimersByTimeAsync(250);
 
     expect(h.stream.ticks.value.has('TSLA')).toBe(false);
-    expect(h.stream.ticks.value.get('AAPL')?.price).toBe(218.4);
+    expect(toWire(h.stream.ticks.value.get('AAPL')!.price)).toBe('218.4');
   });
 
   it('任何 console.* 呼叫的參數都不含 ticket(含 4008 / 4400 警告與 socket 建立失敗)', async () => {
@@ -668,18 +721,35 @@ describe('createQuoteStream(mock) — 明確的假推播(鐵律 3)', () => {
     expect(stream.ticks.value.get('AAPL')).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     const first = stream.ticks.value.get('AAPL');
-    expect(first?.price).toBeCloseTo(218.40 * 1.005, 2);
+    expect(Number(toWire(first!.price))).toBeCloseTo(218.40 * 1.005, 2);
     expect(stream.lastDataAt.value).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1000);
     const second = stream.ticks.value.get('AAPL');
-    expect(second?.price).toBeCloseTo(first!.price * 1.005, 2);
+    expect(Number(toWire(second!.price))).toBeCloseTo(Number(toWire(first!.price)) * 1.005, 2);
 
     release();
     await vi.advanceTimersByTimeAsync(3000);
     expect(stream.ticks.value.get('AAPL')).toBe(second);
     expect(sockets.sockets).toHaveLength(0);
     expect(issueTicket).not.toHaveBeenCalled();
+  });
+
+  it('產出的 LiveTick.price 為 Decimal,toWire 等於 random walk(mock-only number)的 numberToWire(05-23 / D-08)', async () => {
+    const randoms = [1, 0.123, 0];
+    let call = 0;
+    const stream = track(createQuoteStream('mock', { random: () => randoms[call++ % randoms.length] }));
+    stream.watch(['AAPL']);
+
+    // 與 createMockQuoteStream.step() 相同的 number 漫步(±0.5%、4 位小數),起點為 data.ts 的 218.40
+    let walk = 218.40;
+    for (const r of randoms) {
+      await vi.advanceTimersByTimeAsync(1000);
+      walk = Math.round(walk * (1 + (r * 2 - 1) * 0.005) * 10000) / 10000;
+      const tick = stream.ticks.value.get('AAPL');
+      expect(isDecimal(tick?.price)).toBe(true);
+      expect(toWire(tick!.price)).toBe(numberToWire(walk));
+    }
   });
 
   it('不在 data.ts 可交易清單的代號(FX / 債券 / 未知)不產生 tick', async () => {
@@ -689,6 +759,6 @@ describe('createQuoteStream(mock) — 明確的假推播(鐵律 3)', () => {
 
     expect(stream.ticks.value.has('EUR/USD')).toBe(false);
     expect(stream.ticks.value.has('UNKNOWN')).toBe(false);
-    expect(stream.ticks.value.get('BTC')?.price).toBeCloseTo(67842.40, 2);
+    expect(Number(toWire(stream.ticks.value.get('BTC')!.price))).toBeCloseTo(67842.40, 2);
   });
 });

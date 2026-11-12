@@ -38,6 +38,8 @@ import {
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
 import type { AssetDto, HoldingDto, TradeDto } from '../services/apiTypes';
+import { toTradeRecord } from '../services/tradingApi';
+import { toWire } from '../services/decimal';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -58,12 +60,12 @@ const APPLE: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 218.4,
-  change: 1.2,
-  changePercent: 0.55,
+  latestPrice: '218.4',
+  change: '1.2',
+  changePercent: '0.55',
   volumeText: '52.1M',
-  high: 220,
-  low: 215,
+  high: '220',
+  low: '215',
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -258,7 +260,9 @@ describe('OrderTicket 骨架契約 — 三步驟與欄位(U-01 / D-02 / D-03 / D
       await mountTicket({ mode });
 
       const fee = requireInput('ticket-fee');
-      expect(fee.type).toBe('number');
+      // 05-19(Phase 5 D-08):金額欄位是文字輸入 + inputmode=decimal,以 Decimal 解析(不經 valueAsNumber)。
+      expect(fee.type).toBe('text');
+      expect(fee.getAttribute('inputmode')).toBe('decimal');
       expect(fee.value, `${mode} mode 的手續費預設值`).toBe('0');
       expect(bodyText()).toContain(t('en', 'tradeFeeHint'));
       // 0.1% 估算公式已刪除:畫面不得再出現任何「預估手續費」
@@ -355,9 +359,9 @@ describe('OrderTicket 骨架契約 — 三步驟流程(U-01 / DP-9)', () => {
 // =====================================================================================
 
 /**
- * 後端 `AssetDto`(`AssetDto.java:9-24`)。
- * **注意**:`AssetDto` 的 BigDecimal 欄位**沒有** `@JsonSerialize(ToStringSerializer.class)`,
- * 所以 latestPrice / change / changePercent / high / low 在 JSON 是 **number**(與 `KlineDto` 相反)。
+ * 後端 `AssetDto`(`AssetDto.java`)wire fixture。
+ * Phase 5 D-05:latestPrice / change / changePercent / high / low 在 JSON 是 **字串**(與 `KlineDto` 一致);
+ * 元件拿到的是 `marketApi.toAsset` 轉出的 domain Decimal。
  */
 function asset(overrides: Partial<AssetDto> & { symbol: string }): AssetDto {
   return {
@@ -457,7 +461,9 @@ async function pressKey(key: string) {
 
 async function advance(ms: number) {
   vi.advanceTimersByTime(ms);
-  await flushAsync();
+  // 假計時器下 flushAsync 只跑 microtask(LEARNINGS 2026-11-07);05-22 起 searchAssets 在 apiClient 之後
+  // 多一段 toAsset 映射的 await,預設 6 輪不夠,與 HoldingEventDialog.test 的同名 helper 一樣跑 16 輪。
+  await flushAsync(16);
 }
 
 function assetCallQueries(fetchImpl: ReturnType<typeof vi.fn>): string[] {
@@ -698,8 +704,7 @@ describe('OrderTicket typeahead — 七態(04-10 / D-01 / UI-SPEC §Interaction 
  * **刻意矛盾的 fixture**:high(999)/ low(1)彼此與 latestPrice(190.20)、
  * changePercent(-1.60)都不自洽。只要前端偷偷重算任何一格,斷言就會紅(judgment §7)。
  *
- * 欄位形狀對應後端 `AssetDto.java:9-24`;其 BigDecimal **沒有**掛
- * `@JsonSerialize(using = ToStringSerializer.class)`,所以在 JSON 是 number。
+ * 欄位形狀對應後端 `AssetDto.java`;報價欄在 JSON 是字串(Phase 5 D-05)。
  */
 const CONTRADICTORY: AssetDto = {
   uuid: 'asset-aapl',
@@ -710,18 +715,18 @@ const CONTRADICTORY: AssetDto = {
   currency: 'USD',
   sector: 'Tech',
   tradeable: true,
-  latestPrice: 190.2,
-  change: -3.1,
-  changePercent: -1.6,
+  latestPrice: '190.2',
+  change: '-3.1',
+  changePercent: '-1.6',
   volumeText: 'X-VOL',
-  high: 999,
-  low: 1,
+  high: '999',
+  low: '1',
 };
 
 /**
  * 後端 `KlineDto.java:23-30` 的五個 OHLCV 欄位掛
  * `@JsonSerialize(using = ToStringSerializer.class)`,序列化為 **JSON 字串**
- * (與 `AssetDto` 相反)。fixture 必須同形,否則 Pitfall 8 抓不到。
+ * (Phase 5 D-05 後與 `AssetDto` 的報價欄一致)。fixture 必須同形,否則 Pitfall 8 抓不到。
  */
 const KLINES_AS_STRINGS = [
   { bucket: '2026-08-15T00:00:00Z', open: '217.00000000', high: '219.00000000', low: '216.50000000', close: '218.40000000', volume: '1000.00000000' },
@@ -906,9 +911,9 @@ const RECORDED_TRADE: TradeDto = {
   id: '6f1c2b7e-1a2b-4c3d-8e9f-0123456789ab',
   symbol: 'AAPL',
   type: 'BUY',
-  quantity: 7,
-  price: 188.88,
-  fee: 1.5,
+  quantity: '7.00000000',
+  price: '188.88000000',
+  fee: '1.50000000',
   note: null,
   currency: 'TWD',
   executedAt: '2026-08-15T10:30:00+08:00',
@@ -1005,7 +1010,8 @@ function stubUuids() {
   return randomUUID;
 }
 
-function holding(symbol: string, totalQuantity: number): HoldingDto {
+/** `totalQuantity` 是 wire 字串(後端 BigDecimal → JSON 字串,Phase 5 D-05)。 */
+function holding(symbol: string, totalQuantity: string): HoldingDto {
   return {
     assetId: `asset-${symbol.toLowerCase()}`,
     symbol,
@@ -1013,13 +1019,13 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     totalQuantity,
     // 以下七欄是 D-15 **明文禁止**元件讀取的(Phase 3 D-04 / judgment §7);
     // 刻意給荒謬值,任何前端損益重算都會產生一眼可辨的數字。
-    avgCost: -999,
-    costBasis: -999,
-    marketPrice: -999,
-    marketValue: -999,
-    realizedPnl: -999,
-    unrealizedPnl: -999,
-    roi: -999,
+    avgCost: '-999',
+    costBasis: '-999',
+    marketPrice: '-999',
+    marketValue: '-999',
+    realizedPnl: '-999',
+    unrealizedPnl: '-999',
+    roi: '-999',
     priceTime: null,
     lastUpdated: null,
     // Phase 04.1 欄位:只補型別(OrderTicket 不讀;斷言改寫屬 04.1-14)
@@ -1033,6 +1039,7 @@ function holding(symbol: string, totalQuantity: number): HoldingDto {
     previousClose: null,
     dayPricePnl: null,
     dayPricePnlRatio: null,
+    dayPnlBasis: null,
   };
 }
 
@@ -1405,12 +1412,10 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新。
     expect(portfolioRevision.value).toBeGreaterThan(0);
     expect(lastCreatedTradeId.value).toBe(RECORDED_TRADE.id);
-    expect(apiLastFill.value).toEqual({
-      sym: RECORDED_TRADE.symbol,
-      type: RECORDED_TRADE.type,
-      qty: RECORDED_TRADE.quantity,
-      px: RECORDED_TRADE.price,
-    });
+    expect(apiLastFill.value).toMatchObject({ sym: RECORDED_TRADE.symbol, type: RECORDED_TRADE.type });
+    // Phase 5 D-08:qty / px 是後端回傳值的 Decimal(尾零正規化)。
+    expect(toWire(apiLastFill.value!.qty)).toBe('7');
+    expect(toWire(apiLastFill.value!.px)).toBe('188.88');
   });
 
   it('Test 34(TRAD-02):payload 恰為七個合約欄位,executedAt 帶 offset', async () => {
@@ -1426,7 +1431,7 @@ describe('OrderTicket 送出路徑 — 重複送出阻擋與 key 生命週期(04
     expect(Object.keys(body).sort()).toEqual(
       ['executedAt', 'fee', 'note', 'price', 'quantity', 'symbol', 'type'],
     );
-    expect(body.fee, '手續費是使用者輸入值(D-02)').toBe(3);
+    expect(body.fee, '手續費是使用者輸入值(D-02),wire 為字串(D-05)').toBe('3');
     expect(String(body.executedAt), 'executedAt 必須帶 offset(後端是 OffsetDateTime)')
       .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
     expect(body.symbol).toBe('AAPL');
@@ -1659,7 +1664,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     stubUuids();
     const fetchImpl = ticketFetch({
       assets: () => assetPageResponse([CONTRADICTORY, MSFT]),
-      holdings: () => holdingsResponse([holding('AAPL', 12), holding('MSFT', 34)]),
+      holdings: () => holdingsResponse([holding('AAPL', '12'), holding('MSFT', '34')]),
     });
     await mountSubmitTicket(fetchImpl);
 
@@ -1702,7 +1707,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     await mountSubmitTicket(ticketFetch({
       // 後端 SQL 有 `total_quantity > 0` 過濾(JdbcTradingRepository.java:210),
       // 「從未持有」與「已全數賣出」在回應裡不可分 —— 所以只能說 0,不能說「未持有」。
-      holdings: () => holdingsResponse([holding('MSFT', 5)]),
+      holdings: () => holdingsResponse([holding('MSFT', '5')]),
     }));
     await switchToSell();
 
@@ -1715,7 +1720,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 47(超量):qty 大於可賣數量時顯示 tradeErrOversell 且送出鈕 disabled', async () => {
     stubUuids();
     await mountSubmitTicket(ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 5)]),
+      holdings: () => holdingsResponse([holding('AAPL', '5')]),
     }));
     await switchToSell();
 
@@ -1728,7 +1733,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 48(judgment §5 的實質驗收):預檢通過仍可能被後端 409 拒絕', async () => {
     stubUuids();
     await mountSubmitTicket(ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+      holdings: () => holdingsResponse([holding('AAPL', '100')]),
       trades: () => tradeFailure('TRADE_INSUFFICIENT_HOLDING', { status: 409 }),
     }));
     await switchToSell();
@@ -1745,7 +1750,7 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
   it('Test 49(快取失效):一筆交易成功後,下次切 SELL 會重新讀 holdings', async () => {
     stubUuids();
     const fetchImpl = ticketFetch({
-      holdings: () => holdingsResponse([holding('AAPL', 100)]),
+      holdings: () => holdingsResponse([holding('AAPL', '100')]),
     });
     await mountSubmitTicket(fetchImpl);
     await switchToSell();
@@ -1769,6 +1774,64 @@ describe('OrderTicket SELL 預檢(04-11 / D-15 / judgment §5)', () => {
     expect(orderTicketSource).toContain('totalQuantity');
     expect(orderTicketSource).toContain('listHoldings');
   });
+
+  /*
+   * 05-18(Phase 5 D-08 / T-05-34):持股數是 domain Decimal(wire 字串經 portfolioApi.toHolding),
+   * 超賣比較以 Decimal `gt` 做,小數股數與 8 位小數的邊界不經 JS number。preset 預填 qty = 10。
+   */
+  it('05-18:可賣數量為小數股數時以 fmtQuantity 原值顯示', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '12.5')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 12.5`);
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+  });
+
+  it('05-18:賣出數量等於可賣數量(後端 setScale(8) 尾零)不算超賣', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '10.00000000')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 10`);
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('05-18:可賣只差 1e-8(9.99999999)時賣 10 即為超賣;多 1e-8 則通過', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '9.99999999')]),
+    }));
+    await switchToSell();
+
+    expect(requireTestid('ticket-sellable-qty').textContent?.trim()).toBe(`${t('en', 'sellableQty')}: 9.99999999`);
+    expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(true);
+
+    cleanupMounted();
+    resetPortfolioRevisionForTests();
+
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '10.00000001')]),
+    }));
+    await switchToSell();
+
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('05-19:05-18 留在 oversellError 的 number → Decimal 交接點已刪除(數量是文字輸入 + Decimal)', () => {
+    const code = orderTicketSource.split('\n').filter(line => !/^\s*(\*|\/\/)/.test(line));
+    expect(code.filter(line => line.includes('numberToWire')), 'OrderTicket 不再引用 numberToWire').toHaveLength(0);
+    expect(orderTicketSource).not.toMatch(/v-model\.number="(qty|px|fee)"/);
+    expect(orderTicketSource).toMatch(/const oversellError = computed\([\s\S]*?parsedQty\.value[\s\S]*?\.gt\(sellableQty\.value\)/);
+  });
 });
 
 // =====================================================================================
@@ -1783,7 +1846,7 @@ describe('OrderTicket review 步驟 — 標的幣別(04.1-14 / D-28 補充 / UI-
     name: 'TSMC',
     market: 'TW',
     currency: 'TWD',
-    latestPrice: 945,
+    latestPrice: '945',
   };
 
   function reviewText(): string {
@@ -1839,7 +1902,7 @@ describe('OrderTicket ticket 步驟 — 預估總額幣別(04.1-27 / D-28 補充
     name: 'TSMC',
     market: 'TW',
     currency: 'TWD',
-    latestPrice: 945,
+    latestPrice: '945',
   };
 
   function ticketEstTotal(): string {
@@ -1896,7 +1959,7 @@ describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
     expect(bodyText()).toContain(t('en', 'tradeIrreversibleNote'));
 
     // holdings 此時才回來:可賣 5,preset 的 qty 是 10 → oversell 在 review 步驟才成立。
-    pending.resolve(holdingsResponse([holding('AAPL', 5)]));
+    pending.resolve(holdingsResponse([holding('AAPL', '5')]));
     await flushAsync(16);
 
     const alert = requireTestid('ticket-review-error');
@@ -1913,7 +1976,7 @@ describe('OrderTicket review 步驟 — 可見回饋(F-1 / 鐵律 6)', () => {
 
 describe('OrderTicket — 再次開啟 ticket 清除成交後標記(F-2 / UI-SPEC §9 / D-11)', () => {
   it('Test 52:開啟 ticket 時 apiLastFill 與 lastCreatedTradeId 一併清空,revision 不動', async () => {
-    notifyTradeCreated(RECORDED_TRADE);
+    notifyTradeCreated(toTradeRecord(RECORDED_TRADE));
     expect(apiLastFill.value).not.toBeNull();
     expect(lastCreatedTradeId.value).toBe(RECORDED_TRADE.id);
 
@@ -2072,5 +2135,250 @@ describe('OrderTicket 成交時間 — 後端未來時間欄位錯誤綁定(Phas
     // fields 的 value 與後端 message 都不得進入 DOM(D-16 / T-04-09)。
     expect(bodyText()).not.toContain('must not be in the future');
     expect(bodyText()).not.toContain('Invalid executedAt');
+  });
+});
+
+// =====================================================================================
+// 05-19(Phase 5 D-05 / D-08 / T-05-29):數量 / 價格 / 手續費是文字輸入,以 parseDecimalInput 解析成 Decimal;
+// 估算與可賣比較在 Decimal 內做,送出時由 tradingApi 以 toWire 逐欄投影成字串。
+// =====================================================================================
+
+describe('OrderTicket 金額輸入 — 文字輸入 + Decimal(05-19)', () => {
+  function ticketEstTotal(): string {
+    const el = document.body.querySelector<HTMLElement>('.summary .sum-strong');
+    expect(el, '.summary .sum-strong').toBeTruthy();
+    return flat(el!.textContent);
+  }
+
+  it('三個金額欄位都是 type=text + inputmode=decimal,preset 預填 qty 10 / 價格 latestPrice', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    for (const id of ['ticket-qty', 'ticket-price', 'ticket-fee']) {
+      expect(requireInput(id).type, `${id} 的 type`).toBe('text');
+      expect(requireInput(id).getAttribute('inputmode'), `${id} 的 inputmode`).toBe('decimal');
+    }
+    expect(requireInput('ticket-qty').value).toBe('10');
+    expect(requireInput('ticket-price').value).toBe('190.2');
+    expect(requireInput('ticket-fee').value).toBe('0');
+  });
+
+  it('估算金額 = 數量 × 價格(Decimal;3 × 123.45 = 370.35,手續費不計入,與後端 total 定義一致)', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    await setInput(requireInput('ticket-qty'), '3');
+    await setInput(requireInput('ticket-price'), '123.45');
+    await setInput(requireInput('ticket-fee'), '0.1');
+
+    expect(ticketEstTotal()).toBe('370.35 USD');
+    // double 會把 0.1 × 3 算成 0.30000000000000004;Decimal 精確。
+    await setInput(requireInput('ticket-qty'), '0.1');
+    await setInput(requireInput('ticket-price'), '3');
+    expect(ticketEstTotal()).toBe('0.30 USD');
+  });
+
+  it('送出 body 的金額欄為字串並保留 8 位小數;同 key 重試 body 逐位元相同', async () => {
+    stubUuids();
+    let fail = true;
+    const fetchImpl = ticketFetch({
+      trades: () => {
+        if (fail) throw new TypeError('Failed to fetch');
+        return tradeResponse();
+      },
+    });
+    await mountSubmitTicket(fetchImpl);
+
+    await setInput(requireInput('ticket-qty'), '3');
+    await setInput(requireInput('ticket-price'), '123456.12345678');
+    await setInput(requireInput('ticket-fee'), '0.00000001');
+    await gotoReview();
+    await submitTrade();
+    fail = false;
+    await submitTrade();
+
+    const calls = tradeCalls(fetchImpl);
+    expect(calls).toHaveLength(2);
+    const raw = String(calls[0][1]?.body);
+    expect(raw).toContain('"quantity":"3"');
+    expect(raw).toContain('"price":"123456.12345678"');
+    expect(raw).toContain('"fee":"0.00000001"');
+    expect(String(calls[1][1]?.body), '同一次嘗試的重試 payload 逐位元相同(D-07)').toBe(raw);
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+  });
+
+  it('手續費留空視為 0,送出 "0"(D-02 既有預設)', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch();
+    await mountSubmitTicket(fetchImpl);
+
+    await setInput(requireInput('ticket-fee'), '');
+    expect(testid('ticket-form-error')).toBeNull();
+    await gotoReview();
+    await submitTrade();
+
+    expect(tradeBodies(fetchImpl)[0].fee).toBe('0');
+  });
+
+  it.each([
+    ['科學記號 1e-9', '1e-9'],
+    ['9 位小數', '0.000000001'],
+    ['負數', '-1'],
+    ['非數字', 'abc'],
+  ])('數量輸入 %s → 欄位錯誤且不可送出', async (_label, value) => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    await setInput(requireInput('ticket-qty'), value);
+
+    const node = requireTestid('ticket-field-error-quantity');
+    expect(node.textContent?.trim()).toBe(t('en', 'tradeErrQuantity'));
+    expect(requireInput('ticket-qty').getAttribute('aria-invalid')).toBe('true');
+    expect((requireInput('ticket-qty').getAttribute('aria-describedby') ?? '').split(/\s+/)).toContain(node.id);
+    expect(advanceButton().disabled).toBe(true);
+  });
+
+  it('8 位小數(含尾零)合法;價格 9 位小數 → 價格欄位錯誤', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    await setInput(requireInput('ticket-qty'), '0.12345678');
+    await setInput(requireInput('ticket-price'), '1.0000000000');
+    expect(testid('ticket-field-error-quantity')).toBeNull();
+    expect(testid('ticket-field-error-price'), '尾零不算位數').toBeNull();
+    expect(advanceButton().disabled).toBe(false);
+
+    await setInput(requireInput('ticket-price'), '1.123456789');
+    expect(requireTestid('ticket-field-error-price').textContent?.trim()).toBe(t('en', 'tradeErrPrice'));
+    expect(advanceButton().disabled).toBe(true);
+  });
+
+  it('數量 0 或空白只停用送出、不顯示錯誤(與改文字輸入前相同)', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    for (const value of ['0', '', '0.00000000']) {
+      await setInput(requireInput('ticket-qty'), value);
+      expect(testid('ticket-field-error-quantity'), `數量 "${value}"`).toBeNull();
+      expect(advanceButton().disabled, `數量 "${value}"`).toBe(true);
+    }
+  });
+
+  it('手續費格式錯誤(負數 / 9 位小數)→ 既有的手續費錯誤文案', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch());
+
+    for (const value of ['-1', '0.000000001']) {
+      await setInput(requireInput('ticket-fee'), value);
+      expect(requireTestid('ticket-form-error').textContent, `手續費 "${value}"`).toContain(t('en', 'tradeErrFee'));
+      expect(advanceButton().disabled).toBe(true);
+    }
+  });
+
+  it('賣出數量以 Decimal 與可賣數量比較:10.00000001 > 10 為超賣,10.00000000 不是', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      holdings: () => holdingsResponse([holding('AAPL', '10.00000000')]),
+    }));
+    await switchToSell();
+
+    await setInput(requireInput('ticket-qty'), '10.00000001');
+    expect(bodyText()).toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(true);
+
+    await setInput(requireInput('ticket-qty'), '10.00000000');
+    expect(bodyText()).not.toContain(t('en', 'tradeErrOversell'));
+    expect(advanceButton().disabled).toBe(false);
+  });
+
+  it('review 步驟顯示正規化後的數量;結果畫面顯示後端回傳的 TradeRecord', async () => {
+    stubUuids();
+    await mountSubmitTicket(ticketFetch({
+      trades: () => tradeResponse({ ...RECORDED_TRADE, quantity: '0.12345678', price: '123456.12345678' }),
+    }));
+
+    await setInput(requireInput('ticket-qty'), ' 3.50 ');
+    await gotoReview();
+    const review = document.body.querySelector<HTMLElement>('.body.review');
+    expect(flat(review?.textContent)).toContain('3.5');
+    expect(flat(review?.textContent)).not.toContain('3.50 ');
+    await submitTrade();
+
+    expect(requireTestid('ticket-result-qty').textContent?.trim()).toBe('0.12345678');
+    expect(flat(requireTestid('ticket-result-price').textContent)).toBe('123,456.12 TWD');
+  });
+});
+
+// =====================================================================================
+// 05-22(Phase 5 D-05 / D-08 / T-05-36):標的報價為 wire 字串,元件拿 domain Asset(報價 Decimal)。
+// 搜尋選項 / 報價卡只格式化(moneyFormat)、正負用 Decimal 方法;價格預填 = toWire(latestPrice)。
+// =====================================================================================
+
+describe('OrderTicket 標的報價 — domain Asset(05-22)', () => {
+  it('價格預填 toWire(latestPrice):8 位小數原樣、極小值為一般記號(無科學記號)、尾零正規化', async () => {
+    const cases: Array<[string, string]> = [
+      ['123456.12345678', '123456.12345678'],
+      ['0.0000005', '0.0000005'],
+      ['190.20000000', '190.2'],
+    ];
+    for (const [wire, expected] of cases) {
+      cleanupMounted();
+      await mountApiTicket(marketFetch({ assets: () => assetPageResponse([{ ...CONTRADICTORY, latestPrice: wire }]) }), { sym: 'AAPL' });
+      expect(requireInput('ticket-price').value, `latestPrice ${wire}`).toBe(expected);
+    }
+  });
+
+  it('缺價(latestPrice null)維持既有行為:預填 0、報價卡顯示 —、送出鈕停用(不猜價格)', async () => {
+    const nulled = { ...CONTRADICTORY, latestPrice: null };
+    await mountApiTicket(marketFetch({ assets: () => assetPageResponse([nulled]) }), { sym: 'AAPL' });
+
+    expect(requireInput('ticket-price').value).toBe('0');
+    expect(requireTestid('ticket-quote-last').textContent?.trim()).toBe('—');
+    expect((requireTestid('ticket-review-advance') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('報價卡:大額不失真、HALF_UP 捨入;漲跌 0 帶 +(沿用 fmtPct 規則)、色彩依 Decimal 正負', async () => {
+    const quoted = {
+      ...CONTRADICTORY,
+      latestPrice: '9007199254740993.005',
+      change: '0',
+      changePercent: '-2.355',
+      high: '9007199254740993.995',
+      low: '0.004',
+    };
+    await mountApiTicket(marketFetch({ assets: () => assetPageResponse([quoted]) }), { sym: 'AAPL' });
+
+    expect(requireTestid('ticket-quote-last').textContent?.trim()).toBe('9,007,199,254,740,993.01');
+    expect(requireTestid('ticket-quote-change').textContent?.trim()).toBe('+0.00');
+    expect(requireTestid('ticket-quote-change-pct').textContent?.trim()).toBe('-2.36%');
+    expect(flat(requireTestid('ticket-quote-range').textContent)).toBe('0.00 – 9,007,199,254,740,994.00');
+    const wrap = document.body.querySelector<HTMLElement>('.quote-chg-wrap');
+    expect(wrap?.style.color).toBe('var(--dn)');
+  });
+
+  it('搜尋選項:價格 / 漲跌幅經 moneyFormat,正值補 +、色彩依 Decimal 正負', async () => {
+    const up = asset({ symbol: 'UPX', latestPrice: '1234.5', changePercent: '0.005' });
+    const down = asset({ symbol: 'DNX', latestPrice: '0.00000001', changePercent: '-0.004' });
+    await mountApiTicket(assetsFetch(() => assetPageResponse([up, down])));
+    await focusSymbol();
+
+    const upRow = requireTestid('ticket-symbol-option-UPX');
+    expect(upRow.querySelector('.sym-opt-px')?.textContent?.trim()).toBe('1,234.50');
+    expect(upRow.querySelector('.sym-opt-chg')?.textContent?.trim()).toBe('+0.01%');
+    expect(upRow.querySelector<HTMLElement>('.sym-opt-chg')?.style.color).toBe('var(--up-text)');
+    const downRow = requireTestid('ticket-symbol-option-DNX');
+    expect(downRow.querySelector('.sym-opt-px')?.textContent?.trim()).toBe('0.00');
+    // -0.004 → 2 位為 -0.00(負號保留,同 Phase 5 前 fmtPct 的 toFixed 行為)
+    expect(downRow.querySelector('.sym-opt-chg')?.textContent?.trim()).toBe('-0.00%');
+    expect(downRow.querySelector<HTMLElement>('.sym-opt-chg')?.style.color).toBe('var(--dn)');
+  });
+
+  it('源碼守門:不 import AssetDto、預填不再經 String() / parseDecimalInput、報價顯示不用 fmtNum / fmtPct', () => {
+    const script = orderTicketSource.slice(orderTicketSource.indexOf('<script setup'));
+    expect(script).not.toMatch(/^import .*\bAssetDto\b/m);
+    const prefill = script.slice(script.indexOf('function priceInputText'), script.indexOf('function pickAsset'));
+    expect(prefill).toContain('toWire(price)');
+    expect(prefill).not.toMatch(/String\(|parseDecimalInput/);
+    expect(script).not.toMatch(/\bfmtNum\(|\bfmtPct\(/);
   });
 });

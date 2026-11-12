@@ -101,7 +101,7 @@ async function key(el: Element, keyName: string) {
 }
 
 const AAPL = assetDto('AAPL', {
-  name: 'Apple Inc.', latestPrice: 218.4, change: 2.65, changePercent: 1.23, volumeText: '52.1M', currency: 'USD',
+  name: 'Apple Inc.', latestPrice: '218.4', change: '2.65', changePercent: '1.23', volumeText: '52.1M', currency: 'USD',
 });
 const USDTWD = assetDto('USD/TWD', {
   name: '美元/台幣', assetType: 'FX', market: 'FX', currency: 'TWD', tradeable: false,
@@ -175,9 +175,9 @@ describe('Watchlist 頁(API mode)— tracer:預設清單的真報價列', () => 
       id: 'w1',
       name: '我的自選',
       items: [
-        assetDto('EUR/USD', { assetType: 'FX', market: 'FX', currency: 'USD', tradeable: false, latestPrice: 1.08456, change: -0.0022, changePercent: -0.2 }),
-        assetDto('US10Y', { assetType: 'BOND', market: 'US', tradeable: false, latestPrice: 4.1234, change: -0.012, changePercent: null }),
-        assetDto('BTC', { assetType: 'CRYPTO', market: 'CRYPTO', currency: 'USD', latestPrice: 67000, change: 1600, changePercent: 2.5, volumeText: '' }),
+        assetDto('EUR/USD', { assetType: 'FX', market: 'FX', currency: 'USD', tradeable: false, latestPrice: '1.08456', change: '-0.0022', changePercent: '-0.2' }),
+        assetDto('US10Y', { assetType: 'BOND', market: 'US', tradeable: false, latestPrice: '4.1234', change: '-0.012', changePercent: null }),
+        assetDto('BTC', { assetType: 'CRYPTO', market: 'CRYPTO', currency: 'USD', latestPrice: '67000', change: '1600', changePercent: '2.5', volumeText: '' }),
       ],
     };
     await mountApi(watchlistFetch([list]));
@@ -200,6 +200,45 @@ describe('Watchlist 頁(API mode)— tracer:預設清單的真報價列', () => 
     expect(btc.querySelector('.ccy-tag')?.textContent?.trim()).toBe('USD');
     // volumeText 空字串 → —
     expect(btc.querySelector('.col-vol')?.textContent?.trim()).toBe('—');
+  });
+
+  it('05-22(D-05 / D-08):報價字串以 Decimal 顯示 —— 大額不失真、HALF_UP 捨入、四捨五入後為 0 仍依原值帶號、無科學記號', async () => {
+    const list: WatchlistDto = {
+      id: 'w1',
+      name: '我的自選',
+      items: [
+        // 9007199254740993 超過 2^53:經 JS number 會變成 …992;Decimal 顯示原值。
+        assetDto('BIG', { latestPrice: '9007199254740993.005', change: '0.00000001', changePercent: '0.00000001' }),
+        // 2.345 / 2.355 在 binary double 會分別往下 / 往上偏,Decimal HALF_UP 一律 .5 進位。
+        assetDto('HALF', { latestPrice: '2.345', changePercent: '-2.355' }),
+        assetDto('BOND1', { assetType: 'BOND', tradeable: false, latestPrice: '4.0005', change: '-0.0000001', changePercent: null }),
+      ],
+    };
+    await mountApi(watchlistFetch([list]));
+
+    const big = row('BIG');
+    expect(cell(big, 'watchlist-row-price').textContent?.trim()).toBe('9,007,199,254,740,993.01');
+    // 0.00000001% 捨入成 0.00,但原值 > 0:正負與色彩依未捨入的原值(同 Phase 5 前的 number 版)
+    expect(cell(big, 'watchlist-row-change').textContent?.trim()).toBe('+0.00%');
+    expect(cell(big, 'watchlist-row-change').classList.contains('up')).toBe(true);
+
+    const half = row('HALF');
+    expect(cell(half, 'watchlist-row-price').textContent?.trim()).toBe('2.35');
+    expect(cell(half, 'watchlist-row-change').textContent?.trim()).toBe('-2.36%');
+    expect(cell(half, 'watchlist-row-change').classList.contains('dn')).toBe(true);
+
+    const bond = row('BOND1');
+    expect(cell(bond, 'watchlist-row-price').textContent?.trim()).toBe('4.001');
+    expect(cell(bond, 'watchlist-row-change').textContent?.trim()).toBe('-0.000');
+    expect(document.body.textContent).not.toMatch(/\de-\d/);
+  });
+
+  it('05-22:頁面只用 domain 型別,顯示函式不對報價做 Number() / 算術運算', () => {
+    const script = watchlistSource.slice(watchlistSource.indexOf('<script setup'));
+    expect(script).not.toMatch(/\bAssetDto\b/);
+    expect(script).not.toMatch(/\bWatchlistDto\b/);
+    expect(script).not.toMatch(/Math\.abs\(value\)/);
+    expect(script).not.toMatch(/toLocaleString\(/);
   });
 
   it('無假走勢、無「即時行情更新」副標、無示範資料標示;表格下方報價說明', async () => {
@@ -931,21 +970,21 @@ describe('Watchlist 頁 — 拖拉(HTML5 DnD)', () => {
 // =============== 04.2-24:即時報價疊加(WATCH-04;D-21 / D-23 / D-24;UI-SPEC §8 / §9、U-20、U-26)===============
 
 const AAPL_GET = assetDto('AAPL', {
-  name: 'Apple Inc.', latestPrice: 215.75, change: 2.65, changePercent: 1.24, volumeText: '52.1M', currency: 'USD',
+  name: 'Apple Inc.', latestPrice: '215.75', change: '2.65', changePercent: '1.24', volumeText: '52.1M', currency: 'USD',
 });
 const BTC = assetDto('BTC', {
   name: 'Bitcoin', assetType: 'CRYPTO', market: 'CRYPTO', currency: 'USD',
-  latestPrice: 67000, change: 100, changePercent: 0.15, volumeText: '1.2K',
+  latestPrice: '67000', change: '100', changePercent: '0.15', volumeText: '1.2K',
 });
 const USDTWD_QUOTED = assetDto('USD/TWD', {
   name: '美元/台幣', assetType: 'FX', market: 'FX', currency: 'TWD', tradeable: false,
-  latestPrice: 32.1, change: 0.05, changePercent: 0.16, volumeText: null,
+  latestPrice: '32.1', change: '0.05', changePercent: '0.16', volumeText: null,
 });
 
 function liveLists(): WatchlistDto[] {
   return [
     { id: 'w1', name: '我的自選', items: [AAPL_GET, BTC, USDTWD] },
-    { id: 'w2', name: '科技', items: [assetDto('MSFT', { latestPrice: 410 })] },
+    { id: 'w2', name: '科技', items: [assetDto('MSFT', { latestPrice: '410' })] },
   ];
 }
 
@@ -1110,7 +1149,7 @@ describe('Watchlist 頁 — 即時報價疊加(04.2-24)', () => {
     expect(rowSymbols()).toEqual(['AAPL', 'BTC', 'USD/TWD']);
 
     const refreshed = liveLists();
-    refreshed[0].items = [{ ...AAPL_GET, latestPrice: 220.5 }, BTC, USDTWD];
+    refreshed[0].items = [{ ...AAPL_GET, latestPrice: '220.5' }, BTC, USDTWD];
     second.resolve(apiSuccess(refreshed));
     await flushAsync();
     expect(cell(row('AAPL'), 'watchlist-row-price').textContent).toBe('220.50');

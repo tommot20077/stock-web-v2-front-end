@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, watch, type ComputedRef, type Ref } from 'vue';
-import type { AssetDto } from '../services/apiTypes';
+import type { Asset } from '../services/apiTypes';
 import type { QuoteStream } from '../services/quoteStream';
 
 /**
@@ -20,7 +20,7 @@ export const QUOTE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const LIVE_ASSET_TYPES = new Set(['STOCK', 'CRYPTO']);
 
 export function useQuoteRefresh(
-  rows: Ref<readonly AssetDto[]>,
+  rows: Ref<readonly Asset[]>,
   stream: QuoteStream,
   refresh: () => unknown,
   options: { canRefresh?: () => boolean; enabled?: boolean } = {},

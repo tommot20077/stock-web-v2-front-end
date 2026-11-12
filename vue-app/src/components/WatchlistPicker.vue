@@ -160,13 +160,13 @@ export const WATCHLIST_PICKER_ID = 'watchlist-picker-panel';
 
 <script setup lang="ts">
 // Phase 04.2 Plan 22(D-16 / U-12):觀察清單選擇器,非 modal popover。
-// 清單狀態由頁面持有(lists prop);勾選即時寫入、**不做樂觀更新**——寫入回應的 WatchlistDto 以
+// 清單狀態由頁面持有(lists prop);勾選即時寫入、**不做樂觀更新**——寫入回應的 WatchlistRecord 以
 // `changed` 交回頁面,勾選與檔數只跟著 prop 變。寫入只經 getRuntimeApiClients().watchlist(鐵律 1 / 3)。
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import { WATCHLIST_MAX_ITEMS, WATCHLIST_MAX_LISTS, type WatchlistDto } from '../services/watchlistApi';
+import { WATCHLIST_MAX_ITEMS, WATCHLIST_MAX_LISTS, type WatchlistRecord } from '../services/watchlistApi';
 import type { Lang } from '../types';
 
 const props = defineProps<{
@@ -174,7 +174,7 @@ const props = defineProps<{
   lang: Lang;
   symbol: string;
   anchor: HTMLElement | null;
-  lists: WatchlistDto[] | null;
+  lists: WatchlistRecord[] | null;
   loading: boolean;
   loadError: ApiClientError | null;
   /**
@@ -186,8 +186,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'changed', list: WatchlistDto): void;
-  (e: 'created', list: WatchlistDto): void;
+  (e: 'changed', list: WatchlistRecord): void;
+  (e: 'created', list: WatchlistRecord): void;
   (e: 'retry'): void;
 }>();
 
@@ -263,7 +263,7 @@ function optionErrorId(listId: string): string {
   return `watchlist-picker-option-error-${listId}`;
 }
 
-function isFull(list: WatchlistDto): boolean {
+function isFull(list: WatchlistRecord): boolean {
   return !contains(list) && list.items.length >= WATCHLIST_MAX_ITEMS;
 }
 
@@ -329,7 +329,7 @@ async function submitCreate() {
   const watchlist = getRuntimeApiClients().watchlist;
 
   createBusy.value = true;
-  let created: WatchlistDto;
+  let created: WatchlistRecord;
   try {
     created = await watchlist.create(name);
   } catch (error) {
@@ -358,7 +358,7 @@ const positionStyle = computed(() => (position.value
   ? { '--wp-top': `${position.value.top}px`, '--wp-left': `${position.value.left}px` }
   : {}));
 
-function contains(list: WatchlistDto): boolean {
+function contains(list: WatchlistRecord): boolean {
   return list.items.some(item => item.symbol === props.symbol);
 }
 
@@ -366,7 +366,7 @@ function isSaving(listId: string): boolean {
   return saving[listId] === true;
 }
 
-async function toggle(list: WatchlistDto, event: Event) {
+async function toggle(list: WatchlistRecord, event: Event) {
   const input = event.target as HTMLInputElement;
   const wasChecked = contains(list);
   // 不樂觀:瀏覽器已自行翻轉 checkbox,先翻回 prop 狀態,等回應 DTO 再由 prop 驅動。
@@ -377,7 +377,7 @@ async function toggle(list: WatchlistDto, event: Event) {
   saving[list.id] = true;
   delete itemErrors[list.id];
   try {
-    let updated: WatchlistDto;
+    let updated: WatchlistRecord;
     if (wasChecked) {
       // 移除以回應 DTO 中該代號的 asset uuid 指定(路徑只放 UUID,T-04.2-39)。
       const assetId = list.items.find(item => item.symbol === props.symbol)?.uuid;

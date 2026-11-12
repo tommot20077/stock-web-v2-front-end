@@ -291,9 +291,10 @@
               <!-- D-28:幣別以標的後的標籤表示一次,金額格只放數字;currency 缺值時不渲染、不猜測 -->
               <span v-if="tr.currency" class="ccy-tag" data-testid="overview-trade-ccy-tag">{{ tr.currency }}</span>
             </td>
-            <td class="num" style="text-align:right">{{ tr.quantity }}</td>
+            <!-- Phase 5 D-08:數量 / 價格為 Decimal;股數以一般記號原值顯示(去尾零,與改字串前的 number 相同),總額在 Decimal 內相乘 -->
+            <td class="num" style="text-align:right">{{ toWire(tr.quantity) }}</td>
             <td class="num" style="text-align:right">{{ fmtMoneyAmount(tr.price, tr.currency) }}</td>
-            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity * tr.price, tr.currency, 0) }}</td>
+            <td class="num" style="text-align:right;font-weight:600">{{ fmtMoneyAmount(tr.quantity.times(tr.price), tr.currency, 0) }}</td>
           </tr>
         </tbody>
       </table>
@@ -446,8 +447,9 @@ import { SYMBOLS, CRYPTO, NEWS, genSeries, fmtNum, fmtPct } from '../data';
 import { fmtMoney, fmtMoneyAmount, fmtRatioPct, fmtSignedMoney, fmtSignedMoneyAmount, fmtWeightPct } from '../moneyFormat';
 import type { Lang } from '../types';
 import { ApiClientError } from '../services/apiClient';
-import type { AssetDto, PortfolioSummaryDto, TradeDto } from '../services/apiTypes';
-import type { WatchlistDto } from '../services/watchlistApi';
+import type { Asset, PortfolioSummary, TradeRecord } from '../services/apiTypes';
+import { ZERO, toChartNumber, toWire, type Decimal } from '../services/decimal';
+import type { WatchlistRecord } from '../services/watchlistApi';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { BASE_CURRENCY_OPTIONS } from '../services/profileApi';
 import { baseCurrencyErrorKey } from '../baseCurrencyErrorKey';
@@ -491,8 +493,8 @@ type BlockState<T> =
   | { status: 'loaded'; data: T }
   | { status: 'error'; error: BlockError };
 
-const summaryState = ref<BlockState<PortfolioSummaryDto>>({ status: 'loading' });
-const tradesState = ref<BlockState<TradeDto[]>>({ status: 'loading' });
+const summaryState = ref<BlockState<PortfolioSummary>>({ status: 'loading' });
+const tradesState = ref<BlockState<TradeRecord[]>>({ status: 'loading' });
 
 const summaryLoading = computed(() => summaryState.value.status === 'loading');
 const summaryError = computed(() => (summaryState.value.status === 'error' ? summaryState.value.error : null));
@@ -768,6 +770,7 @@ const mockKpis = computed<KpiCard[]>(() => [
 ]);
 
 // API mode:四張卡皆為後端值(D-14 / D-22)。前端唯一的算術是 ratio × 100 的格式化(D-04 / D-21),不換匯。
+// 金額是 Decimal(Phase 5 D-08):判斷用 Decimal 方法,顯示交給 moneyFormat。
 const apiKpis = computed<KpiCard[]>(() => {
   const s = summary.value;
   if (!s) return [];
@@ -775,7 +778,7 @@ const apiKpis = computed<KpiCard[]>(() => {
   const lang = props.lang;
 
   // 今日損益:null 是「全部被排除」,顯示 — 而非 0;真實為零才顯示 0(T-04.1-55)。
-  const hasDayPnl = s.dayPricePnl != null && Number.isFinite(s.dayPricePnl);
+  const hasDayPnl = s.dayPricePnl != null;
   const ratioText = hasDayPnl ? fmtRatioPct(s.dayPricePnlRatio) : null;
   const dayNotes = [{ testid: 'overview-kpi-day-pnl-note', text: t(lang, 'dayPnlNote') }];
   if (s.dayPnlExcludedCount > 0) {
@@ -825,12 +828,12 @@ const apiKpis = computed<KpiCard[]>(() => {
 });
 
 /** KPI #4 的股利收入 Hint(`--fg-dim`,中性):有預扣稅另列;金額為基準幣、0 位小數(UI-SPEC §4)。 */
-function dividendIncomeNotes(s: PortfolioSummaryDto): { testid: string; text: string }[] {
-  const income = s.dividendIncome ?? 0;
-  const tax = s.dividendTaxWithheld ?? 0;
-  if (income === 0 && tax === 0) return [];
+function dividendIncomeNotes(s: PortfolioSummary): { testid: string; text: string }[] {
+  const income = s.dividendIncome;
+  const tax = s.dividendTaxWithheld;
+  if (income.eq(ZERO) && tax.eq(ZERO)) return [];
   const amount = fmtSignedMoney(income, s.baseCurrency, 0);
-  const text = tax > 0
+  const text = tax.gt(ZERO)
     ? tf(props.lang, 'dividendIncomeLineWithTax', { amount, tax: fmtMoney(tax, s.baseCurrency, 0) })
     : tf(props.lang, 'dividendIncomeLine', { amount });
   return [{ testid: 'overview-kpi-dividend-income', text }];
@@ -874,14 +877,15 @@ const allocRows = computed<AllocRow[]>(() => {
   }
   const s = summary.value;
   if (!s) return [];
-  // 舊形狀 / 快取的 summary 可能沒有 allocation:視為空,不崩潰。
-  return (s.allocation ?? []).map(slice => {
+  // 舊形狀 / 快取的 summary 沒有 allocation 時,mapper(toPortfolioSummary)已補成空清單。
+  return s.allocation.map(slice => {
     const meta = ALLOCATION_CATEGORIES[slice.category] ?? UNKNOWN_CATEGORY;
     return {
       key: slice.category,
       label: t(props.lang, meta.labelKey),
       color: meta.color,
-      value: slice.value,
+      // Donut 只看比例,近似值即可:Decimal → number 只在這個圖表出口發生。
+      value: toChartNumber(slice.value),
       amount: fmtMoney(slice.value, s.baseCurrency, 0),
       weightText: fmtWeightPct(slice.weight),
     };
@@ -889,30 +893,30 @@ const allocRows = computed<AllocRow[]>(() => {
 });
 
 /** D-18:現金為負時後端不列 CASH 塊,legend 下方說明原因。 */
-const allocNegativeCash = computed(() => !live && summary.value != null && summary.value.cash < 0);
+const allocNegativeCash = computed(() => !live && summary.value != null && summary.value.cash.lt(ZERO));
 
 // getter 每次存取才解析 store,reactivity 由 computed 追蹤(03-02-SUMMARY 提醒 4)。
 const mockRecentTrades = computed(() => (live ? live.trades.slice(0, 5) : []));
 
 /** executedAt 是 ISO-8601,表格只顯示日期部分。 */
-function tradeDate(trade: TradeDto): string {
+function tradeDate(trade: TradeRecord): string {
   return trade.executedAt.slice(0, 10);
 }
 
 // =============== 觀察清單卡(D-26;UI-SPEC §10、U-20 / U-21,API mode)===============
 /** U-21:第一個清單的前 6 檔 */
 const OVERVIEW_WATCHLIST_LIMIT = 6;
-const NO_ROWS: readonly AssetDto[] = [];
+const NO_ROWS: readonly Asset[] = [];
 const quotes = clients.quotes;
 
-const wlState = ref<BlockState<WatchlistDto[]>>({ status: 'loading' });
+const wlState = ref<BlockState<WatchlistRecord[]>>({ status: 'loading' });
 /** 最後一次 GET 成功的前端收到時間(「更新於」下限,U-19) */
 const wlRestFetchedAt = ref<number | null>(null);
 /** 較舊的清單回應(重試與靜默重讀交疊)一律丟棄 */
 let wlSeq = 0;
 
 const wlFirst = computed(() => (wlState.value.status === 'loaded' ? wlState.value.data[0] ?? null : null));
-const wlRows = computed<readonly AssetDto[]>(() => wlFirst.value?.items.slice(0, OVERVIEW_WATCHLIST_LIMIT) ?? NO_ROWS);
+const wlRows = computed<readonly Asset[]>(() => wlFirst.value?.items.slice(0, OVERVIEW_WATCHLIST_LIMIT) ?? NO_ROWS);
 const wlMore = computed(() => Math.max(0, (wlFirst.value?.items.length ?? 0) - OVERVIEW_WATCHLIST_LIMIT));
 const wlLive = useLiveQuotes(wlRows, quotes, { restFetchedAt: wlRestFetchedAt });
 const wlLiveRows = wlLive.rows;
@@ -957,39 +961,36 @@ onMounted(() => {
   void loadWatchlist();
 });
 
-function wlFinite(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+/** 固定 dp 位小數、千分位(經 moneyFormat,Decimal 不經 JS number;Phase 5 D-08)。 */
+function wlFixed(value: Decimal, dp: number): string {
+  return fmtMoneyAmount(value, null, dp);
 }
 
-function wlFixed(value: number, dp: number): string {
-  return value.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
-}
-
-/** 與 Watchlist 頁同一套(UI-SPEC §Money:觀察清單):FX 4 位、BOND 3 位(殖利率)、其餘 2 位 */
-function wlPriceText(row: AssetDto): string {
-  if (!wlFinite(row.latestPrice)) return '—';
+/** 與 Watchlist 頁同一套(UI-SPEC §Money:觀察清單):FX 4 位、BOND 3 位(殖利率)、其餘 2 位;缺價顯示 —(不當 0) */
+function wlPriceText(row: Asset): string {
+  if (row.latestPrice === null) return '—';
   const dp = row.assetType === 'FX' ? 4 : row.assetType === 'BOND' ? 3 : 2;
   return wlFixed(row.latestPrice, dp);
 }
 
 /** BOND 用 change(殖利率變動,3 位、不加 %),其餘用 changePercent */
-function wlChangeValue(row: AssetDto): number | null {
-  const value = row.assetType === 'BOND' ? row.change : row.changePercent;
-  return wlFinite(value) ? value : null;
+function wlChangeValue(row: Asset): Decimal | null {
+  return row.assetType === 'BOND' ? row.change : row.changePercent;
 }
 
-function wlChangeText(row: AssetDto): string {
+/** 正負號由 Decimal 比較決定(未捨入的原值,同 Phase 5 前的 number 版),本體為絕對值。 */
+function wlChangeText(row: Asset): string {
   const value = wlChangeValue(row);
   if (value === null) return '—';
-  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-  const body = row.assetType === 'BOND' ? wlFixed(Math.abs(value), 3) : `${wlFixed(Math.abs(value), 2)}%`;
+  const sign = value.gt(ZERO) ? '+' : value.lt(ZERO) ? '-' : '';
+  const body = row.assetType === 'BOND' ? wlFixed(value.abs(), 3) : `${wlFixed(value.abs(), 2)}%`;
   return `${sign}${body}`;
 }
 
-function wlChangeTone(row: AssetDto): string {
+function wlChangeTone(row: Asset): string {
   const value = wlChangeValue(row);
   if (value === null) return 'na';
-  return value > 0 ? 'up' : value < 0 ? 'dn' : '';
+  return value.gt(ZERO) ? 'up' : value.lt(ZERO) ? 'dn' : '';
 }
 
 /** mock mode 的觀察清單卡(data.ts star 列,不改);API mode 不渲染這組列,改用 wlLiveRows(D-26)。 */

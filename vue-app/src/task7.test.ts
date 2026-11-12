@@ -27,7 +27,7 @@ async function setSelect(index: number, value: string) {
 }
 
 async function setInitial(value: string) {
-  const input = document.body.querySelector<HTMLInputElement>('input[type="number"]');
+  const input = document.body.querySelector<HTMLInputElement>('[data-testid="backtest-initial"]');
   expect(input, 'initial input').toBeTruthy();
   input!.value = value;
   input!.dispatchEvent(new Event('input', { bubbles: true }));

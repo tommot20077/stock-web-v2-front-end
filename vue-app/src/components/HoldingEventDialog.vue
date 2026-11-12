@@ -51,7 +51,7 @@
                   <b class="num">{{ fmtMoney(reversalOf.amount, reversalOf.currency, minorUnits(reversalOf.currency)) }}</b>
                 </div>
                 <div class="sum-row">
-                  <span class="num">{{ tf(lang, 'tradesTaxLine', { amount: fmtMoney(reversalOf.withholdingTax ?? 0, reversalOf.currency, minorUnits(reversalOf.currency)) }) }}</span>
+                  <span class="num">{{ tf(lang, 'tradesTaxLine', { amount: fmtMoney(reversalOf.withholdingTax ?? ZERO, reversalOf.currency, minorUnits(reversalOf.currency)) }) }}</span>
                 </div>
               </template>
               <template v-else>
@@ -576,8 +576,9 @@ import { FALLBACK_MARKET_DAY_RULE, marketDayRuleOf, marketToday, marketZoneLabel
 import type { MarketDayRule } from '../marketDate';
 import { useNow } from '../composables/useNow';
 import { fmtMoney, fmtQuantity, fmtSignedMoney, fmtSignedQuantity, minorUnits } from '../moneyFormat';
-import type { AssetDto, PaginatedResponse, PortfolioActivityDto } from '../services/apiTypes';
-import type { DividendDto, ShareAdjustmentDto } from '../services/holdingEventApi';
+import type { Asset, PaginatedResponse, PortfolioActivity } from '../services/apiTypes';
+import { parseDecimal, parseDecimalInput, ZERO, type Decimal } from '../services/decimal';
+import type { Dividend, ShareAdjustment } from '../services/holdingEventApi';
 import type { Lang } from '../types';
 
 /** 三種記錄模式;名稱依 D-11(「股利與股數調整」)。 */
@@ -585,12 +586,16 @@ export type HoldingEventMode = 'cashDividend' | 'stockDividend' | 'split';
 
 /** 從持倉開啟時開啟者傳入的持倉摘要。 */
 export interface HoldingEventHolding {
-  totalQuantity: number;
+  /**
+   * 目前持股;API 路徑是 domain `Holding.totalQuantity`(Decimal,Phase 5 D-08)、mock 路徑是 `Position.qty`(number)。
+   * 對話框只經 `fmtQuantity` 顯示、不做任何運算(Phase 3 D-04),兩種型別顯示規則相同。
+   */
+  totalQuantity: Decimal | number;
   currency?: string;
   name?: string;
-  /** `HoldingDto.assetType`(大寫字串);可缺。 */
+  /** `Holding.assetType`(大寫字串);可缺。 */
   assetType?: string | null;
-  /** `HoldingDto.market`(後端 2026-11-07 新增);null / 缺值 / 無法辨識 → UTC fallback。 */
+  /** `Holding.market`(後端 2026-11-07 新增);null / 缺值 / 無法辨識 → UTC fallback。 */
   market?: string | null;
 }
 
@@ -601,12 +606,12 @@ const props = withDefaults(defineProps<{
   symbol?: string | null;
   /**
    * 開啟者已知的持倉;只顯示、不計算(Phase 3 D-04)。
-   * `assetType` / `market` 取自 `HoldingDto`(quick-261107-1j4 E2),只用來決定除權日的「市場今天」;缺值 → UTC fallback。
+   * `assetType` / `market` 取自 `Holding`(quick-261107-1j4 E2),只用來決定除權日的「市場今天」;缺值 → UTC fallback。
    */
   holding?: HoldingEventHolding | null;
   initialMode?: HoldingEventMode;
   /** 有值 = 沖銷模式(Trades 活動列「沖銷這筆」);值全取自此列,只有備註可改(D-13)。 */
-  reversalOf?: PortfolioActivityDto | null;
+  reversalOf?: PortfolioActivity | null;
 }>(), {
   symbol: null,
   holding: null,
@@ -615,7 +620,7 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'recorded', event: DividendDto | ShareAdjustmentDto): void;
+  (e: 'recorded', event: Dividend | ShareAdjustment): void;
   (e: 'reversalConflict', code: string): void;
 }>();
 
@@ -642,7 +647,7 @@ const mode = ref<HoldingEventMode>('cashDividend');
 const selectedSymbol = ref<string | null>(null);
 const selectedCurrency = ref<string | null>(null);
 /** typeahead 選定的資產(只用於顯示名稱與幣別);鎖定標的時為 null。 */
-const pickedAsset = ref<AssetDto | null>(null);
+const pickedAsset = ref<Asset | null>(null);
 const amount = ref('');
 const tax = ref('');
 const paidAt = ref('');
@@ -657,7 +662,8 @@ const note = ref('');
 const touched = reactive({ symbol: false, amount: false, paidAt: false, shares: false, ratio: false, effectiveDate: false });
 
 const submitting = ref(false);
-type RecordedEvent = { kind: 'dividend'; dto: DividendDto } | { kind: 'shareAdjustment'; dto: ShareAdjustmentDto };
+/** `dto`:後端回傳的權威快照,已經 adapter 轉成 domain(金額 / 股數為 Decimal,Phase 5 D-08)。 */
+type RecordedEvent = { kind: 'dividend'; dto: Dividend } | { kind: 'shareAdjustment'; dto: ShareAdjustment };
 const recorded = ref<RecordedEvent | null>(null);
 
 const amountInput = ref<HTMLInputElement | null>(null);
@@ -717,7 +723,7 @@ const reversalKindLabel = computed(() => {
 
 /** 沖銷預覽的唯一前端衍生:把記錄值前綴「扣回 / 撤銷」字樣,不做加減(UI-SPEC §Money)。 */
 function reversalPreviewFor(kind: 'dividend' | 'shareAdjustment', values: {
-  symbol: string | null; currency: string | null; amount: number | null; quantity: number | null;
+  symbol: string | null; currency: string | null; amount: Decimal | null; quantity: Decimal | null;
 }): string {
   if (kind === 'dividend') {
     return tf(props.lang, 'holdingEventReversalPreviewDividend', {
@@ -810,7 +816,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 const symQuery = ref('');
 const symOpen = ref(false);
-const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+const symbolState = ref<BlockState<PaginatedResponse<Asset>>>({ status: 'idle' });
 /** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
 const activeQuery = ref('');
 const activeIndex = ref(-1);
@@ -821,7 +827,7 @@ const symbolError = computed(() => (symbolState.value.status === 'error' ? symbo
 const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbolState.value.data : null));
 
 // 唯一允許的本地過濾:只列可交易標的(股利標的須 active + tradeable)。關鍵字過濾是後端的事。
-const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const options = computed<Asset[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
 const visibleOptions = computed(() => (
   activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
 ));
@@ -915,7 +921,7 @@ function resetSymbolSearch() {
   pickedAsset.value = null;
 }
 
-function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
+function pickAsset(asset: Asset, { close = true }: { close?: boolean } = {}) {
   pickedAsset.value = asset;
   selectedSymbol.value = asset.symbol;
   selectedCurrency.value = asset.currency;
@@ -1157,20 +1163,38 @@ const reversalOfDate = computed(() => {
 // =================== 前端自檢(UI-SPEC §Interaction 1 欄位契約) ===================
 // 後端 Bean Validation 才是權威;這裡只是在送出前把「必定被拒」的輸入擋下並說明原因。
 // 上限與小數位數與靜態文案(holdingEventErrAmount / Tax / Shares / Ratio)一致,文案不從錯誤訊息解析。
-const MONEY_MAX = 1_000_000_000_000;
-const SHARES_MAX = 1_000_000_000;
+// 金額 / 股數的上下限與比較一律用 Decimal(Phase 5 D-08):number 在 10^12 附近已無法區分第 8 位小數。
+// 比例是後端 Integer(1–1000),維持 number。
+const MONEY_MAX = parseDecimal('1000000000000');
+const SHARES_MAX = parseDecimal('1000000000');
 const RATIO_MAX = 1000;
 const MAX_DECIMALS = 8;
 const DECIMAL_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
 const INTEGER_PATTERN = /^\d+$/;
 
-function decimalWithin(text: string, min: number, max: number, allowZero: boolean): boolean {
-  if (!DECIMAL_PATTERN.test(text)) return false;
-  const decimals = text.includes('.') ? text.split('.')[1].length : 0;
-  if (decimals > MAX_DECIMALS) return false;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value > max) return false;
-  return allowZero ? value >= min : value > min;
+/**
+ * 金額 / 股數輸入文字 → Decimal;不是一般記號的非負數字面、或小數超過 8 位 → `null`。
+ * 範圍(> 0 / ≥ 0、上限)由呼叫端判斷。
+ */
+function parseAmountText(text: string): Decimal | null {
+  const trimmed = text.trim();
+  if (!DECIMAL_PATTERN.test(trimmed)) return null;
+  const decimals = trimmed.includes('.') ? trimmed.split('.')[1].length : 0;
+  if (decimals > MAX_DECIMALS) return null;
+  return parseDecimalInput(trimmed);
+}
+
+function decimalWithin(text: string, max: Decimal, allowZero: boolean): boolean {
+  const value = parseAmountText(text);
+  if (value === null || value.gt(max)) return false;
+  return allowZero ? value.gte(ZERO) : value.gt(ZERO);
+}
+
+/** 送出用:只在自檢通過後呼叫,所以解析失敗代表程式錯誤,大聲失敗而不是送出 0。 */
+function requireDecimalText(text: string): Decimal {
+  const value = parseAmountText(text);
+  if (value === null) throw new TypeError('[HoldingEventDialog] decimal input was not validated before submit');
+  return value;
 }
 
 function ratioSideValid(text: string): boolean {
@@ -1179,10 +1203,10 @@ function ratioSideValid(text: string): boolean {
   return value >= 1 && value <= RATIO_MAX;
 }
 
-const amountValid = computed(() => decimalWithin(amount.value.trim(), 0, MONEY_MAX, false));
-/** 預扣稅選填:空 = 0。 */
-const taxValid = computed(() => tax.value.trim() === '' || decimalWithin(tax.value.trim(), 0, MONEY_MAX, true));
-const sharesValid = computed(() => decimalWithin(shares.value.trim(), 0, SHARES_MAX, false));
+const amountValid = computed(() => decimalWithin(amount.value, MONEY_MAX, false));
+/** 預扣稅選填:空 = 未提供(送 null,後端視為 0)。 */
+const taxValid = computed(() => tax.value.trim() === '' || decimalWithin(tax.value, MONEY_MAX, true));
+const sharesValid = computed(() => decimalWithin(shares.value, SHARES_MAX, false));
 const ratioValid = computed(() => {
   const n = ratioNew.value.trim();
   const o = ratioOld.value.trim();
@@ -1378,8 +1402,9 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
   if (mode.value === 'cashDividend') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: Number(amount.value.trim()),
-      withholdingTax: tax.value.trim() === '' ? null : Number(tax.value.trim()),
+      amount: requireDecimalText(amount.value),
+      // 選填:未填送 null(不送空字串,後端把 "" 視為未提供)。
+      withholdingTax: tax.value.trim() === '' ? null : requireDecimalText(tax.value),
       // 後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       paidAt: toLocalIso(new Date(paidAt.value)),
       note: noteValue,
@@ -1391,7 +1416,8 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
   const dto = await clients.holdingEvents.createShareAdjustment({
     symbol,
     type: isStock ? 'STOCK_DIVIDEND' : 'SPLIT',
-    quantity: isStock ? Number(shares.value.trim()) : null,
+    quantity: isStock ? requireDecimalText(shares.value) : null,
+    // 比例是後端 Integer(1–1000),維持 number。
     ratioNew: isStock ? null : Number(ratioNew.value.trim()),
     ratioOld: isStock ? null : Number(ratioOld.value.trim()),
     // 原字串送出,不轉時區(它是標的市場的交易日)。
@@ -1405,9 +1431,12 @@ async function createEvent(symbol: string, idempotencyKey: string): Promise<Reco
 /**
  * 沖銷請求:除備註外的值逐欄取自原列(DB 驗證沖銷值與原列相同,前端不讓使用者改)。
  * 股利 `paidAt` 送 null(後端帶 now();payload 比對只在有送時比對);拆股 `quantity` 送 null(ΔQ 由後端記錄)。
+ *
+ * 原列是 domain `PortfolioActivity`(Phase 5 D-08):金額 / 預扣稅 / 股數已是 Decimal,直接放進 Create*Input,
+ * 由 adapter 以 `toWire` 逐欄投影成字串送出 —— 全程不經 JS number。
  */
 async function createReversal(
-  original: PortfolioActivityDto,
+  original: PortfolioActivity,
   symbol: string,
   noteValue: string | null,
   idempotencyKey: string,
@@ -1416,7 +1445,8 @@ async function createReversal(
   if (original.kind === 'CASH_DIVIDEND') {
     const dto = await clients.holdingEvents.createDividend({
       symbol,
-      amount: original.amount ?? 0,
+      // 現金股利列的 amount 依契約恆有值;缺值時送 0 讓後端以值域錯誤拒絕,不在前端猜測。
+      amount: original.amount ?? ZERO,
       withholdingTax: original.withholdingTax,
       paidAt: null,
       note: noteValue,

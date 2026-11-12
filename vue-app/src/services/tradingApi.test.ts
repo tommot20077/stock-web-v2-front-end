@@ -4,11 +4,13 @@ import {
   createHttpTradingApi,
   createMockTradingApi,
   createTradingApi,
-  type CreateTradeRequest,
+  toTradeRecord,
+  type CreateTradeInput,
 } from './tradingApi';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import type { TradeDto } from './apiTypes';
+import { isDecimal, parseDecimal, toWire, ZERO } from './decimal';
 
 /**
  * 本檔鎖住四條「型別檢查抓不到、只有測試能抓」的交易送出契約:
@@ -29,15 +31,18 @@ import type { TradeDto } from './apiTypes';
  * 每個 fixture 都標註後端 `file:line` 出處以降低漂移。
  */
 
-/** 逐欄對應 `CreateTradeRequest.java:18-28`(symbol / type / quantity / price / fee / note / executedAt)。 */
-const TRADE_REQUEST: CreateTradeRequest = {
+/**
+ * 逐欄對應 `CreateTradeRequest.java:18-28`(symbol / type / quantity / price / fee / note / executedAt)。
+ * Phase 5 D-08:呼叫端傳 domain `CreateTradeInput`(金額為 Decimal),adapter 以 toWire 投影成字串。
+ */
+const TRADE_REQUEST: CreateTradeInput = {
   symbol: 'AAPL',
   type: 'BUY',
-  quantity: 10,
+  quantity: parseDecimal('10'),
   // D-02:price 是使用者手動輸入的「實際成交價」,前端不發明滑價。
-  price: 218.4,
+  price: parseDecimal('218.4'),
   // D-02:fee 是使用者手動輸入,預設 0;前端不發明費率。
-  fee: 1.5,
+  fee: parseDecimal('1.5'),
   note: '手動補登',
   // D-03:ISO-8601 **含 offset**(後端是 OffsetDateTime)。
   executedAt: '2026-07-29T10:30:00+08:00',
@@ -46,14 +51,14 @@ const TRADE_REQUEST: CreateTradeRequest = {
 /** 後端 `CreateTradeRequest` 的完整欄位集合(已排序)—— 這個陣列就是 TRAD-02 的機械化契約。 */
 const CONTRACT_FIELDS = ['executedAt', 'fee', 'note', 'price', 'quantity', 'symbol', 'type'];
 
-/** 逐欄對應 `TradeResponse`(前端 `apiTypes.ts:76-88` 的 `TradeDto`)。 */
+/** 逐欄對應後端 `TradeDto.java`(前端 `apiTypes.ts` 的 `TradeDto`);金額為 `@DecimalString` 字串(05-14)。 */
 const TRADE_DTO: TradeDto = {
   id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   symbol: 'AAPL',
   type: 'BUY',
-  quantity: 10,
-  price: 218.4,
-  fee: 1.5,
+  quantity: '10.00000000',
+  price: '218.40000000',
+  fee: '1.50000000',
   note: '手動補登',
   currency: 'USD',
   executedAt: '2026-07-29T02:30:00Z',
@@ -145,7 +150,7 @@ describe('tradingApi http adapter — payload 契約(TRAD-01 / TRAD-02)', () => 
       tif: 'GTC',
       orderId: '12345678',
       cashAfter: 124_580,
-    } as CreateTradeRequest;
+    } as CreateTradeInput;
 
     await createHttpTradingApi('/api/v1').createTrade(widerFormState, 'key-1');
 
@@ -207,8 +212,9 @@ describe('tradingApi http adapter — Idempotency-Key(D-05 / D-14)', () => {
     expect(firstKey).toBe('key-1');
     expect(replayKey).toBe(firstKey);
     // payload 也必須逐位元相同,否則後端會判成 TRADE_IDEMPOTENCY_KEY_REUSED(D-07)。
-    expect(bodyAt(tradeCallIndexes[1])).toEqual(bodyAt(tradeCallIndexes[0]));
-    expect(trade).toEqual(TRADE_DTO);
+    expect(String(initAt(tradeCallIndexes[1]).body)).toBe(String(initAt(tradeCallIndexes[0]).body));
+    expect(trade.id).toBe(TRADE_DTO.id);
+    expect(toWire(trade.quantity)).toBe('10');
   });
 });
 
@@ -260,6 +266,7 @@ describe('tradingApi mock adapter', () => {
     const trade = await createMockTradingApi().createTrade(TRADE_REQUEST, 'key-1');
 
     expect(executeOrder).toHaveBeenCalledTimes(1);
+    // mock store 是 mock-only 的 number 資料(05-16 規約),adapter 在這一處把 wire 字串轉成 number 交給它。
     // CreateTradeRequest 刻意不含 sector(保持與後端逐欄同形)—— 反查 data.ts 的髒活留在 mock 裡。
     expect(executeOrder.mock.calls[0][0]).toMatchObject({
       sym: 'AAPL',
@@ -269,7 +276,7 @@ describe('tradingApi mock adapter', () => {
       fee: 1.5,
       sector: 'Tech',
     });
-    // 回傳 TradeDto 形狀:十個欄位齊全(04.1-11 起含 currency),消費端(D-09 成功畫面 / D-13 高亮)只有一條路徑。
+    // 回傳 TradeRecord 形狀:十個欄位齊全(04.1-11 起含 currency),消費端(D-09 成功畫面 / D-13 高亮)只有一條路徑。
     expect(Object.keys(trade).sort()).toEqual(
       ['createdAt', 'currency', 'executedAt', 'fee', 'id', 'note', 'price', 'quantity', 'symbol', 'type'],
     );
@@ -277,7 +284,10 @@ describe('tradingApi mock adapter', () => {
     expect(trade.currency).toBeNull();
     // id 沿用 portfolioApi.tradeDtoFrom 的 `mock-{index}` 慣例;store 是 unshift,新交易永遠是 index 0。
     expect(trade.id).toBe('mock-0');
-    expect(trade).toMatchObject({ symbol: 'AAPL', type: 'BUY', quantity: 10, price: 218.4, fee: 1.5 });
+    expect(trade).toMatchObject({ symbol: 'AAPL', type: 'BUY' });
+    // Phase 5 D-08:mock 也先組 wire 形狀再走 toTradeRecord,金額為 Decimal。
+    expect([trade.quantity, trade.price, trade.fee].every(isDecimal)).toBe(true);
+    expect([toWire(trade.quantity), toWire(trade.price), toWire(trade.fee)]).toEqual(['10', '218.4', '1.5']);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -285,8 +295,11 @@ describe('tradingApi mock adapter', () => {
     const portfolio = useMockPortfolioStore();
     const api = createMockTradingApi();
 
-    await api.createTrade({ ...TRADE_REQUEST, symbol: 'TSLA', price: 178.22 }, 'key-tsla');
-    await api.createTrade({ ...TRADE_REQUEST, symbol: 'SOL', quantity: 1, price: 150 }, 'key-sol');
+    await api.createTrade({ ...TRADE_REQUEST, symbol: 'TSLA', price: parseDecimal('178.22') }, 'key-tsla');
+    await api.createTrade(
+      { ...TRADE_REQUEST, symbol: 'SOL', quantity: parseDecimal('1'), price: parseDecimal('150') },
+      'key-sol',
+    );
 
     expect(portfolio.positions.find(p => p.sym === 'TSLA')).toMatchObject({ assetType: 'STOCK', market: 'US' });
     expect(portfolio.positions.find(p => p.sym === 'SOL')).toMatchObject({ assetType: 'CRYPTO', market: 'CRYPTO' });
@@ -315,10 +328,107 @@ describe('tradingApi mock adapter', () => {
     await api.createTrade(TRADE_REQUEST, 'key-1');
 
     expect(portfolio.lastFill).toEqual({ sym: 'AAPL', type: 'BUY', qty: 10, px: 218.4 });
-    // live 是 getter,每次存取才解析 store —— 與 portfolioApi.ts:150-152 同一慣例。
-    expect(api.live?.lastFill).toEqual(portfolio.lastFill);
+    // live 是 getter,每次存取才解析 store —— 與 portfolioApi 同一慣例。
+    // Phase 5 D-08:三處同形,qty / px 由 getter 從 mock store 的 number 轉成 Decimal。
+    const fill = api.live?.lastFill;
+    expect(fill).toMatchObject({ sym: 'AAPL', type: 'BUY' });
+    expect(isDecimal(fill?.qty) && isDecimal(fill?.px)).toBe(true);
+    expect([toWire(fill!.qty), toWire(fill!.px)]).toEqual(['10', '218.4']);
     expect(pushNotification).toHaveBeenCalledTimes(1);
     expect(pushNotification.mock.calls[0][0]).toMatchObject({ kind: 'order', sym: 'AAPL' });
+  });
+});
+
+describe('tradingApi — 金額字串契約(05-19 / D-05 / D-08)', () => {
+  const PRECISE: CreateTradeInput = {
+    ...TRADE_REQUEST,
+    quantity: parseDecimal('3'),
+    price: parseDecimal('123456.12345678'),
+    fee: ZERO,
+  };
+
+  it('http createTrade 以 toWire 逐欄投影:金額為字串且保留 8 位小數,fee 0 送 "0"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(TRADE_DTO))));
+
+    await createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1');
+
+    const raw = String(initAt(0).body);
+    // 比對 body 字面:JSON 解析後 toEqual 分不出 "3" 與 3。
+    expect(raw).toContain('"quantity":"3"');
+    expect(raw).toContain('"price":"123456.12345678"');
+    expect(raw).toContain('"fee":"0"');
+    expect(bodyAt(0)).toMatchObject({ quantity: '3', price: '123456.12345678', fee: '0' });
+  });
+
+  it('極小值以一般記號送出(不出現 1e-8)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(TRADE_DTO))));
+
+    await createHttpTradingApi('/api/v1').createTrade(
+      { ...PRECISE, quantity: parseDecimal('0.00000001'), fee: parseDecimal('0.00000001') },
+      'key-1',
+    );
+
+    const raw = String(initAt(0).body);
+    expect(raw).toContain('"quantity":"0.00000001"');
+    expect(raw).toContain('"fee":"0.00000001"');
+    expect(raw).not.toMatch(/e-/i);
+  });
+
+  it('同一份 input、同一把 key 重送兩次,POST body 逐位元相同(D-07 冪等比對)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(TRADE_DTO))));
+    const api = createHttpTradingApi('/api/v1');
+
+    await api.createTrade(PRECISE, 'key-same');
+    await api.createTrade(PRECISE, 'key-same');
+
+    expect(String(initAt(1).body)).toBe(String(initAt(0).body));
+    expect(headerValue(initAt(1), 'idempotency-key')).toBe('key-same');
+  });
+
+  it('回應 wire 字串 → TradeRecord Decimal,超過 double 精度的值逐字往返', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
+      ...TRADE_DTO,
+      quantity: '9007199254740993.01',
+      price: '123456.12345678',
+      fee: '0.00000001',
+    }))));
+
+    const trade = await createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1');
+
+    expect(toWire(trade.quantity)).toBe('9007199254740993.01');
+    expect(toWire(trade.price)).toBe('123456.12345678');
+    expect(toWire(trade.fee)).toBe('0.00000001');
+    // 後端 setScale(8) 的尾零:數值相等(big.js 正規化尾零,不比字面)。
+    expect(toTradeRecord(TRADE_DTO).quantity.eq(parseDecimal('10'))).toBe(true);
+  });
+
+  it('回應金額仍為 JS number 時在邊界丟錯(T-05-27)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...TRADE_DTO, price: 218.4 }))));
+
+    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toThrow(TypeError);
+  });
+
+  it('mock createTrade 回傳的 TradeRecord 保留輸入的完整精度', async () => {
+    const trade = await createMockTradingApi().createTrade(
+      { ...PRECISE, quantity: parseDecimal('0.5'), price: parseDecimal('218.12345678') },
+      'key-1',
+    );
+
+    expect(toWire(trade.quantity)).toBe('0.5');
+    expect(toWire(trade.price)).toBe('218.12345678');
+    expect(toWire(trade.fee)).toBe('0');
+  });
+
+  it('mock heldQuantityOf 以 Decimal 回傳 mock 持倉股數,沒有持倉為 null', () => {
+    const portfolio = useMockPortfolioStore();
+    const api = createMockTradingApi();
+    const aapl = portfolio.positions.find(p => p.sym === 'AAPL');
+    expect(aapl, 'data.ts 的 mock 持倉含 AAPL').toBeTruthy();
+
+    const held = api.live?.heldQuantityOf('AAPL');
+    expect(isDecimal(held)).toBe(true);
+    expect(toWire(held!)).toBe(String(aapl!.qty));
+    expect(api.live?.heldQuantityOf('NOPE')).toBeNull();
   });
 });
 

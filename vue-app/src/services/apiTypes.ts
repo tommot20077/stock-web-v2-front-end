@@ -1,3 +1,5 @@
+import type { Decimal } from './decimal';
+
 export type RuntimeDataMode = 'mock' | 'api';
 
 /** 對應後端 stock-common 的 ApiMeta(traceId + timestamp)。 */
@@ -41,15 +43,19 @@ export interface PaginatedResponse<T> {
 
 /**
  * 對應後端 PortfolioSummaryResponse;逐欄同形,勿增刪欄位(信封/契約權威是後端,judgment §4)。
+ *
+ * 金額 / 比值欄位是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `portfolioApi.toPortfolioSummary` 轉成 {@link PortfolioSummary}(Decimal)。整數計數欄位(`holdingCount`、
+ * `fxExcludedCount`、`dayPnlExcludedCount`)仍是 JSON number。
  */
 export interface PortfolioSummaryDto {
-  totalMarketValue: number;
-  totalCostBasis: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
-  totalPnl: number;
+  totalMarketValue: string;
+  totalCostBasis: string;
+  realizedPnl: string;
+  unrealizedPnl: string;
+  totalPnl: string;
   /** 比值(非百分比):0.0117 = 1.17%。顯示時 ×100,那是格式化不是重算(D-04)。 */
-  roi: number;
+  roi: string;
   holdingCount: number;
   /** Phase 04.1:基準幣 ISO 代碼(預設 `TWD`);本 DTO 所有金額欄位(除 cashBalances)皆為此幣別。 */
   baseCurrency: string;
@@ -58,15 +64,15 @@ export interface PortfolioSummaryDto {
   /** Phase 04.1:缺匯率的原幣代碼清單(`fxExcludedCount` > 0 時才有值)。 */
   unconvertedCurrencies: string[];
   /** Phase 04.1:今日價差損益(基準幣);無前收盤可比時為 null。 */
-  dayPricePnl: number | null;
+  dayPricePnl: string | null;
   /** Phase 04.1:今日價差損益比值(非百分比,0.0104 = 1.04%);無可比基準時為 null。 */
-  dayPricePnlRatio: number | null;
+  dayPricePnlRatio: string | null;
   /** Phase 04.1:因缺前收盤而未納入今日損益的持倉數。 */
   dayPnlExcludedCount: number;
   /** Phase 04.1:現金合計(基準幣);可為負(D-08,不得被夾成 0)。 */
-  cash: number;
+  cash: string;
   /** Phase 04.1:總權益(基準幣)= 持倉市值 + 現金。 */
-  totalEquity: number;
+  totalEquity: string;
   /** Phase 04.1:各幣別現金餘額(原幣,非基準幣)。 */
   cashBalances: CashBalanceDto[];
   /** Phase 04.1:依資產類別的配置(基準幣金額 + 權重比值)。 */
@@ -77,9 +83,9 @@ export interface PortfolioSummaryDto {
    * Phase 04.2(DIV-02):現金股利收入(基準幣)= Σ 實領淨額(沖銷反號)× 目前匯率;沒有股利時為 0。
    * 自 04.2 起 `totalPnl` = realizedPnl + unrealizedPnl + dividendIncome,`roi` 因此**含股利**(D-01)。
    */
-  dividendIncome: number;
+  dividendIncome: string;
   /** Phase 04.2(DIV-02):預扣稅合計(基準幣);僅供顯示,**不**計入 `totalPnl`(`amount` 已是扣稅後實領)。 */
-  dividendTaxWithheld: number;
+  dividendTaxWithheld: string;
 }
 
 /** Phase 04.2(PORT-13):`GET /api/v1/portfolio/activities` 的 `kind`。 */
@@ -102,17 +108,17 @@ export interface PortfolioActivityDto {
   /** 僅股數調整:除權日 `yyyy-MM-dd`。 */
   effectiveDate: string | null;
   createdAt: string;
-  /** 交易數量 / 配股股數 / 拆股 ΔQ(帶號);股利為 null。 */
-  quantity: number | null;
-  /** 僅交易。 */
-  price: number | null;
-  /** 僅交易。 */
-  fee: number | null;
-  /** 交易 = quantity × price;股利 = 實領總額;股數調整為 null。 */
-  amount: number | null;
-  /** 僅股利。 */
-  withholdingTax: number | null;
-  /** 僅拆股。 */
+  /** 交易數量 / 配股股數 / 拆股 ΔQ(帶號);股利為 null。BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  quantity: string | null;
+  /** 僅交易。BigDecimal → JSON 字串(D-05)。 */
+  price: string | null;
+  /** 僅交易。BigDecimal → JSON 字串(D-05)。 */
+  fee: string | null;
+  /** 交易 = quantity × price;股利 = 實領總額;股數調整為 null。BigDecimal → JSON 字串(D-05)。 */
+  amount: string | null;
+  /** 僅股利。BigDecimal → JSON 字串(D-05)。 */
+  withholdingTax: string | null;
+  /** 僅拆股;後端 Integer,維持 number。 */
   ratioNew: number | null;
   ratioOld: number | null;
   note: string | null;
@@ -128,50 +134,113 @@ export interface PortfolioActivityDto {
   reversible: boolean;
 }
 
+/**
+ * domain:活動列(由 `portfolioApi.toPortfolioActivity` 產生;http 與 mock 共用)。數量 / 價格 / 手續費 / 金額 / 預扣稅為
+ * Decimal(不適用的欄位維持 null),`ratioNew` / `ratioOld` 仍是 number;頁面與元件只拿這個型別(Phase 5 D-08)。
+ */
+export type PortfolioActivity = DecimalFields<
+  PortfolioActivityDto,
+  'quantity' | 'price' | 'fee' | 'amount' | 'withholdingTax'
+>;
+
 /** 對應後端 CashBalanceDto:單一幣別的現金餘額(原幣,可為負)。 */
 export interface CashBalanceDto {
   /** ISO 4217 代碼,宣告為 string:後端新增幣別不應讓前端型別檢查變紅。 */
   currency: string;
-  amount: number;
+  /** BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  amount: string;
 }
 
 /** 對應後端 AllocationSliceDto:資產類別配置的一塊。 */
 export interface AllocationSliceDto {
   /** 資產類別(enum 型欄位宣告為 string,沿用 AssetDto 的既有裁決;RESEARCH Q10)。 */
   category: string;
-  /** 基準幣金額 */
-  value: number;
-  /** 比值(非百分比):0.52 = 52%。顯示時 ×100 是格式化不是重算。 */
-  weight: number;
+  /** 基準幣金額;BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  value: string;
+  /** 比值(非百分比):0.52 = 52%。顯示時 ×100 是格式化不是重算。BigDecimal → JSON 字串(D-05)。 */
+  weight: string;
 }
 
 /** 對應後端 SectorAllocationDto:產業配置的一塊。 */
 export interface SectorAllocationDto {
   /** 產業名稱;資產沒有產業資料時為 null(畫面以「未分類」呈現)。 */
   sector: string | null;
-  /** 基準幣金額 */
-  value: number;
-  /** 比值(非百分比),同 AllocationSliceDto.weight。 */
-  weight: number;
+  /** 基準幣金額;BigDecimal → JSON 字串,一般記號(Phase 5 D-05)。 */
+  value: string;
+  /** 比值(非百分比),同 AllocationSliceDto.weight;BigDecimal → JSON 字串(D-05)。 */
+  weight: string;
   holdingCount: number;
-  /** 該產業未實現損益(基準幣) */
-  unrealizedPnl: number;
+  /** 該產業未實現損益(基準幣);BigDecimal → JSON 字串(D-05)。 */
+  unrealizedPnl: string;
 }
 
-/** 對應後端 HoldingResponse。 */
+/**
+ * wire DTO → domain 型別的共用 mapped type(Phase 5 D-08):把 `K` 列出的 wire 字串欄位換成 `Decimal`,
+ * nullable 欄位維持 nullable(`string` → `Decimal`、`string | null` → `Decimal | null`),其餘欄位原樣保留。
+ *
+ * 用途:domain 型別一律由 wire DTO 派生,欄位清單只在這裡列一次;後端增刪欄位時 wire 與 domain 一起變,
+ * 不會漂移。05-18 之後的 domain(持倉、交易、股利…)沿用同一個 helper。
+ */
+export type DecimalFields<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]: null extends T[P] ? Decimal | null : Decimal;
+};
+
+/** domain:單一幣別現金餘額,`amount` 為 Decimal(由 `portfolioApi.toCashBalance` 產生)。 */
+export type CashBalance = DecimalFields<CashBalanceDto, 'amount'>;
+
+/** domain:資產類別配置的一塊,`value` / `weight` 為 Decimal。 */
+export type AllocationSlice = DecimalFields<AllocationSliceDto, 'value' | 'weight'>;
+
+/** domain:產業配置的一塊,`value` / `weight` / `unrealizedPnl` 為 Decimal;`holdingCount` 仍是 number。 */
+export type SectorAllocation = DecimalFields<SectorAllocationDto, 'value' | 'weight' | 'unrealizedPnl'>;
+
+/** {@link PortfolioSummaryDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type PortfolioSummaryDecimalKey =
+  | 'totalMarketValue'
+  | 'totalCostBasis'
+  | 'realizedPnl'
+  | 'unrealizedPnl'
+  | 'totalPnl'
+  | 'roi'
+  | 'dayPricePnl'
+  | 'dayPricePnlRatio'
+  | 'cash'
+  | 'totalEquity'
+  | 'dividendIncome'
+  | 'dividendTaxWithheld';
+
+/**
+ * domain:portfolio summary(由 `portfolioApi.toPortfolioSummary` 產生)。金額 / 比值為 Decimal,
+ * 巢狀的現金餘額與配置也是 domain 型別;頁面只拿這個型別,不拿 wire DTO。
+ */
+export type PortfolioSummary = Omit<
+  DecimalFields<PortfolioSummaryDto, PortfolioSummaryDecimalKey>,
+  'cashBalances' | 'allocation' | 'sectorAllocation'
+> & {
+  cashBalances: CashBalance[];
+  allocation: AllocationSlice[];
+  sectorAllocation: SectorAllocation[];
+};
+
+/**
+ * 對應後端 HoldingDto(`stock-module-trading/.../api/HoldingDto.java`);逐欄同形,勿增刪欄位(judgment §4)。
+ *
+ * 股數 / 價格 / 金額 / 比值欄位是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `portfolioApi.toHolding` 轉成 {@link Holding}(Decimal)。nullable 欄位缺值時為 null,前端不得猜測。
+ */
 export interface HoldingDto {
   assetId: string;
   symbol: string;
   assetName: string;
-  totalQuantity: number;
-  avgCost: number;
-  costBasis: number;
-  marketPrice: number;
-  marketValue: number;
-  realizedPnl: number;
-  unrealizedPnl: number;
+  totalQuantity: string;
+  avgCost: string;
+  costBasis: string;
+  marketPrice: string;
+  marketValue: string;
+  realizedPnl: string;
+  unrealizedPnl: string;
   /** 比值(非百分比),同 PortfolioSummaryDto.roi。 */
-  roi: number;
+  roi: string;
   /** ISO-8601;行情時間,D-03 要顯示。 */
   priceTime: string | null;
   lastUpdated: string | null;
@@ -189,29 +258,62 @@ export interface HoldingDto {
   /** Phase 04.1:基準幣 ISO 代碼,與 PortfolioSummaryDto.baseCurrency 同值。 */
   baseCurrency: string;
   /** Phase 04.1:市值換算為基準幣的金額;缺匯率時為 null(該列不計入 summary 總額)。 */
-  marketValueInBase: number | null;
+  marketValueInBase: string | null;
   /**
    * quick-261106-fbs:未實現損益(unrealizedPnl,原幣)以目前匯率換算為基準幣的金額;缺匯率時為 null
    * (與 marketValueInBase 同條件),該列不進任何基準幣排行(例如 Positions 的 Top movers)。
    */
-  unrealizedPnlInBase: number | null;
+  unrealizedPnlInBase: string | null;
   /** Phase 04.1:前收盤價(原幣);無資料時為 null。 */
-  previousClose: number | null;
+  previousClose: string | null;
   /** Phase 04.1:今日價差損益(原幣);無前收盤時為 null。 */
-  dayPricePnl: number | null;
+  dayPricePnl: string | null;
   /** Phase 04.1:今日價差損益比值(非百分比);無前收盤時為 null。 */
-  dayPricePnlRatio: number | null;
+  dayPricePnlRatio: string | null;
+  /**
+   * Phase 5(D-05):今日損益比率的分母(原幣)= 前收時市值 + 今日買入成本(後端 `HoldingDto.dayPnlBasis`);
+   * 供後端 summary 折算總額比率用。前端不以它重算比率(D-04),只為與後端逐欄同形;缺值時為 null。
+   */
+  dayPnlBasis: string | null;
 }
 
-/** 對應後端 TradeResponse。 */
+/** {@link HoldingDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type HoldingDecimalKey =
+  | 'totalQuantity'
+  | 'avgCost'
+  | 'costBasis'
+  | 'marketPrice'
+  | 'marketValue'
+  | 'realizedPnl'
+  | 'unrealizedPnl'
+  | 'roi'
+  | 'marketValueInBase'
+  | 'unrealizedPnlInBase'
+  | 'previousClose'
+  | 'dayPricePnl'
+  | 'dayPricePnlRatio'
+  | 'dayPnlBasis';
+
+/**
+ * domain:單一持倉(由 `portfolioApi.toHolding` 產生)。股數 / 價格 / 金額 / 比值為 Decimal(nullable 欄位維持
+ * nullable),其餘字串欄位原樣;頁面與元件只拿這個型別,不拿 wire DTO(Phase 5 D-08)。
+ */
+export type Holding = DecimalFields<HoldingDto, HoldingDecimalKey>;
+
+/**
+ * 對應後端 `TradeDto`(`stock-module-trading/.../api/TradeDto.java`);逐欄同形,勿增刪欄位(judgment §4)。
+ *
+ * 數量 / 價格 / 手續費是後端 `BigDecimal` → JSON 字串(一般記號,Phase 5 D-05);進 domain 前經
+ * `tradingApi.toTradeRecord` 轉成 {@link TradeRecord}(Decimal)。
+ */
 export interface TradeDto {
   /** uuid;頁面用作 :key */
   id: string;
   symbol: string;
   type: 'BUY' | 'SELL';
-  quantity: number;
-  price: number;
-  fee: number;
+  quantity: string;
+  price: string;
+  fee: string;
   note: string | null;
   /**
    * 標的交易幣別(後端經 AssetFacade 取得的 ISO 4217 代碼,例 `TWD`)。
@@ -224,20 +326,24 @@ export interface TradeDto {
 }
 
 /**
+ * domain:單一手動交易紀錄(由 `tradingApi.toTradeRecord` 產生)。數量 / 價格 / 手續費為 Decimal,其餘欄位原樣;
+ * 頁面與元件只拿這個型別,不拿 wire DTO(Phase 5 D-08)。名稱加 `Record` 後綴以免與 mock 型別 `Trade` 撞名。
+ */
+export type TradeRecord = DecimalFields<TradeDto, 'quantity' | 'price' | 'fee'>;
+
+/**
  * 對應後端 stock-module-asset 的 `AssetDto`(`AssetDto.java:9-24`);逐欄同形,勿增刪(judgment §4)。
  *
- * 五個價格欄位宣告為 `number | null` 是刻意的:後端是 `BigDecimal`(非 primitive),
- * 沒有價格資料的 asset 會是 `null`。宣告成 `number` 會讓報價卡顯示 `NaN`
- * (`04-UI-SPEC.md` §2/§3 已規定 `null` 顯示 `—`)。
+ * 五個價格欄位(latestPrice / change / changePercent / high / low)是後端 `BigDecimal` 掛 `@DecimalString`
+ * → JSON 字串(一般記號,Phase 5 D-05;與 `KlineDto` 一致皆為字串)。後端是 `BigDecimal`(非 primitive),
+ * 沒有價格資料的 asset 會是 `null`,畫面一律顯示 `—`,不當成 0(`04-UI-SPEC.md` §2/§3)。進 domain 前經
+ * `marketApi.toAsset` 轉成 {@link Asset}(Decimal);頁面 / 元件 / composable 只拿 domain(D-08)。
  *
  * `assetType` / `currency` 刻意宣告為 `string` 而非 union:後端是 `AssetType`
  * (`AssetType.java` = STOCK / CRYPTO / FX / BOND)與 `CurrencyCode`
  * (`CurrencyCode.java` = USD / TWD / EUR / JPY)兩個 enum,Jackson 以常數名序列化。
  * 常數名列在此處僅供查閱 —— **不**寫成 union,因為後端新增一個 enum 值就會讓前端
  * 型別檢查紅掉,而 adapter 只是原樣傳遞、不對這兩欄做分支。
- *
- * **注意 `AssetDto` 的 BigDecimal 沒有 `@JsonSerialize(ToStringSerializer)`,是 JSON number
- * —— 與 `KlineDto` 相反。**
  */
 export interface AssetDto {
   uuid: string;
@@ -252,21 +358,26 @@ export interface AssetDto {
   sector: string | null;
   /** 只有 true 才可送出交易(D-01;後端 `TradingService.resolveTradeableAsset` 是最終權威) */
   tradeable: boolean;
-  latestPrice: number | null;
-  change: number | null;
-  changePercent: number | null;
+  latestPrice: string | null;
+  change: string | null;
+  changePercent: string | null;
   /** 已格式化的成交量字串(例:`52.1M`),後端就是 String,前端不得重算;無量為 null(trading-portfolio-contract〈標的報價欄位〉) */
   volumeText: string | null;
-  high: number | null;
-  low: number | null;
+  high: string | null;
+  low: string | null;
 }
+
+/**
+ * domain:可交易標的(搜尋結果、觀察清單項目;由 `marketApi.toAsset` 產生)。五個報價欄為 `Decimal | null`,
+ * 其餘欄位原樣(`volumeText` 是後端已格式化的字串,不轉)。
+ */
+export type Asset = DecimalFields<AssetDto, 'latestPrice' | 'change' | 'changePercent' | 'high' | 'low'>;
 
 /**
  * 對應後端 stock-module-market-data 的 `KlineDto`(`KlineDto.java:23-30`);逐欄同形,勿增刪(judgment §4)。
  *
  * `KlineDto.java` 的五個 BigDecimal 欄位掛 `@JsonSerialize(using = ToStringSerializer.class)`,
- * 序列化為 JSON 字串以避免浮點精度損失。**注意與 `AssetDto` 相反** —— `AssetDto` 的
- * BigDecimal 沒有這個註解,是 JSON number。
+ * 序列化為 JSON 字串以避免浮點精度損失(Phase 5 D-05 後 `AssetDto` 的報價欄也是字串)。
  *
  * 因此 OHLCV 五欄在 TypeScript 必須是 `string`;要當數字用一律經 `marketApi.ts` 的
  * `closeSeries()` 轉換,不要在元件內散落 `Number()`。
@@ -293,32 +404,53 @@ export type BacktestStrategyId = 'ma_cross' | 'rsi' | 'momentum' | 'dca' | 'cust
 export type BacktestPeriod = '1Y' | '3Y' | '5Y';
 export type BacktestRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'rejected';
 
+/**
+ * 對應後端 `CreateBacktestRunRequest`;逐欄同形(judgment §4)。
+ *
+ * `initialCapital` 是後端 `BigDecimal` → wire 為十進位字串(Phase 5 D-05);由 `backtestApi` 從
+ * {@link BacktestRunInput}(Decimal)經 `toWire` 產出,頁面不直接組這個型別。
+ */
 export interface BacktestRunRequest {
   strategyId: BacktestStrategyId;
   strategyCode: string | null;
   symbol: string;
   period: BacktestPeriod;
-  initialCapital: number;
+  initialCapital: string;
   currency: 'USD';
   benchmark: 'buy_hold';
   dataMode: 'cached' | 'live';
 }
 
+/** `createRun` 的 domain 輸入:與 {@link BacktestRunRequest} 同欄位,只把 `initialCapital` 換成 `Decimal`(D-08)。 */
+export type BacktestRunInput = DecimalFields<BacktestRunRequest, 'initialCapital'>;
+
+/**
+ * 對應後端 `BacktestRunDto`(`stock-module-backtest/.../api/BacktestRunDto.java`);逐欄同形。
+ *
+ * `initialCapital` / `progress` 掛 `@DecimalString` → JSON 字串(D-05)。`progress` 在 DB 是 nullable
+ * `NUMERIC(6, 5)`,所以可能為 null。進 domain 前經 `backtestApi.toBacktestRunRecord` 轉成 {@link BacktestRunRecord}。
+ */
 export interface BacktestRunDto {
   id: string;
   strategyId: BacktestStrategyId;
   label: string;
   symbol: string;
   period: BacktestPeriod;
-  initialCapital: number;
+  initialCapital: string;
   currency: 'USD';
   status: BacktestRunStatus;
-  progress?: number;
+  progress?: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
   error?: ApiErrorBody | null;
 }
+
+/**
+ * domain:單一回測執行紀錄(由 `backtestApi.toBacktestRunRecord` 產生)。`initialCapital` 為 Decimal、
+ * `progress` 為 `Decimal | null`;名稱加 `Record` 後綴以免與 mock 型別 `BacktestRun`(`types.ts`)撞名。
+ */
+export type BacktestRunRecord = DecimalFields<BacktestRunDto, 'initialCapital' | 'progress'>;
 
 export interface StrategyValidationRequest {
   strategyCode: string;
@@ -330,46 +462,66 @@ export interface StrategyValidationDto {
   warnings: string[];
 }
 
+/**
+ * 後端 `BacktestResultDto.BacktestKpisDto`:八個比率 / 倍數欄是 `@DecimalString BigDecimal` → JSON 字串(D-05);
+ * `drawdownDays` / `tradeCount` 是 Java `int`,維持 number。
+ */
 export interface BacktestKpisDto {
-  totalReturnPct: number;
-  buyHoldReturnPct: number;
-  sharpe: number;
-  cagrPct: number;
-  maxDrawdownPct: number;
+  totalReturnPct: string;
+  buyHoldReturnPct: string;
+  sharpe: string;
+  cagrPct: string;
+  maxDrawdownPct: string;
   drawdownDays: number;
-  winRatePct: number;
+  winRatePct: string;
   tradeCount: number;
-  profitFactor: number;
-  avgTradePct: number;
+  profitFactor: string;
+  avgTradePct: string;
 }
 
+/** {@link BacktestKpisDto} 中屬於 BigDecimal 的欄位(wire 為字串、domain 為 Decimal)。 */
+type BacktestKpisDecimalKey =
+  | 'totalReturnPct'
+  | 'buyHoldReturnPct'
+  | 'sharpe'
+  | 'cagrPct'
+  | 'maxDrawdownPct'
+  | 'winRatePct'
+  | 'profitFactor'
+  | 'avgTradePct';
+
+/** 後端 `EquityPointDto`:`t` 為 `LocalDate`(ISO 日期字串),兩條權益值為 BigDecimal 字串。 */
 export interface EquityPointDto {
   t: string;
-  strategy: number;
-  benchmark: number;
+  strategy: string;
+  benchmark: string;
 }
 
+/** 後端 `MonthlyReturnDto`:`year` / `month` 為 Java `int`(number),`returnPct` 為 BigDecimal 字串。 */
 export interface MonthlyReturnDto {
   year: number;
   month: number;
-  returnPct: number;
+  returnPct: string;
 }
 
+/** 後端 `DrawdownPointDto`:`drawdownPct` 為 BigDecimal 字串。 */
 export interface DrawdownPointDto {
   t: string;
-  drawdownPct: number;
+  drawdownPct: string;
 }
 
+/** 後端 `BacktestTradeDto`:`entry` / `exit` / `pnl` / `pnlPct` 為 BigDecimal 字串,`bars` 為 Java `int`(number)。 */
 export interface BacktestTradeDto {
   date: string;
   side: 'BUY' | 'SELL';
-  entry: number;
-  exit: number;
+  entry: string;
+  exit: string;
   bars: number;
-  pnl: number;
-  pnlPct: number;
+  pnl: string;
+  pnlPct: string;
 }
 
+/** 對應後端 `BacktestResultDto`;進 domain 前經 `backtestApi.toBacktestResult` 轉成 {@link BacktestResult}。 */
 export interface BacktestResultDto {
   runId: string;
   status: 'succeeded';
@@ -378,6 +530,28 @@ export interface BacktestResultDto {
   monthlyReturns: MonthlyReturnDto[];
   drawdownCurve: DrawdownPointDto[];
   trades: BacktestTradeDto[];
+}
+
+/** domain:回測 KPI,八個 BigDecimal 欄為 Decimal,`drawdownDays` / `tradeCount` 仍是 number。 */
+export type BacktestKpis = DecimalFields<BacktestKpisDto, BacktestKpisDecimalKey>;
+/** domain:權益曲線點,`strategy` / `benchmark` 為 Decimal;畫圖時經 `toChartNumber`。 */
+export type EquityPoint = DecimalFields<EquityPointDto, 'strategy' | 'benchmark'>;
+/** domain:月報酬,`returnPct` 為 Decimal。 */
+export type MonthlyReturn = DecimalFields<MonthlyReturnDto, 'returnPct'>;
+/** domain:回撤點,`drawdownPct` 為 Decimal。 */
+export type DrawdownPoint = DecimalFields<DrawdownPointDto, 'drawdownPct'>;
+/** domain:回測交易明細,`entry` / `exit` / `pnl` / `pnlPct` 為 Decimal,`bars` 仍是 number。 */
+export type BacktestTrade = DecimalFields<BacktestTradeDto, 'entry' | 'exit' | 'pnl' | 'pnlPct'>;
+
+/** domain:回測結果(由 `backtestApi.toBacktestResult` 產生),巢狀陣列都已轉成上面的 domain 型別。 */
+export interface BacktestResult {
+  runId: string;
+  status: 'succeeded';
+  kpis: BacktestKpis;
+  equityCurve: EquityPoint[];
+  monthlyReturns: MonthlyReturn[];
+  drawdownCurve: DrawdownPoint[];
+  trades: BacktestTrade[];
 }
 
 export type OpsRisk = 'low' | 'medium' | 'high';
@@ -419,6 +593,18 @@ export interface OpsLogDto {
   durationMs: number;
   message: string;
 }
+
+/*
+ * Ops 的 domain 型別:三個 wire DTO 都沒有 BigDecimal 欄位,domain 與 wire 同形,直接別名。
+ * 頁面只拿 domain 名稱(05-24 decimalBoundary 守門:元件 props / state 不得用 *Dto);
+ * 日後後端若加入 BigDecimal 欄位,改成 `DecimalFields<…>` 並在 opsApi 加 mapper 即可,頁面不必改。
+ */
+/** domain:Ops 動作(與 {@link OpsActionDto} 同形)。 */
+export type OpsAction = OpsActionDto;
+/** domain:Ops 工作(與 {@link OpsJobDto} 同形)。 */
+export type OpsJob = OpsJobDto;
+/** domain:Ops 紀錄(與 {@link OpsLogDto} 同形)。 */
+export type OpsLog = OpsLogDto;
 
 export type AiProviderKind = 'crypto' | 'stocks' | 'news' | 'fx';
 export type AiKeyPermission = 'read' | 'trade';

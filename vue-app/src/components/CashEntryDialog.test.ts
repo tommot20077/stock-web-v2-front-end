@@ -16,7 +16,8 @@ import {
   resetPortfolioRevisionForTests,
 } from '../services/portfolioRevision';
 import { configureApiClientSessionHandlers } from '../services/apiClient';
-import type { CashEntryDto } from '../services/cashApi';
+import { toCashEntry, type CashEntry, type CashEntryDto } from '../services/cashApi';
+import { parseDecimal, toWire } from '../services/decimal';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import type { Lang } from '../types';
 
@@ -32,7 +33,8 @@ const RECORDED_ENTRY: CashEntryDto = {
   id: 'cash-entry-backend-1',
   type: 'DEPOSIT',
   currency: 'TWD',
-  amount: 50000,
+  // wire 為十進位字串(Phase 5 D-05 / D-08)。
+  amount: '50000',
   note: 'from-backend',
   occurredAt: '2026-10-24T09:30:00+08:00',
   createdAt: '2026-10-24T09:30:05+08:00',
@@ -40,6 +42,11 @@ const RECORDED_ENTRY: CashEntryDto = {
   reversalOfOccurredAt: null,
   reversed: false,
 };
+
+/** emit 出來的 domain 物件轉回 wire 形狀再比較(Decimal → toWire),不依賴 big.js 內部欄位。 */
+function plain(entry: CashEntry): CashEntryDto {
+  return { ...entry, amount: toWire(entry.amount) };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -232,7 +239,7 @@ describe('CashEntryDialog tracer — 入金一筆端到端(D-11 / D-30)', () => 
     const body = entryBodies(fetchImpl)[0];
     expect(body.type).toBe('DEPOSIT');
     expect(body.currency).toBe('TWD');
-    expect(body.amount).toBe(50000);
+    expect(body.amount).toBe('50000');
     expect(body.note).toBe('salary');
     expect(String(body.occurredAt), 'occurredAt 必須帶 offset 的 ISO').toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
@@ -257,7 +264,7 @@ describe('CashEntryDialog tracer — 入金一筆端到端(D-11 / D-30)', () => 
     expect(lastCreatedTradeId.value).toBeNull();
 
     expect(onRecorded).toHaveBeenCalledTimes(1);
-    expect(onRecorded).toHaveBeenCalledWith(RECORDED_ENTRY);
+    expect(plain(onRecorded.mock.calls[0][0] as CashEntry)).toEqual(RECORDED_ENTRY);
   });
 
   it('dialogHasNoReviewStep', async () => {
@@ -531,7 +538,7 @@ describe('CashEntryDialog — Idempotency-Key 生命週期(D-11 / T-04.1-47)', (
 
     // 改完欄位立刻送出:flush 'sync' 的 dirty 標記讓這一次就換 key,而不是下一次。
     expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-2']);
-    expect(entryBodies(fetchImpl).map(b => b.amount)).toEqual([100, 200]);
+    expect(entryBodies(fetchImpl).map(b => b.amount)).toEqual(['100', '200']);
   });
 
   it('dropsTheKeyAfterCashIdempotencyKeyReused', async () => {
@@ -649,7 +656,8 @@ describe('CashEntryDialog — 錯誤分派(UI-SPEC §Copywriting 錯誤狀態)',
 });
 
 describe('CashEntryDialog — 出金超額提示(D-01 / U-16:資訊,不阻擋)', () => {
-  const USD_100 = [{ currency: 'USD', amount: 100 }];
+  // 餘額是 domain CashBalance(Decimal,05-17);fixture 由 wire 字串建構。
+  const USD_100 = [{ currency: 'USD', amount: parseDecimal('100') }];
 
   it('showsAnInformationalHintWhenAWithdrawalExceedsTheBalance', async () => {
     await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: USD_100 } });
@@ -681,6 +689,94 @@ describe('CashEntryDialog — 出金超額提示(D-01 / U-16:資訊,不阻擋)',
     await typeAmount('150');
 
     expect(testid('cash-withdraw-over-balance')).toBeNull();
+  });
+});
+
+// Phase 5 D-08:表單輸入 → parseDecimalInput → Decimal → adapter toWire → 請求字串,全程不經 JS number。
+describe('CashEntryDialog — 金額以 Decimal 送出字串(D-05 / D-08)', () => {
+  it('sendsAFullPrecisionAmountVerbatimAsAJsonString', async () => {
+    const { fetchImpl } = await mountDialog();
+
+    await typeAmount('123456789012.12345678');
+    await submit();
+
+    const body = entryBodies(fetchImpl)[0];
+    expect(body.amount).toBe("123456789012.12345678");
+    // 原始 body 也必須是字串字面,不是 JSON number。
+    expect(String(entryCalls(fetchImpl)[0][1]?.body)).toContain('"amount":"123456789012.12345678"');
+  });
+
+  it('sendsTheSmallestUnitInPlainNotation', async () => {
+    const { fetchImpl } = await mountDialog();
+
+    await typeAmount('0.00000001');
+    await submit();
+
+    expect(entryBodies(fetchImpl)[0].amount).toBe('0.00000001');
+  });
+
+  it('retriesWithTheSameKeyAndAByteIdenticalPayload', async () => {
+    stubUuids();
+    let calls = 0;
+    const { fetchImpl } = await mountDialog({
+      fetchImpl: cashFetch({
+        entries: () => {
+          calls += 1;
+          return calls === 1 ? entryFailure('INTERNAL_ERROR', { status: 500 }) : entryResponse();
+        },
+      }),
+    });
+
+    await typeAmount('123456789012.12345678');
+    await submit();
+    await submit();
+
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+    const raw = entryCalls(fetchImpl).map(([, init]) => String(init?.body));
+    expect(raw[1]).toBe(raw[0]);
+  });
+
+  it('reversesATinyOriginalAmountWithoutScientificNotation', async () => {
+    const tiny = { ...ORIGINAL, amount: '0.00000001' };
+    const { fetchImpl } = await mountDialog({ props: { reversalOf: toCashEntry(tiny) } });
+
+    await submit();
+
+    expect(entryBodies(fetchImpl)[0].amount).toBe('0.00000001');
+    expect(cashEntryDialogSource).toContain('toWire(original.amount)');
+    expect(cashEntryDialogSource).not.toContain('String(original.amount)');
+  });
+
+  it('comparesAFractionalWithdrawalAgainstTheBalanceWithDecimal', async () => {
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances: [{ currency: 'USD', amount: parseDecimal('100.00000000') }] } });
+
+    await typeAmount('100.00000000');
+    expect(testid('cash-withdraw-over-balance'), '尾零不改變值:等於餘額不算超額').toBeNull();
+    await typeAmount('100.00000001');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+  });
+
+  it('comparesAgainstABalanceBeyondDoublePrecisionWithoutNumberConversion', async () => {
+    // 999999999999.99999998 與 ...99 經 number 都會變成 1000000000000;Decimal 直接比較才分得出「等於」與「多 1e-8」。
+    // (金額上限 1e12,所以用低於上限、但超過 double 有效位數的值。)
+    const balances = [{ currency: 'USD', amount: parseDecimal('999999999999.99999998') }];
+    await mountDialog({ props: { initialType: 'WITHDRAWAL', initialCurrency: 'USD', balances } });
+
+    await typeAmount('999999999999.99999998');
+    expect(testid('cash-withdraw-over-balance'), '等於餘額不算超額').toBeNull();
+    await typeAmount('999999999999.99999999');
+    expect(testid('cash-withdraw-over-balance')).toBeTruthy();
+  });
+
+  it('dropsThe0516NumberToDecimalHandoffInOverBalance', () => {
+    // 05-16 留下的 parseDecimal(numberToWire(balance)) 交接點已由 05-17 刪除(balances 是 CashBalance[])。
+    const code = cashEntryDialogSource.split('\n').filter(line => !/^\s*(\*|\/\/)/.test(line)).join('\n');
+    expect(code).not.toContain('numberToWire');
+  });
+
+  it('parsesTheAmountWithParseDecimalInputInsteadOfNumber', () => {
+    expect(cashEntryDialogSource).toContain('parseDecimalInput(amount.value)');
+    expect(cashEntryDialogSource).not.toMatch(/Number\(amount\.value/);
   });
 });
 
@@ -742,7 +838,7 @@ const ORIGINAL: CashEntryDto = {
   id: 'e-9',
   type: 'WITHDRAWAL',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   note: 'atm',
   occurredAt: '2026-10-05T10:00:00+08:00',
   createdAt: '2026-10-05T10:00:05+08:00',
@@ -756,7 +852,7 @@ const REVERSAL_ENTRY: CashEntryDto = {
   id: 'rev-entry-1',
   type: 'DEPOSIT',
   currency: 'USD',
-  amount: 1000,
+  amount: '1000',
   note: null,
   occurredAt: '2026-10-24T11:00:00+08:00',
   createdAt: '2026-10-24T11:00:01+08:00',
@@ -775,7 +871,7 @@ function localDate(iso: string): string {
 }
 
 async function mountReversal(options: MountOptions = {}) {
-  return mountDialog({ ...options, props: { reversalOf: ORIGINAL, ...options.props } });
+  return mountDialog({ ...options, props: { reversalOf: toCashEntry(ORIGINAL), ...options.props } });
 }
 
 describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
@@ -825,12 +921,12 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
     expect(entryBodies(fetchImpl)[0]).toEqual({
       type: 'DEPOSIT',
       currency: 'USD',
-      amount: 1000,
+      amount: '1000',
       note: 'oops',
       occurredAt: null,
       reversalOfId: 'e-9',
     });
-    expect(onRecorded).toHaveBeenCalledWith(REVERSAL_ENTRY);
+    expect(plain(onRecorded.mock.calls[0][0] as CashEntry)).toEqual(REVERSAL_ENTRY);
   });
 
   it('showsTheReversalResultWithOnlyADoneButton', async () => {
@@ -897,8 +993,8 @@ describe('CashEntryDialog — 沖銷模式(D-25 / U-04)', () => {
   it('doesNotShowTheWithdrawOverBalanceHintInReversalMode', async () => {
     await mountDialog({
       props: {
-        reversalOf: { ...ORIGINAL, type: 'DEPOSIT' },
-        balances: [{ currency: 'USD', amount: 1 }],
+        reversalOf: toCashEntry({ ...ORIGINAL, type: 'DEPOSIT' }),
+        balances: [{ currency: 'USD', amount: parseDecimal('1') }],
       },
     });
 

@@ -5,7 +5,7 @@ import pickerSource from './WatchlistPicker.vue?raw';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
-import type { WatchlistDto } from '../services/watchlistApi';
+import { toWatchlistRecord, type WatchlistDto, type WatchlistRecord } from '../services/watchlistApi';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import {
   apiFailure,
@@ -40,9 +40,9 @@ interface Mounted {
   fetchImpl: WatchlistFetch;
   anchor: HTMLButtonElement;
   events: string[];
-  changed: WatchlistDto[];
-  created: WatchlistDto[];
-  lists: () => WatchlistDto[] | null;
+  changed: WatchlistRecord[];
+  created: WatchlistRecord[];
+  lists: () => WatchlistRecord[] | null;
   setLists: (next: WatchlistDto[]) => void;
   setSymbol: (next: string) => void;
 }
@@ -61,9 +61,10 @@ async function mountPicker(options: MountOptions = {}): Promise<Mounted> {
   anchor.focus();
 
   const events: string[] = [];
-  const changed: WatchlistDto[] = [];
-  const created: WatchlistDto[] = [];
-  const lists = ref<WatchlistDto[] | null>(options.lists === undefined ? [] : options.lists);
+  const changed: WatchlistRecord[] = [];
+  const created: WatchlistRecord[] = [];
+  // fixture 是 wire(同一份也餵給 fetch double);prop 是 domain,經 service 同一個 mapper 轉換(05-22 / D-08)。
+  const lists = ref<WatchlistRecord[] | null>(options.lists === undefined ? [] : options.lists?.map(toWatchlistRecord) ?? null);
   const open = ref(true);
   const symbol = ref(options.symbol ?? 'AAPL');
 
@@ -80,11 +81,11 @@ async function mountPicker(options: MountOptions = {}): Promise<Mounted> {
         loadError: options.loadError ?? null,
         onClose: () => { events.push('close'); open.value = false; },
         onRetry: () => { events.push('retry'); },
-        onChanged: (list: WatchlistDto) => {
+        onChanged: (list: WatchlistRecord) => {
           changed.push(list);
           lists.value = (lists.value ?? []).map(candidate => (candidate.id === list.id ? list : candidate));
         },
-        onCreated: (list: WatchlistDto) => {
+        onCreated: (list: WatchlistRecord) => {
           created.push(list);
           lists.value = [...(lists.value ?? []), list];
         },
@@ -101,7 +102,7 @@ async function mountPicker(options: MountOptions = {}): Promise<Mounted> {
     changed,
     created,
     lists: () => lists.value,
-    setLists: next => { lists.value = next; },
+    setLists: next => { lists.value = next.map(toWatchlistRecord); },
     setSymbol: next => { symbol.value = next; },
   };
 }

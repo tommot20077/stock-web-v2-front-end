@@ -47,17 +47,33 @@ export async function apiRead<T = unknown>(page: Page, path: string): Promise<T>
 /**
  * API 買進(已成交的手動紀錄,鐵律 5)。`daysAgo` 讓成交時間早於今天:
  * 股數調整的 `Q_asOf` 只計 `executed_at` 早於除權日起點的交易(trading-portfolio-contract〈生效時間與時序規則〉)。
+ *
+ * 後端契約 BigDecimal 一律字串(Phase 5 D-05,trading-portfolio-contract〈序列化格式〉);請求端 Jackson 仍接受
+ * number,但那只是相容行為,helper 依契約送字串:`quantity` / `price` 原樣送出、`fee` 送 `"0"`。
  */
-export async function apiBuy(page: Page, symbol: string, quantity: number, price: number, daysAgo = 7): Promise<void> {
+export async function apiBuy(page: Page, symbol: string, quantity: string, price: string, daysAgo = 7): Promise<void> {
   await apiWrite(page, 'POST', '/api/v1/trades', {
     symbol,
     type: 'BUY',
     quantity,
     price,
-    fee: 0,
+    fee: '0',
     note: null,
     executedAt: new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
   }, { idempotent: true });
+}
+
+/**
+ * 後端 BigDecimal 欄位(JSON 字串、保留 scale,例 `"1050.00000000"`;Phase 5 D-05)→ number,**只供測試斷言比較數值**。
+ *
+ * 先斷言 wire 型別確實是字串(契約退回 number 時要在這裡紅),再轉 number 比大小 / 正負 / 近似值。
+ * scale 不確定的值(換算、攤薄後的計算結果)用它比數值,不要以字串逐字比較;也不要用 number 累加後比相等。
+ */
+export function decimalValue(wire: unknown, label = 'BigDecimal 欄位'): number {
+  expect(typeof wire, `${label} 應為 JSON 字串(D-05),實際為 ${typeof wire}:${String(wire)}`).toBe('string');
+  const value = Number(wire);
+  expect(Number.isFinite(value), `${label} 不是合法十進位字串:${String(wire)}`).toBe(true);
+  return value;
 }
 
 /** 本機日期 `YYYY-MM-DD`(`offsetDays` 可往前推;date input 的值格式)。 */

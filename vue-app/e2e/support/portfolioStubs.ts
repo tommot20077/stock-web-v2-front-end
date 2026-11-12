@@ -49,110 +49,115 @@ function entry(
   };
 }
 
-/** 12 筆入出金:含 1 筆已沖銷的原紀錄、1 筆沖銷紀錄、1 筆 500 字備註(落在第一頁)。 */
+/**
+ * 12 筆入出金:含 1 筆已沖銷的原紀錄、1 筆沖銷紀錄、1 筆 500 字備註(落在第一頁)。
+ * 金額為十進位字串(Phase 5 D-05 / D-08:後端 BigDecimal 以字串序列化,前端 mapper 遇 number 會丟錯)。
+ */
 export const CASH_ENTRIES: CashEntryDto[] = [
-  entry(0, { type: 'DEPOSIT', currency: 'TWD', amount: 123456789, note: 'Initial deposit' }),
+  entry(0, { type: 'DEPOSIT', currency: 'TWD', amount: '123456789', note: 'Initial deposit' }),
   entry(1, {
     type: 'DEPOSIT',
     currency: 'TWD',
-    amount: 500000,
+    amount: '500000',
     note: 'Reversal of mistaken withdrawal',
     reversalOfId: 'layout-cash-4',
     reversalOfOccurredAt: '2026-10-25T09:00:00+08:00',
   }),
-  entry(2, { type: 'WITHDRAWAL', currency: 'USD', amount: 20000, note: LONG_NOTE }),
-  entry(3, { type: 'WITHDRAWAL', currency: 'TWD', amount: 500000, note: 'Mistaken withdrawal', reversed: true }),
-  entry(4, { type: 'DEPOSIT', currency: 'EUR', amount: 1200.5, note: '歐元入金' }),
-  entry(5, { type: 'DEPOSIT', currency: 'JPY', amount: 3000000, note: null }),
-  entry(6, { type: 'WITHDRAWAL', currency: 'JPY', amount: 150000, note: 'Rent' }),
-  entry(7, { type: 'DEPOSIT', currency: 'USD', amount: 8800.25, note: 'Salary' }),
-  entry(8, { type: 'WITHDRAWAL', currency: 'EUR', amount: 300, note: null }),
-  entry(9, { type: 'DEPOSIT', currency: 'TWD', amount: 42, note: 'Tiny' }),
-  entry(10, { type: 'DEPOSIT', currency: 'USD', amount: 100, note: 'Older deposit' }),
-  entry(11, { type: 'WITHDRAWAL', currency: 'TWD', amount: 1000, note: 'Oldest' }),
+  entry(2, { type: 'WITHDRAWAL', currency: 'USD', amount: '20000', note: LONG_NOTE }),
+  entry(3, { type: 'WITHDRAWAL', currency: 'TWD', amount: '500000', note: 'Mistaken withdrawal', reversed: true }),
+  entry(4, { type: 'DEPOSIT', currency: 'EUR', amount: '1200.5', note: '歐元入金' }),
+  entry(5, { type: 'DEPOSIT', currency: 'JPY', amount: '3000000', note: null }),
+  entry(6, { type: 'WITHDRAWAL', currency: 'JPY', amount: '150000', note: 'Rent' }),
+  entry(7, { type: 'DEPOSIT', currency: 'USD', amount: '8800.25', note: 'Salary' }),
+  entry(8, { type: 'WITHDRAWAL', currency: 'EUR', amount: '300', note: null }),
+  entry(9, { type: 'DEPOSIT', currency: 'TWD', amount: '42', note: 'Tiny' }),
+  entry(10, { type: 'DEPOSIT', currency: 'USD', amount: '100', note: 'Older deposit' }),
+  entry(11, { type: 'WITHDRAWAL', currency: 'TWD', amount: '1000', note: 'Oldest' }),
 ];
 
 const CASH_BALANCES: CashBalanceDto[] = [
-  { currency: 'TWD', amount: 987654321.5 },
-  { currency: 'USD', amount: 123456.78 },
-  { currency: 'EUR', amount: -4321.09 },
-  { currency: 'JPY', amount: 98765432 },
+  { currency: 'TWD', amount: '987654321.5' },
+  { currency: 'USD', amount: '123456.78' },
+  { currency: 'EUR', amount: '-4321.09' },
+  { currency: 'JPY', amount: '98765432' },
 ];
 
 const ALLOCATION: AllocationSliceDto[] = [
-  { category: 'STOCK', value: 600000000, weight: 0.4861 },
-  { category: 'CRYPTO', value: 250000000, weight: 0.2025 },
-  { category: 'FX', value: 120000000, weight: 0.0972 },
-  { category: 'BOND', value: 90000000, weight: 0.0729 },
-  { category: 'MYSTERY_CATEGORY_FROM_FUTURE_BACKEND', value: 80000000, weight: 0.0648 },
+  { category: 'STOCK', value: '600000000', weight: '0.4861' },
+  { category: 'CRYPTO', value: '250000000', weight: '0.2025' },
+  { category: 'FX', value: '120000000', weight: '0.0972' },
+  { category: 'BOND', value: '90000000', weight: '0.0729' },
+  { category: 'MYSTERY_CATEGORY_FROM_FUTURE_BACKEND', value: '80000000', weight: '0.0648' },
 ];
 
 const SECTOR_ALLOCATION: SectorAllocationDto[] = [
-  { sector: 'Semiconductors and Electronic Components Manufacturing', value: 300000000, weight: 0.243, holdingCount: 3, unrealizedPnl: 12345678.9 },
-  { sector: 'Financial Services', value: 200000000, weight: 0.162, holdingCount: 2, unrealizedPnl: -2345678.12 },
-  { sector: 'Technology', value: 150000000, weight: 0.121, holdingCount: 1, unrealizedPnl: 1000000 },
-  { sector: 'Energy', value: 100000000, weight: 0.081, holdingCount: 1, unrealizedPnl: 0 },
-  { sector: 'Consumer Staples', value: 50000000, weight: 0.04, holdingCount: 1, unrealizedPnl: 50000 },
-  { sector: null, value: 20000000, weight: 0.016, holdingCount: 1, unrealizedPnl: -10000 },
+  { sector: 'Semiconductors and Electronic Components Manufacturing', value: '300000000', weight: '0.243', holdingCount: 3, unrealizedPnl: '12345678.9' },
+  { sector: 'Financial Services', value: '200000000', weight: '0.162', holdingCount: 2, unrealizedPnl: '-2345678.12' },
+  { sector: 'Technology', value: '150000000', weight: '0.121', holdingCount: 1, unrealizedPnl: '1000000' },
+  { sector: 'Energy', value: '100000000', weight: '0.081', holdingCount: 1, unrealizedPnl: '0' },
+  { sector: 'Consumer Staples', value: '50000000', weight: '0.04', holdingCount: 1, unrealizedPnl: '50000' },
+  { sector: null, value: '20000000', weight: '0.016', holdingCount: 1, unrealizedPnl: '-10000' },
 ];
 
 const SUMMARY: PortfolioSummaryDto = {
-  totalMarketValue: 1140000000,
-  totalCostBasis: 1000000000,
-  realizedPnl: 12345678.9,
-  unrealizedPnl: 140000000,
-  totalPnl: 152345678.9,
-  roi: 0.1523,
+  totalMarketValue: '1140000000',
+  totalCostBasis: '1000000000',
+  realizedPnl: '12345678.9',
+  unrealizedPnl: '140000000',
+  totalPnl: '152345678.9',
+  roi: '0.1523',
   holdingCount: 6,
   baseCurrency: 'TWD',
   fxExcludedCount: 2,
   unconvertedCurrencies: ['EUR', 'JPY'],
-  dayPricePnl: -1234567.89,
-  dayPricePnlRatio: -0.0104,
+  dayPricePnl: '-1234567.89',
+  dayPricePnlRatio: '-0.0104',
   dayPnlExcludedCount: 3,
-  cash: 1087654321.5,
-  totalEquity: 1234567890.12,
+  cash: '1087654321.5',
+  totalEquity: '1234567890.12',
   cashBalances: CASH_BALANCES,
   allocation: ALLOCATION,
   sectorAllocation: SECTOR_ALLOCATION,
   // Phase 04.2(DIV-02):有股利收入且有預扣稅 → Overview KPI #4 / Positions 總損益卡都渲染最長的 dividendIncomeLineWithTax
-  dividendIncome: 123456789.12,
-  dividendTaxWithheld: 30864197.28,
+  dividendIncome: '123456789.12',
+  dividendTaxWithheld: '30864197.28',
 };
 
+/** holdings fixture:BigDecimal 欄位為 wire 字串(Phase 5 D-05,後端 `HoldingDto` 的 `@DecimalString`)。 */
 function holding(
   index: number,
   overrides: Partial<HoldingDto> & Pick<HoldingDto, 'symbol' | 'assetName' | 'currency'>,
 ): HoldingDto {
   return {
     assetId: `00000000-0000-4000-8000-00000000000${index}`,
-    totalQuantity: 123456 + index,
-    avgCost: 1234.56,
-    costBasis: 152407263.36,
-    marketPrice: 1456.78,
-    marketValue: 179842345.68,
-    realizedPnl: 1234567.89,
-    unrealizedPnl: -2345678.12,
-    roi: 0.0123,
+    totalQuantity: String(123456 + index),
+    avgCost: '1234.56',
+    costBasis: '152407263.36',
+    marketPrice: '1456.78',
+    marketValue: '179842345.68',
+    realizedPnl: '1234567.89',
+    unrealizedPnl: '-2345678.12',
+    roi: '0.0123',
     priceTime: '2026-10-24T05:30:00Z',
     lastUpdated: '2026-10-24T05:30:05Z',
     assetType: 'STOCK',
     sector: 'Technology',
     market: 'TW',
     baseCurrency: 'TWD',
-    marketValueInBase: 179842345.68,
-    unrealizedPnlInBase: -2345678.12,
-    previousClose: 1440.12,
-    dayPricePnl: 2056789.01,
-    dayPricePnlRatio: 0.0116,
+    marketValueInBase: '179842345.68',
+    unrealizedPnlInBase: '-2345678.12',
+    previousClose: '1440.12',
+    dayPricePnl: '2056789.01',
+    dayPricePnlRatio: '0.0116',
+    dayPnlBasis: '177785556.67',
     ...overrides,
   };
 }
 
 const HOLDINGS: HoldingDto[] = [
   holding(1, { symbol: '2330.TW', assetName: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)', currency: 'TWD' }),
-  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', market: 'US', marketValueInBase: 5800000000, unrealizedPnlInBase: -76043912.31 }),
-  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', market: 'DE', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null }),
+  holding(2, { symbol: 'AAPL', assetName: 'Apple Inc.', currency: 'USD', market: 'US', marketValueInBase: '5800000000', unrealizedPnlInBase: '-76043912.31' }),
+  holding(3, { symbol: 'SAP.DE', assetName: 'SAP SE', currency: 'EUR', market: 'DE', marketValueInBase: null, unrealizedPnlInBase: null, dayPricePnl: null, dayPricePnlRatio: null, previousClose: null, dayPnlBasis: null }),
   holding(4, { symbol: '7203.T', assetName: 'Toyota Motor Corporation', currency: 'JPY', market: 'JP', marketValueInBase: null, unrealizedPnlInBase: null }),
   holding(5, { symbol: 'BTC-USD', assetName: 'Bitcoin', currency: 'USD', assetType: 'CRYPTO', sector: null, market: 'CRYPTO' }),
   holding(6, { symbol: '2317.TW', assetName: 'Hon Hai Precision Industry', currency: 'TWD', sector: null }),
@@ -165,9 +170,10 @@ function trade(
   const day = String(24 - index).padStart(2, '0');
   return {
     id: `11111111-1111-4111-8111-1111111111${String(index).padStart(2, '0')}`,
-    quantity: 123456,
-    price: 1234.56,
-    fee: 1234.5,
+    // 05-19(Phase 5 D-05):TradeDto 的 BigDecimal 欄位是 JSON 字串(後端 setScale(8) 帶尾零)。
+    quantity: '123456.00000000',
+    price: '1234.56000000',
+    fee: '1234.50000000',
     note: null,
     executedAt: `2026-10-${day}T10:00:00+08:00`,
     createdAt: `2026-10-${day}T10:00:05+08:00`,
@@ -179,7 +185,7 @@ const TRADES: TradeDto[] = [
   trade(0, { symbol: '2330.TW', type: 'BUY', currency: 'TWD', note: LONG_NOTE }),
   trade(1, { symbol: 'AAPL', type: 'SELL', currency: 'USD' }),
   trade(2, { symbol: 'SAP.DE', type: 'BUY', currency: 'EUR' }),
-  trade(3, { symbol: '7203.T', type: 'BUY', currency: 'JPY', price: 2987654.32 }),
+  trade(3, { symbol: '7203.T', type: 'BUY', currency: 'JPY', price: '2987654.32000000' }),
   trade(4, { symbol: 'BTC-USD', type: 'BUY', currency: 'USD', note: 'long note with spaces '.repeat(10) }),
   trade(5, { symbol: '2317.TW', type: 'SELL', currency: 'TWD' }),
   trade(6, { symbol: 'AAPL', type: 'BUY', currency: 'USD' }),
@@ -219,18 +225,35 @@ function activity(
   };
 }
 
-/** 交易列:amount = quantity × price,後端以 scale 8 捨入(trading-portfolio-contract〈PortfolioActivityDto〉)。 */
+/**
+ * 兩個非負一般記號十進位字串的精確乘積(BigInt;e2e 不 import 產品碼的 big.js)。fixture 的位數夠小,
+ * 乘積不超過 8 位小數,與後端 scale 8 的結果相同。
+ */
+function multiplyDecimal(left: string, right: string): string {
+  const [li, lf = ''] = left.split('.');
+  const [ri, rf = ''] = right.split('.');
+  const scale = lf.length + rf.length;
+  const digits = (BigInt(li + lf) * BigInt(ri + rf)).toString().padStart(scale + 1, '0');
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/, '');
+  return fraction ? `${digits.slice(0, -scale)}.${fraction}` : digits.slice(0, -scale);
+}
+
+/**
+ * 交易列:amount = quantity × price,後端以 scale 8 捨入(trading-portfolio-contract〈PortfolioActivityDto〉)。
+ * 金額欄位是 wire 字串(Phase 5 D-05)。
+ */
 function tradeActivity(
   index: number,
   overrides: Partial<PortfolioActivityDto> & Pick<PortfolioActivityDto, 'kind' | 'symbol' | 'currency'>,
 ): PortfolioActivityDto {
-  const quantity = overrides.quantity ?? 123456;
-  const price = overrides.price ?? 1234.56;
+  const quantity = overrides.quantity ?? '123456';
+  const price = overrides.price ?? '1234.56';
   return activity(index, {
     quantity,
     price,
-    fee: 1234.5,
-    amount: Math.round(quantity * price * 1e8) / 1e8,
+    fee: '1234.5',
+    amount: multiplyDecimal(quantity, price),
     ...overrides,
   });
 }
@@ -244,37 +267,37 @@ export const ACTIVITIES: PortfolioActivityDto[] = [
   tradeActivity(1, { kind: 'SELL', symbol: 'AAPL', currency: 'USD' }),
   activity(2, {
     kind: 'CASH_DIVIDEND', symbol: 'AAPL', currency: 'USD',
-    amount: 1234567.89, withholdingTax: 308641.97, note: 'Q3 dividend', reversible: true,
+    amount: '1234567.89', withholdingTax: '308641.97', note: 'Q3 dividend', reversible: true,
   }),
   activity(3, {
     kind: 'STOCK_DIVIDEND', symbol: '2330.TW', currency: 'TWD',
-    quantity: 12345.6789, effectiveDate: '2026-10-25', reversible: true,
+    quantity: '12345.6789', effectiveDate: '2026-10-25', reversible: true,
   }),
   activity(4, {
     kind: 'SPLIT', symbol: '7203.T', currency: 'JPY',
-    quantity: -61728, ratioNew: 1, ratioOld: 2, effectiveDate: '2026-10-24', reversible: true,
+    quantity: '-61728', ratioNew: 1, ratioOld: 2, effectiveDate: '2026-10-24', reversible: true,
   }),
   activity(5, {
     kind: 'SPLIT', symbol: 'NVDA', currency: 'USD',
-    quantity: 370368, ratioNew: 4, ratioOld: 1, effectiveDate: '2026-10-23',
+    quantity: '370368', ratioNew: 4, ratioOld: 1, effectiveDate: '2026-10-23',
   }),
   activity(6, {
-    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67,
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: '98765.43', withholdingTax: '12345.67',
     note: 'Reversal of wrong dividend',
     reversalOfId: '22222222-2222-4222-8222-222222222207', reversalOfOccurredAt: '2026-10-21T10:00:00+08:00',
   }),
   activity(7, {
-    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: 98765.43, withholdingTax: 12345.67, reversed: true,
+    kind: 'CASH_DIVIDEND', symbol: 'SAP.DE', currency: 'EUR', amount: '98765.43', withholdingTax: '12345.67', reversed: true,
   }),
   activity(8, {
-    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19',
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: '5000', effectiveDate: '2026-10-19',
     reversalOfId: '22222222-2222-4222-8222-222222222209', reversalOfEffectiveDate: '2026-10-19',
   }),
   activity(9, {
-    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: 5000, effectiveDate: '2026-10-19', reversed: true,
+    kind: 'STOCK_DIVIDEND', symbol: '2317.TW', currency: 'TWD', quantity: '5000', effectiveDate: '2026-10-19', reversed: true,
   }),
   tradeActivity(10, { kind: 'BUY', symbol: 'BTC-USD', currency: 'USD', note: 'long note with spaces '.repeat(10) }),
-  tradeActivity(11, { kind: 'SELL', symbol: '7203.T', currency: 'JPY', price: 2987654.32 }),
+  tradeActivity(11, { kind: 'SELL', symbol: '7203.T', currency: 'JPY', price: '2987654.32' }),
 ];
 
 /** 30 字清單名稱:無空白的寬拉丁字母 + 中文(tab 單行省略、工具列 overflow-wrap、picker 換行的最壞情況)。 */
@@ -289,45 +312,45 @@ function asset(
     market: 'US',
     sector: null,
     tradeable: true,
-    latestPrice: 1234.56,
-    change: 12.34,
-    changePercent: 1.01,
+    latestPrice: '1234.56',
+    change: '12.34',
+    changePercent: '1.01',
     volumeText: '123.4M',
-    high: 1240,
-    low: 1220,
+    high: '1240',
+    low: '1220',
     ...overrides,
   };
 }
 
 /** 作用中清單 12 檔:股票 / 加密 / FX / 債券 / 無報價(價格與漲跌全 —)、超長名稱、9 位數價格。 */
 export const WATCHLIST_ITEMS: AssetDto[] = [
-  asset(0, { symbol: 'AAPL', name: 'Apple Inc.', assetType: 'STOCK', currency: 'USD', latestPrice: 218.4, change: 1.42, changePercent: 0.66 }),
+  asset(0, { symbol: 'AAPL', name: 'Apple Inc.', assetType: 'STOCK', currency: 'USD', latestPrice: '218.4', change: '1.42', changePercent: '0.66' }),
   asset(1, {
     symbol: '2330.TW', name: 'Taiwan Semiconductor Manufacturing Company Limited (台灣積體電路製造股份有限公司)',
-    assetType: 'STOCK', currency: 'TWD', market: 'TW', latestPrice: 945, change: -12, changePercent: -1.25,
+    assetType: 'STOCK', currency: 'TWD', market: 'TW', latestPrice: '945', change: '-12', changePercent: '-1.25',
   }),
-  asset(2, { symbol: 'BTC', name: 'Bitcoin', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 67842.4, volumeText: '$28.4B' }),
-  asset(3, { symbol: 'USD/TWD', name: '美元/新台幣', assetType: 'FX', currency: 'TWD', market: 'FX', tradeable: false, latestPrice: 32.418, change: 0.024, changePercent: 0.07, volumeText: null }),
+  asset(2, { symbol: 'BTC', name: 'Bitcoin', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: '67842.4', volumeText: '$28.4B' }),
+  asset(3, { symbol: 'USD/TWD', name: '美元/新台幣', assetType: 'FX', currency: 'TWD', market: 'FX', tradeable: false, latestPrice: '32.418', change: '0.024', changePercent: '0.07', volumeText: null }),
   asset(4, {
     symbol: 'EUR/USD', name: '歐元/美元', assetType: 'FX', currency: 'USD', market: 'FX', tradeable: false,
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
   asset(5, {
     symbol: 'US10Y', name: 'US 10-Year Treasury', assetType: 'BOND', currency: 'USD', tradeable: false,
-    latestPrice: 4.218, change: 0.014, changePercent: null, volumeText: null, high: null, low: null,
+    latestPrice: '4.218', change: '0.014', changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(6, { symbol: 'MSFT', name: 'Microsoft Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 123456789.12, change: -1234567.89, changePercent: -0.99 }),
+  asset(6, { symbol: 'MSFT', name: 'Microsoft Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: '123456789.12', change: '-1234567.89', changePercent: '-0.99' }),
   asset(7, {
     symbol: 'NOQUOTE', name: 'Asset Without Any Quote Yet', assetType: 'STOCK', currency: 'USD',
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(8, { symbol: 'ETH', name: 'Ethereum', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: 3482.18 }),
+  asset(8, { symbol: 'ETH', name: 'Ethereum', assetType: 'CRYPTO', currency: 'USD', market: 'CRYPTO', latestPrice: '3482.18' }),
   asset(9, {
     symbol: 'JP10Y', name: 'Japan 10-Year', assetType: 'BOND', currency: 'JPY', market: 'JP', tradeable: false,
     latestPrice: null, change: null, changePercent: null, volumeText: null, high: null, low: null,
   }),
-  asset(10, { symbol: 'NVDA', name: 'NVIDIA Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: 1142.83 }),
-  asset(11, { symbol: '7203.T', name: 'Toyota Motor Corporation', assetType: 'STOCK', currency: 'JPY', market: 'JP', latestPrice: 2987654.32 }),
+  asset(10, { symbol: 'NVDA', name: 'NVIDIA Corp.', assetType: 'STOCK', currency: 'USD', latestPrice: '1142.83' }),
+  asset(11, { symbol: '7203.T', name: 'Toyota Motor Corporation', assetType: 'STOCK', currency: 'JPY', market: 'JP', latestPrice: '2987654.32' }),
 ];
 
 /** 20 個清單(上限):第一個(作用中)為 30 字名稱 + 12 檔;每 5 個再放一個 30 字中文名稱。 */
@@ -495,7 +518,7 @@ export async function mockPortfolioApi(page: Page, options: MockPortfolioApiOpti
       await options.cashPostGate;
       await route.fulfill({
         status: 201,
-        json: envelope(entry(0, { id: 'layout-cash-new', type: 'WITHDRAWAL', currency: 'TWD', amount: 1 })),
+        json: envelope(entry(0, { id: 'layout-cash-new', type: 'WITHDRAWAL', currency: 'TWD', amount: '1' })),
       });
       return;
     }

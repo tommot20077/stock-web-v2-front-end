@@ -332,8 +332,10 @@ import { useQuoteRefresh } from '../composables/useQuoteRefresh';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
 import { getRuntimeApiClients } from '../services/pageApiClients';
-import type { AssetDto } from '../services/apiTypes';
-import { WATCHLIST_MAX_LISTS, type WatchlistDto } from '../services/watchlistApi';
+import type { Asset } from '../services/apiTypes';
+import { ZERO, type Decimal } from '../services/decimal';
+import { WATCHLIST_MAX_LISTS, type WatchlistRecord } from '../services/watchlistApi';
+import { fmtMoneyAmount } from '../moneyFormat';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
@@ -344,7 +346,7 @@ const emit = defineEmits<{
 
 const PANEL_ID = 'watchlist-panel';
 
-const lists = ref<WatchlistDto[] | null>(null);
+const lists = ref<WatchlistRecord[] | null>(null);
 const activeListId = ref<string | null>(null);
 const loading = ref(false);
 const loadError = ref<ApiClientError | null>(null);
@@ -355,9 +357,9 @@ const activeList = computed(() => lists.value?.find(list => list.id === activeLi
 
 // ── 即時報價(WATCH-04;D-21 / D-23)──────────────────────────────
 const quotes = getRuntimeApiClients().quotes;
-const NO_ROWS: readonly AssetDto[] = [];
+const NO_ROWS: readonly Asset[] = [];
 /** 作用中清單的列;陣列被替換(GET 重讀、操作回應)時 useLiveQuotes 以當下 ticks 為新基準。 */
-const activeRows = computed<readonly AssetDto[]>(() => activeList.value?.items ?? NO_ROWS);
+const activeRows = computed<readonly Asset[]>(() => activeList.value?.items ?? NO_ROWS);
 /** 最後一次 GET 成功的前端收到時間(「更新於」的下限,U-19)。 */
 const restFetchedAt = ref<number | null>(null);
 const live = useLiveQuotes(activeRows, quotes, { restFetchedAt });
@@ -394,7 +396,7 @@ let listsSeq = 0;
 let latestLoadSeq = 0;
 
 /** 本地寫入清單的唯一入口(同時讓在飛中的 GET 失效)。 */
-function setLists(next: WatchlistDto[]) {
+function setLists(next: WatchlistRecord[]) {
   listsSeq += 1;
   lists.value = next;
 }
@@ -433,7 +435,7 @@ async function reloadLists() {
   }
 }
 
-function replaceList(updated: WatchlistDto) {
+function replaceList(updated: WatchlistRecord) {
   setLists((lists.value ?? []).map(list => (list.id === updated.id ? updated : list)));
 }
 
@@ -548,7 +550,7 @@ async function submitCreate() {
   createAttempted.value = true;
   if (busy.value || nameCheck(createName.value, null)) return;
   busy.value = true;
-  let created: WatchlistDto | null = null;
+  let created: WatchlistRecord | null = null;
   let failure: unknown = null;
   try {
     created = await watchlistApi().create(createName.value.trim());
@@ -611,7 +613,7 @@ async function submitRename() {
   renameTouched.value = true;
   if (!list || busy.value || nameCheck(renameName.value, list.id)) return;
   busy.value = true;
-  let updated: WatchlistDto | null = null;
+  let updated: WatchlistRecord | null = null;
   let failure: unknown = null;
   try {
     updated = await watchlistApi().rename(list.id, renameName.value.trim());
@@ -682,12 +684,12 @@ async function confirmDelete() {
 // ── 移除項目(U-18:立即、不確認)─────────────────────────────────
 const removing = reactive<Record<string, boolean>>({});
 
-async function removeItem(item: AssetDto) {
+async function removeItem(item: Asset) {
   const list = activeList.value;
   if (!list || removing[item.uuid]) return;
   const index = list.items.findIndex(candidate => candidate.uuid === item.uuid);
   removing[item.uuid] = true;
-  let updated: WatchlistDto | null = null;
+  let updated: WatchlistRecord | null = null;
   let failure: unknown = null;
   try {
     updated = await watchlistApi().removeItem(list.id, item.uuid);
@@ -736,13 +738,13 @@ function toggleReorder() {
   clearDrag();
 }
 
-function onRowClick(item: AssetDto) {
+function onRowClick(item: Asset) {
   if (reordering.value) return;
   emit('chart', { sym: item.symbol });
 }
 
 /** 本地重排(樂觀)並排程儲存;回傳被移動的項目。 */
-function reorderLocal(from: number, to: number): AssetDto | null {
+function reorderLocal(from: number, to: number): Asset | null {
   const list = activeList.value;
   if (!list || from === to || from < 0 || to < 0 || from >= list.items.length || to >= list.items.length) return null;
   const items = [...list.items];
@@ -800,7 +802,7 @@ async function sendReorder() {
 
   reorderInFlight.value = true;
   let failure: unknown = null;
-  let updated: WatchlistDto | null = null;
+  let updated: WatchlistRecord | null = null;
   try {
     updated = await getRuntimeApiClients().watchlist.reorder(listId, list.items.map(item => item.uuid));
   } catch (error) {
@@ -917,54 +919,51 @@ async function onTabKeydown(event: KeyboardEvent, index: number) {
 }
 
 // ── 報價格式(UI-SPEC §Money:觀察清單)──────────────────────────
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function fixed(value: number, dp: number): string {
-  return value.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+/** 固定 dp 位小數、千分位(經 moneyFormat,Decimal 不經 JS number;Phase 5 D-08)。 */
+function fixed(value: Decimal, dp: number): string {
+  return fmtMoneyAmount(value, null, dp);
 }
 
 /** FX 4 位、BOND 3 位(殖利率)、其餘 2 位。 */
-function priceDp(item: AssetDto): number {
+function priceDp(item: Asset): number {
   if (item.assetType === 'FX') return 4;
   if (item.assetType === 'BOND') return 3;
   return 2;
 }
 
-function priceText(item: AssetDto): string {
-  return isFiniteNumber(item.latestPrice) ? fixed(item.latestPrice, priceDp(item)) : '—';
+function priceText(item: Asset): string {
+  return item.latestPrice !== null ? fixed(item.latestPrice, priceDp(item)) : '—';
 }
 
-/** BOND 用 change(殖利率變動),其餘用 changePercent。 */
-function changeValue(item: AssetDto): number | null {
-  const value = item.assetType === 'BOND' ? item.change : item.changePercent;
-  return isFiniteNumber(value) ? value : null;
+/** BOND 用 change(殖利率變動),其餘用 changePercent;缺值為 null(顯示 —,不當 0)。 */
+function changeValue(item: Asset): Decimal | null {
+  return item.assetType === 'BOND' ? item.change : item.changePercent;
 }
 
-function changeText(item: AssetDto): string {
+/** 正負號由 Decimal 比較決定(未捨入的原值,同 Phase 5 前的 number 版),本體為絕對值。 */
+function changeText(item: Asset): string {
   const value = changeValue(item);
   if (value === null) return '—';
-  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-  const body = item.assetType === 'BOND' ? fixed(Math.abs(value), 3) : `${fixed(Math.abs(value), 2)}%`;
+  const sign = value.gt(ZERO) ? '+' : value.lt(ZERO) ? '-' : '';
+  const body = item.assetType === 'BOND' ? fixed(value.abs(), 3) : `${fixed(value.abs(), 2)}%`;
   return `${sign}${body}`;
 }
 
-function changeClass(item: AssetDto): string {
+function changeClass(item: Asset): string {
   const value = changeValue(item);
   if (value === null) return 'na';
-  if (value > 0) return 'up';
-  if (value < 0) return 'dn';
+  if (value.gt(ZERO)) return 'up';
+  if (value.lt(ZERO)) return 'dn';
   return '';
 }
 
 /** 後端 volumeText 原樣;null / 空字串 → —(tick 的 volume 不得覆寫,RESEARCH P-W5)。 */
-function volumeText(item: AssetDto): string {
+function volumeText(item: Asset): string {
   return item.volumeText ? item.volumeText : '—';
 }
 
 /** U-16:幣別標籤只對 STOCK / CRYPTO(FX 匯率與債券殖利率沒有計價幣別語意)。 */
-function hasCcyTag(item: AssetDto): boolean {
+function hasCcyTag(item: Asset): boolean {
   return item.assetType === 'STOCK' || item.assetType === 'CRYPTO';
 }
 

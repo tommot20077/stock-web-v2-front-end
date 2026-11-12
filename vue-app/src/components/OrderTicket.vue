@@ -176,15 +176,18 @@
             <div class="row2">
               <div>
                 <label class="lab" for="trade-qty">{{ t(lang, 'qty') }}</label>
+                <!--
+                  Phase 5 D-08:數量 / 價格 / 手續費是文字輸入,以 parseDecimalInput 解析成 Decimal(不經 JS number;
+                  type="number" 的 valueAsNumber 會把 8 位小數的大額數字失真)。inputmode 仍叫出數字鍵盤。
+                -->
                 <input
                   id="trade-qty"
-                  v-model.number="qty"
-                  type="number"
+                  v-model="qty"
+                  type="text"
                   inputmode="decimal"
+                  autocomplete="off"
                   class="inp"
                   data-testid="ticket-qty"
-                  min="0"
-                  :step="qtyStep"
                   :aria-invalid="invalidAttr('quantity')"
                   :aria-describedby="describedBy('quantity')"
                   :disabled="submitting"
@@ -222,13 +225,12 @@
                 <label class="lab" for="trade-price">{{ t(lang, 'price') }}</label>
                 <input
                   id="trade-price"
-                  v-model.number="px"
-                  type="number"
+                  v-model="px"
+                  type="text"
                   inputmode="decimal"
+                  autocomplete="off"
                   class="inp"
                   data-testid="ticket-price"
-                  min="0"
-                  step="0.01"
                   :aria-invalid="invalidAttr('price')"
                   :aria-describedby="describedBy('price')"
                   :disabled="submitting"
@@ -249,13 +251,12 @@
                 <label class="lab" for="trade-fee">{{ t(lang, 'fee') }}</label>
                 <input
                   id="trade-fee"
-                  v-model.number="fee"
-                  type="number"
+                  v-model="fee"
+                  type="text"
                   inputmode="decimal"
+                  autocomplete="off"
                   class="inp"
                   data-testid="ticket-fee"
-                  min="0"
-                  step="0.01"
                   :aria-invalid="invalidAttr('fee')"
                   :aria-describedby="describedBy('fee', 'trade-fee-hint')"
                   :disabled="submitting"
@@ -321,8 +322,8 @@
 
           <div class="right">
             <!--
-              D-16 的**例外分支**:報價卡的每一格後端都有(`AssetDto.java:9-24`),
-              所以走「真實資料」而不是「隱藏」。六格全部來自**同一份** AssetDto,
+              D-16 的**例外分支**:報價卡的每一格後端都有(`AssetDto.java`),
+              所以走「真實資料」而不是「隱藏」。六格全部來自**同一份** Asset(domain,報價為 Decimal),
               不需要第二個請求,而且**只做格式化、不做任何計算**(judgment §7 / Phase 3 D-04)。
             -->
             <div v-if="selected" class="quote-card">
@@ -415,7 +416,7 @@
               <!-- D-04:交易後現金全 repo 無後端來源,只在 mock mode 渲染 -->
               <div v-if="live" class="sum-row dim">
                 <span>{{ t(lang, 'cashAfter') }}</span>
-                <span class="num">${{ fmtNum(cashAfter, 0) }}</span>
+                <span class="num">${{ fmtMoneyAmount(cashAfter, null, 0) }}</span>
               </div>
             </div>
           </div>
@@ -424,12 +425,12 @@
         <!-- STEP 2: Review(DP-9:append-only 帳本的不可撤銷寫入需要一個確認關卡) -->
         <div v-else-if="step === 'review'" class="body review">
           <div class="big-side" :class="side.toLowerCase()">
-            {{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qty }} {{ selected?.symbol }}
+            {{ side === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }} {{ qtyText }} {{ selected?.symbol }}
           </div>
           <div class="rev-grid">
-            <div><span>{{ t(lang, 'price') }}</span><b class="num">{{ reviewMoney(px, selectedDp) }}</b></div>
-            <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ qty }}</b></div>
-            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ reviewMoney(fee, selectedDp) }}</b></div>
+            <div><span>{{ t(lang, 'price') }}</span><b class="num">{{ reviewMoney(parsedPx, selectedDp) }}</b></div>
+            <div><span>{{ t(lang, 'qty') }}</span><b class="num">{{ qtyText }}</b></div>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ reviewMoney(parsedFee, selectedDp) }}</b></div>
             <div class="span-2">
               <span>{{ t(lang, 'tradeExecutedAt') }}</span>
               <b class="num">{{ executedAt.replace('T', ' ') }}</b>
@@ -438,7 +439,7 @@
               <span>{{ t(lang, 'estTotal') }}</span><b class="num">{{ reviewMoney(estTotal, 2) }}</b>
             </div>
             <div v-if="live" class="span-2 dim">
-              <span>{{ t(lang, 'cashAfter') }}</span><b class="num">${{ fmtNum(cashAfter, 0) }}</b>
+              <span>{{ t(lang, 'cashAfter') }}</span><b class="num">${{ fmtMoneyAmount(cashAfter, null, 0) }}</b>
             </div>
           </div>
           <p class="irreversible">{{ t(lang, 'tradeIrreversibleNote') }}</p>
@@ -462,13 +463,13 @@
           >{{ t(lang, 'recordingTrade') }}</p>
         </div>
 
-        <!-- STEP 3: Result(只渲染回傳的 TradeDto,不顯示表單值 —— D-09) -->
+        <!-- STEP 3: Result(只渲染回傳的 TradeRecord,不顯示表單值 —— D-09) -->
         <div v-else class="body result" data-testid="ticket-result">
           <div class="check" aria-hidden="true">✓</div>
           <h2 ref="resultTitle" class="result-ttl" tabindex="-1">{{ t(lang, 'tradeRecorded') }}</h2>
           <div class="result-sub">
             {{ recorded?.type === 'BUY' ? t(lang, 'buy') : t(lang, 'sell') }}
-            {{ recorded?.quantity }} {{ recorded?.symbol }} @ {{ resultMoney(recorded?.price ?? Number.NaN, recordedDp) }}
+            {{ recordedQtyText }} {{ recorded?.symbol }} @ {{ resultMoney(recorded?.price, recordedDp) }}
           </div>
           <div class="rev-grid">
             <div class="span-2">
@@ -477,20 +478,20 @@
             </div>
             <div>
               <span>{{ t(lang, 'price') }}</span>
-              <b class="num" data-testid="ticket-result-price">{{ resultMoney(recorded?.price ?? Number.NaN, recordedDp) }}</b>
+              <b class="num" data-testid="ticket-result-price">{{ resultMoney(recorded?.price, recordedDp) }}</b>
             </div>
             <div>
               <span>{{ t(lang, 'qty') }}</span>
-              <b class="num" data-testid="ticket-result-qty">{{ recorded?.quantity }}</b>
+              <b class="num" data-testid="ticket-result-qty">{{ recordedQtyText }}</b>
             </div>
-            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ resultMoney(recorded?.fee ?? Number.NaN, recordedDp) }}</b></div>
+            <div><span>{{ t(lang, 'fee') }}</span><b class="num">{{ resultMoney(recorded?.fee, recordedDp) }}</b></div>
             <div>
               <span>{{ t(lang, 'tradeExecutedAt') }}</span>
               <b class="num trade-id" data-testid="ticket-result-executed-at">{{ recorded?.executedAt }}</b>
             </div>
             <div class="span-2 highlight">
               <span>{{ t(lang, 'estTotal') }}</span>
-              <b class="num">{{ resultMoney((recorded?.quantity ?? 0) * (recorded?.price ?? 0), 2) }}</b>
+              <b class="num">{{ resultMoney(recordedTotal, 2) }}</b>
             </div>
           </div>
         </div>
@@ -566,8 +567,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { t } from '../i18n';
 // 只取格式化純函式(`data.ts:91,98`,純 toLocaleString / toFixed,不觸及任何資料集);
 // 標的、報價與走勢資料一律經 market adapter,本檔對本地假資料集與序列產生器零引用。
-import { fmtNum, fmtPct } from '../data';
-import { fmtMoney, minorUnits } from '../moneyFormat';
+import { fmtMoney, fmtMoneyAmount, fmtQuantity, minorUnits } from '../moneyFormat';
 import LineChart from './LineChart.vue';
 import { ApiClientError } from '../services/apiClient';
 // closeSeries 是 KlineDto.close(JSON string)→ number[] 的**唯一**轉換點(04-06 已單測鎖住)。
@@ -583,7 +583,8 @@ import {
 import { toLocalInputValue, toLocalIso } from '../services/localTime';
 import { classifyInstantInput } from '../eventTimeBounds';
 import { useNow } from '../composables/useNow';
-import type { AssetDto, HoldingDto, KlineDto, PaginatedResponse, TradeDto } from '../services/apiTypes';
+import type { Asset, Holding, PaginatedResponse, TradeRecord } from '../services/apiTypes';
+import { parseDecimal, parseDecimalInput, toWire, ZERO, type Decimal } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = defineProps<{ open: boolean; lang: Lang; preset?: { sym: string; side?: 'BUY' | 'SELL' } | null }>();
@@ -623,14 +624,15 @@ const symInput = ref<HTMLInputElement | null>(null);
 const resultTitle = ref<HTMLElement | null>(null);
 const symQuery = ref('');
 const symOpen = ref(false);
-const selected = ref<AssetDto | null>(null);
+const selected = ref<Asset | null>(null);
 
 const side = ref<'BUY' | 'SELL'>('BUY');
 // quick-261107-1j4(Yuan 2026-11-07 裁決 3B):訂單類型(市價 / 限價)與有效時間(當日 / 長效)是委託單概念,
 // 手動紀錄已成交交易用不到,mock 與 API 兩模式皆已移除(judgment §1;後端 CreateTradeRequest 也沒有這兩個欄位)。
-const qty = ref<number>(0);
-const px = ref<number>(0);
-const fee = ref<number>(0);
+// Phase 5 D-08:三個金額欄位存原始輸入文字,解析成 Decimal 的結果見下方 parsedQty / parsedPx / parsedFee。
+const qty = ref('0');
+const px = ref('0');
+const fee = ref('0');
 const note = ref('');
 const executedAt = ref('');
 
@@ -650,7 +652,7 @@ const maxExecutedAt = computed(() => toLocalInputValue(new Date(clockNow())));
 
 const submitting = ref(false);
 const orderError = ref('');
-const recorded = ref<TradeDto | null>(null);
+const recorded = ref<TradeRecord | null>(null);
 
 // 04.1-14(D-28 補充 / UI-SPEC §Interaction 10):API mode 的成功畫面用**後端回傳**的
 // `recorded.currency`,不是 review 時的 `selected.currency`(Phase 4 U-12:成功畫面用後端值)。
@@ -658,16 +660,22 @@ const recorded = ref<TradeDto | null>(null);
 // review 步驟與 ticket 步驟預估總額(04.1-27)共用 `reviewMoney`(UI-SPEC §Interaction 10):
 // 幣別取自已選標的 `selected.currency`;缺值同樣只顯示數字。價格 / 手續費 dp = minorUnits,預估總額 dp = 2。
 const selectedDp = computed(() => minorUnits(selected.value?.currency));
-function reviewMoney(value: number, dp: number): string {
-  if (live.value) return `$${fmtNum(value, dp)}`;
+// 金額是 Decimal(輸入無效時為 null → `—`);mock mode 的 `$` 呈現以 fmtMoneyAmount 取得與原 fmtNum 相同的數字格式。
+function reviewMoney(value: Decimal | null, dp: number): string {
+  if (live.value) return `$${fmtMoneyAmount(value, null, dp)}`;
   return fmtMoney(value, selected.value?.currency ?? null, dp);
 }
 
 const recordedDp = computed(() => minorUnits(recorded.value?.currency));
-function resultMoney(value: number, dp: number): string {
-  if (live.value) return `$${fmtNum(value, dp)}`;
+function resultMoney(value: Decimal | null | undefined, dp: number): string {
+  if (live.value) return `$${fmtMoneyAmount(value, null, dp)}`;
   return fmtMoney(value, recorded.value?.currency ?? null, dp);
 }
+
+/** 成功畫面的股數:後端值(`"7.00000000"` → `7`,一般記號、去尾零),與改字串前的 number 顯示相同。 */
+const recordedQtyText = computed(() => (recorded.value ? toWire(recorded.value.quantity) : ''));
+/** 成功畫面的預估總額 = 後端回傳的數量 × 價格(不含手續費,與後端 total 定義一致),Decimal 計算。 */
+const recordedTotal = computed(() => (recorded.value ? recorded.value.quantity.times(recorded.value.price) : null));
 
 // =================== D-14:idempotency key 的生命週期 ===================
 // 兩條規則就蓋完所有情境:
@@ -720,7 +728,7 @@ const IDLE_LIMIT = 6;
 /** §Interaction Contract 2 明定 250ms。自行以 setTimeout/clearTimeout 實作,不引入任何套件。 */
 const SEARCH_DEBOUNCE_MS = 250;
 
-const symbolState = ref<BlockState<PaginatedResponse<AssetDto>>>({ status: 'idle' });
+const symbolState = ref<BlockState<PaginatedResponse<Asset>>>({ status: 'idle' });
 /** 目前畫面上這份結果對應的查詢字串(空字串 = idle 列表)。 */
 const activeQuery = ref('');
 const activeIndex = ref(-1);
@@ -737,7 +745,7 @@ const symbolPage = computed(() => (symbolState.value.status === 'loaded' ? symbo
 
 // D-01:唯一允許的本地過濾 —— 只列可交易標的。**不得**再做任何關鍵字過濾:
 // 後端已依 query 篩選,前端重做等於複製後端邏輯。
-const options = computed<AssetDto[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
+const options = computed<Asset[]>(() => (symbolPage.value?.items ?? []).filter(asset => asset.tradeable));
 const visibleOptions = computed(() => (
   activeQuery.value === '' ? options.value.slice(0, IDLE_LIMIT) : options.value
 ));
@@ -759,23 +767,27 @@ const activeOptionId = computed(() => (
     : undefined
 ));
 
-/** `AssetDto` 的價格欄位可為 null;顯示 `—` 而不是 NaN,也不得被當成 0。 */
-function numOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : fmtNum(value);
+/**
+ * `Asset` 的報價欄位為 `Decimal | null`(Phase 5 D-05 / D-08);null 顯示 `—`,不得被當成 0。
+ * 只格式化、不重算:數字經 moneyFormat(2 位、千分位、負號 ASCII `-`),正負判斷用 Decimal 方法。
+ */
+function numOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : fmtMoneyAmount(value, null, 2);
 }
 
-function pctOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : fmtPct(value);
+/** 漲跌幅:≥ 0 補 `+`(含 0,沿用 Phase 5 前的 fmtPct 規則),負號由 moneyFormat 自帶。 */
+function pctOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : `${value.gte(ZERO) ? '+' : ''}${fmtMoneyAmount(value, null, 2)}%`;
 }
 
-/** 漲跌值:正數補 `+`(負號由 fmtNum 自帶)。同樣只格式化,不重算。 */
-function signedNumOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : `${value >= 0 ? '+' : ''}${fmtNum(value)}`;
+/** 漲跌值:≥ 0 補 `+`(負號由 moneyFormat 自帶)。同樣只格式化,不重算。 */
+function signedNumOrDash(value: Decimal | null | undefined): string {
+  return value == null ? '—' : `${value.gte(ZERO) ? '+' : ''}${fmtMoneyAmount(value, null, 2)}`;
 }
 
-function changeColor(value: number | null | undefined): string {
+function changeColor(value: Decimal | null | undefined): string {
   if (value == null) return 'var(--fg-mute)';
-  return value >= 0 ? 'var(--up-text)' : 'var(--dn)';
+  return value.gte(ZERO) ? 'var(--up-text)' : 'var(--dn)';
 }
 
 // ---- debounce + 「只採最後一次結果」(DP-12 / T-04-11) ----
@@ -857,12 +869,12 @@ onBeforeUnmount(() => {
  */
 const KLINE_WINDOW_MS = 48 * 60 * 60 * 1000;
 
-const klineState = ref<BlockState<KlineDto[]>>({ status: 'idle' });
+// state 只存 closeSeries 轉好的圖表座標(number[]),不存 wire 的 KlineDto(05-24 decimalBoundary 守門:
+// 元件 state 不得持有 *Dto 型別);轉換點仍是 closeSeries 一處。
+const klineState = ref<BlockState<number[]>>({ status: 'idle' });
 const chartLoading = computed(() => klineState.value.status === 'loading');
 const chartError = computed(() => (klineState.value.status === 'error' ? klineState.value.error : null));
-const chartSeries = computed(() => (
-  klineState.value.status === 'loaded' ? closeSeries(klineState.value.data) : []
-));
+const chartSeries = computed(() => (klineState.value.status === 'loaded' ? klineState.value.data : []));
 
 let klineSeq = 0;
 
@@ -873,7 +885,7 @@ async function loadKlines(symbol: string) {
     // 後端 `from` 是 `@RequestParam Instant`,必須是完整 ISO instant ——
     // 格式錯在 develop 上會回 **500** 而不是 400。
     const from = new Date(Date.now() - KLINE_WINDOW_MS).toISOString();
-    // symbol 直接用 AssetDto.symbol(後端原值),**不得 toUpperCase()**:
+    // symbol 直接用 Asset.symbol(後端原值),**不得 toUpperCase()**:
     // `MarketController` javadoc 明文大小寫敏感(encodeURIComponent 已在 adapter 內處理)。
     const klines = await apiClients().market.listKlines(symbol, {
       interval: '1h',
@@ -881,7 +893,7 @@ async function loadKlines(symbol: string) {
       limit: 48,
     });
     if (seq !== klineSeq) return;
-    klineState.value = { status: 'loaded', data: klines };
+    klineState.value = { status: 'loaded', data: closeSeries(klines) };
   } catch (error) {
     if (seq !== klineSeq) return;
     klineState.value = { status: 'error', error: describeError(error) };
@@ -901,12 +913,76 @@ watch(() => selected.value?.symbol, (symbol) => {
   void loadKlines(symbol);
 });
 
-const qtyStep = computed(() => (selected.value?.assetType === 'CRYPTO' ? 0.01 : 1));
-const estTotal = computed(() => qty.value * px.value);
+// =================== Phase 5 D-08:金額輸入 → Decimal ===================
+// 後端 `@Digits(fraction = 8)` 才是權威;這裡只把「必定被拒」的輸入擋下並在欄位下方說明(與 CashEntryDialog 同一規則)。
+// 只收一般記號的非負數字面:big.js 本身也接受 `1e-9` / `-1`,這兩種輸入在這些欄位一律視為錯誤。
+const DECIMAL_INPUT_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
+const MAX_DECIMALS = 8;
+
+/**
+ * 文字輸入 → Decimal;空白 → `empty`,格式不符 / 超過 8 位小數 → `invalid`(尾零不算位數,與 BigDecimal compareTo 一致)。
+ * 範圍(> 0、≥ 0)由各欄位自己判斷。
+ */
+type ParsedInput = { kind: 'empty' } | { kind: 'invalid' } | { kind: 'value'; value: Decimal };
+
+function parseAmountInput(text: string): ParsedInput {
+  const trimmed = text.trim();
+  if (trimmed === '') return { kind: 'empty' };
+  const value = parseDecimalInput(trimmed);
+  if (value === null || !DECIMAL_INPUT_PATTERN.test(trimmed)) return { kind: 'invalid' };
+  if (!value.round(MAX_DECIMALS).eq(value)) return { kind: 'invalid' };
+  return { kind: 'value', value };
+}
+
+const qtyInput = computed(() => parseAmountInput(qty.value));
+const pxInput = computed(() => parseAmountInput(px.value));
+const feeInput = computed(() => parseAmountInput(fee.value));
+
+/** 合法且 > 0 的數量;其餘(空白、0、格式錯誤)為 null。 */
+const parsedQty = computed<Decimal | null>(() => {
+  const input = qtyInput.value;
+  return input.kind === 'value' && input.value.gt(ZERO) ? input.value : null;
+});
+/** 合法且 > 0 的價格;其餘為 null。 */
+const parsedPx = computed<Decimal | null>(() => {
+  const input = pxInput.value;
+  return input.kind === 'value' && input.value.gt(ZERO) ? input.value : null;
+});
+/** D-02:手續費未填視為 0(送出 `"0"`);格式錯誤為 null(feeError 擋下送出)。 */
+const parsedFee = computed<Decimal | null>(() => {
+  const input = feeInput.value;
+  if (input.kind === 'empty') return ZERO;
+  return input.kind === 'value' ? input.value : null;
+});
+
+/** review 步驟顯示的數量:正規化後的一般記號(review 只在數量合法時可達)。 */
+const qtyText = computed(() => (parsedQty.value ? toWire(parsedQty.value) : qty.value.trim()));
+
+/**
+ * 數量 / 價格的前端格式檢查結果:有輸入但格式不符(含負數、科學記號、超過 8 位小數)才算錯;
+ * 空白與 0 只讓送出鈕 disabled,不顯示錯誤(與改文字輸入前相同)。
+ */
+const localFieldIssues = computed<Record<string, string>>(() => {
+  const issues: Record<string, string> = {};
+  if (qtyInput.value.kind === 'invalid') issues.quantity = 'tradeErrQuantity';
+  if (pxInput.value.kind === 'invalid') issues.price = 'tradeErrPrice';
+  return issues;
+});
+
+/** 預估總額 = 數量 × 價格(不含手續費,與後端 total 定義一致);任一輸入無效時為 null(顯示 `—`)。 */
+const estTotal = computed<Decimal | null>(() => {
+  const quantity = qtyInput.value.kind === 'value' ? qtyInput.value.value : null;
+  const price = pxInput.value.kind === 'value' ? pxInput.value.value : null;
+  return quantity && price ? quantity.times(price) : null;
+});
 // mock mode 專屬的展示值(D-04:API mode 不渲染,後端沒有帳戶餘額模型)。
-const cashAfter = computed(() => 124_580 - (side.value === 'BUY'
-  ? estTotal.value + fee.value
-  : -(estTotal.value - fee.value)));
+const MOCK_CASH = parseDecimal('124580');
+const cashAfter = computed<Decimal | null>(() => {
+  const total = estTotal.value;
+  const feeValue = parsedFee.value;
+  if (!total || !feeValue) return null;
+  return side.value === 'BUY' ? MOCK_CASH.minus(total.plus(feeValue)) : MOCK_CASH.plus(total.minus(feeValue));
+});
 
 const selectedMatchesQuery = computed(() =>
   !!selected.value && symQuery.value.trim().toUpperCase() === selected.value.symbol.toUpperCase()
@@ -916,7 +992,7 @@ const selectedMatchesQuery = computed(() =>
 // **預檢只是 UX,不是防護**(judgment §5)。後端 409 `TRADE_INSUFFICIENT_HOLDING`
 // 永遠是最終權威 —— 另一個分頁剛賣掉的併發情境,前端不可能知道。
 //
-// **只讀 `symbol` 與 `totalQuantity` 兩個欄位。** `HoldingDto` 其餘的成本、市值、
+// **只讀 `symbol` 與 `totalQuantity` 兩個欄位。** `Holding` 其餘的成本、市值、
 // 已實現/未實現損益與報酬率欄位**一律不得使用** —— 用它們算「賣出後的損益預估」
 // 會踩 Phase 3 D-04 與 judgment §7(前端絕不重算成本或損益)。
 //
@@ -926,7 +1002,7 @@ const selectedMatchesQuery = computed(() =>
 type HoldingsState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'loaded'; data: HoldingDto[] }
+  | { status: 'loaded'; data: Holding[] }
   | { status: 'error' };
 
 const holdingsState = ref<HoldingsState>({ status: 'idle' });
@@ -947,7 +1023,7 @@ async function loadSellableHoldings() {
 }
 
 // Q9.2 的取捨:只有 SELL 需要;一次拿全部,之後換 symbol 不必再打
-// (`HoldingDto[]` 對單一使用者是小陣列)。
+// (`Holding[]` 對單一使用者是小陣列)。
 watch(side, (value) => {
   if (value !== 'SELL') return;
   if (holdingsState.value.status !== 'idle') return;
@@ -964,12 +1040,15 @@ watch(portfolioRevision, () => {
 const holdingsLoading = computed(() => holdingsState.value.status === 'loading');
 const holdingsFailed = computed(() => holdingsState.value.status === 'error');
 
-/** `null` = 還不知道(未載入 / 失敗 / 未選標的);`0` = 確定可賣 0。 */
-const sellableQty = computed<number | null>(() => {
+/**
+ * `null` = 還不知道(未載入 / 失敗 / 未選標的);`ZERO` = 確定可賣 0。
+ * Phase 5 D-08:持股數是 domain Decimal(後端 NUMERIC(_, 8) 的字串經 service mapper 轉換),不經 JS number(T-05-34)。
+ */
+const sellableQty = computed<Decimal | null>(() => {
   const state = holdingsState.value;
   if (state.status !== 'loaded' || !selected.value) return null;
   const match = state.data.find(item => item.symbol === selected.value!.symbol);
-  return match ? match.totalQuantity : 0;
+  return match ? match.totalQuantity : ZERO;
 });
 
 /**
@@ -979,24 +1058,31 @@ const sellableQty = computed<number | null>(() => {
  */
 const sellableQtyText = computed(() => {
   const separator = props.lang === 'zh' ? ':' : ': ';
-  return `${t(props.lang, 'sellableQty')}${separator}${sellableQty.value ?? 0}`;
+  return `${t(props.lang, 'sellableQty')}${separator}${fmtQuantity(sellableQty.value ?? ZERO)}`;
 });
 
+/**
+ * 超賣檢查以 Decimal `gt` 比較(等於可賣數量不算超賣);後端 409 仍是最終權威(judgment §5)。
+ * 數量是文字輸入解析出的 Decimal(05-19),可賣數量是 domain Decimal(05-18),兩邊都不經 JS number。
+ */
 const oversellError = computed(() => {
-  if (side.value !== 'SELL' || sellableQty.value === null || qty.value <= 0) return '';
-  return qty.value > sellableQty.value ? t(props.lang, 'tradeErrOversell') : '';
+  const requested = parsedQty.value;
+  if (side.value !== 'SELL' || sellableQty.value === null || requested === null) return '';
+  return requested.gt(sellableQty.value) ? t(props.lang, 'tradeErrOversell') : '';
 });
 
 /**
  * mock mode 專屬的同步預檢(mock adapter 的 reactive 視窗)。API mode 走上方的
  * `oversellError`;後端 409 `TRADE_INSUFFICIENT_HOLDING` 在兩個 mode 都是最終權威。
+ * mock 持倉股數由 adapter 的 `heldQuantityOf` 以 Decimal 提供,元件只做 Decimal 比較。
  */
 const sellPrecheckError = computed(() => {
-  const positions = clients.value?.portfolio.live?.positions;
-  if (!positions || side.value !== 'SELL' || !selected.value || qty.value <= 0) return '';
-  const holding = positions.find(position => position.sym === selected.value!.symbol);
-  if (!holding || holding.qty <= 0) return 'No holdings available to sell';
-  if (qty.value > holding.qty) return 'Sell quantity exceeds current holding';
+  const mock = live.value;
+  const requested = parsedQty.value;
+  if (!mock || side.value !== 'SELL' || !selected.value || requested === null) return '';
+  const held = mock.heldQuantityOf(selected.value.symbol);
+  if (held === null || held.lte(ZERO)) return 'No holdings available to sell';
+  if (requested.gt(held)) return 'Sell quantity exceeds current holding';
   return '';
 });
 
@@ -1017,7 +1103,7 @@ const executedAtError = computed(() => {
   return issue ? t(props.lang, EXECUTED_AT_ISSUE_COPY[issue]) : '';
 });
 
-const feeError = computed(() => (fee.value < 0 || !Number.isFinite(fee.value) ? t(props.lang, 'tradeErrFee') : ''));
+const feeError = computed(() => (parsedFee.value === null ? t(props.lang, 'tradeErrFee') : ''));
 
 const validationError = computed(() =>
   orderError.value || sellPrecheckError.value || oversellError.value
@@ -1093,6 +1179,10 @@ function fieldErrorId(field: string): string {
 }
 
 function fieldErrorText(field: string): string {
+  // 前端格式檢查(05-19:數量 / 價格為文字輸入)與後端 fields 共用同一個節點;前端檢查優先 —— 輸入本身就不合法時,
+  // 後端上一次的 fields 已不重要(欄位一改,submitError 也會被清掉)。
+  const localKey = localFieldIssues.value[field];
+  if (localKey) return t(props.lang, localKey);
   if (!fieldErrorKeys.value.includes(field)) return '';
   // quick-261107-1j4:後端 fields.executedAt 同時涵蓋 1900-01-01 下限與股數調整時序;依**目前輸入值**
   // 歸類 —— 輸入早於下限 → 專屬文案,否則維持涵蓋「未來 / 早於最近除權日」的既有文案。
@@ -1120,12 +1210,22 @@ function invalidAttr(field: string): 'true' | undefined {
 const canSubmit = computed(() =>
   !!selected.value
   && selectedMatchesQuery.value
-  && qty.value > 0
-  && px.value > 0
+  && parsedQty.value !== null
+  && parsedPx.value !== null
   && !validationError.value
 );
 
-function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) {
+/**
+ * 價格欄的預填文字(05-19 起價格欄是文字輸入)。`latestPrice` 是 domain Decimal(05-22),以 `toWire` 輸出
+ * 一般記號(極小值不會變成 `1e-7`,預填值才不會被欄位格式檢查擋下)。缺價(null)維持既有行為:預填 `0`,
+ * 送出鈕因價格不 > 0 而停用,使用者須自行輸入成交價 —— 不猜價格。這只是顯示用的預填文字;送出前仍由
+ * parseAmountInput 解析使用者看到的字串。
+ */
+function priceInputText(price: Decimal | null): string {
+  return price === null ? '0' : toWire(price);
+}
+
+function pickAsset(asset: Asset, { close = true }: { close?: boolean } = {}) {
   orderError.value = '';
   selected.value = asset;
   symQuery.value = asset.symbol;
@@ -1135,8 +1235,10 @@ function pickAsset(asset: AssetDto, { close = true }: { close?: boolean } = {}) 
     cancelPendingSearch();
   }
   // 價格預填後端 latestPrice,但保持可編輯(D-04 連帶效果:這正是「手動記錄已成交價格」的語意)。
-  px.value = asset.latestPrice ?? 0;
-  if (qty.value === 0) qty.value = asset.assetType === 'CRYPTO' ? 0.05 : 10;
+  px.value = priceInputText(asset.latestPrice);
+  if (qtyInput.value.kind === 'empty' || (qtyInput.value.kind === 'value' && qtyInput.value.value.eq(ZERO))) {
+    qty.value = asset.assetType === 'CRYPTO' ? '0.05' : '10';
+  }
 }
 
 function clearSelection(preserveQuery = false) {
@@ -1144,8 +1246,8 @@ function clearSelection(preserveQuery = false) {
   selected.value = null;
   if (!preserveQuery) symQuery.value = '';
   symOpen.value = false;
-  qty.value = 0;
-  px.value = 0;
+  qty.value = '0';
+  px.value = '0';
 }
 
 function resetTicket() {
@@ -1153,7 +1255,7 @@ function resetTicket() {
   submitting.value = false;
   recorded.value = null;
   side.value = 'BUY';
-  fee.value = 0;
+  fee.value = '0';
   note.value = '';
   orderError.value = '';
   // 關閉並重開 ticket = 全新的意圖,key 一律重置(D-14)。
@@ -1306,12 +1408,13 @@ async function submitTrade() {
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
   try {
+    // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
     const trade = await apiClients().trading.createTrade({
       symbol: selected.value.symbol,
       type: side.value,
-      quantity: qty.value,
-      price: px.value,
-      fee: fee.value,
+      quantity: parsedQty.value!,
+      price: parsedPx.value!,
+      fee: parsedFee.value!,
       note: note.value ? note.value : null,
       // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       executedAt: toLocalIso(new Date(executedAt.value)),
@@ -1326,7 +1429,7 @@ async function submitTrade() {
     currentKey.value = null;
     dirtySinceSubmit.value = false;
     step.value = 'result';
-    emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${trade.quantity} ${trade.symbol} @ ${fmtNum(trade.price)}`);
+    emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
     await nextTick();
     resultTitle.value?.focus();
   } catch (error) {

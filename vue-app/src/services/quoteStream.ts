@@ -2,6 +2,7 @@ import { readonly, ref, shallowRef, type Ref } from 'vue';
 import { CRYPTO, SYMBOLS } from '../data';
 import { ApiClientError, apiRequest } from './apiClient';
 import type { RuntimeDataMode } from './apiTypes';
+import { numberToWire, parseDecimal, type Decimal } from './decimal';
 
 /**
  * 即時報價 WS client(WATCH-04;D-21、D-23、D-24)。
@@ -16,7 +17,8 @@ export type QuoteStreamStatus = 'idle' | 'connecting' | 'live' | 'degraded' | 'r
 
 export interface LiveTick {
   symbol: string;
-  price: number;
+  /** 成交價(Phase 5 D-08:Decimal;wire 為字串,只在 `parseTickData` 轉換) */
+  price: Decimal;
   time: string;
   receivedAt: number;
 }
@@ -102,14 +104,27 @@ function acceptableSymbols(symbols: readonly string[]): string[] {
   return [...new Set(symbols)].filter(symbol => CHANNEL_PATTERN.test(channelOf(symbol)));
 }
 
-/** 單一轉換點:TICK 的 price / volume 是字串(WsBroadcastConsumer `toPlainString()`),只在這裡轉數字。 */
+/**
+ * TICK 價格的唯一轉換點(Phase 5 D-08):後端 `WsBroadcastConsumer` 以 `BigDecimal.toPlainString()`
+ * 送出字串價格,這裡以 `parseDecimal` 轉成 Decimal,之後全程不經 JS number。
+ * 只接受字串;JSON number(會先在 JSON.parse 失真)、空字串、無法解析的字串都視為無效 tick 丟棄。
+ */
+function parseTickPrice(value: unknown): Decimal | null {
+  if (typeof value !== 'string' || value === '') return null;
+  try {
+    return parseDecimal(value);
+  } catch {
+    return null;
+  }
+}
+
 function parseTickData(channel: unknown, data: unknown, receivedAt: number): LiveTick | null {
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;
   const symbol = record.symbol;
   if (typeof symbol !== 'string' || channel !== channelOf(symbol)) return null;
-  const price = typeof record.price === 'string' || typeof record.price === 'number' ? Number(record.price) : NaN;
-  if (!Number.isFinite(price)) return null;
+  const price = parseTickPrice(record.price);
+  if (price === null) return null;
   // volume 是單筆 tick 量,不是當日累計(P-W5)——刻意不帶進 LiveTick。
   const time = typeof record.time === 'string' ? record.time : '';
   return { symbol, price, time, receivedAt };
@@ -597,7 +612,8 @@ export function createMockQuoteStream(deps: QuoteStreamDeps = {}): QuoteStream {
       if (previous === undefined) return;
       const price = Math.round(previous * (1 + (random() * 2 - 1) * MOCK_STEP_RATIO) * 10000) / 10000;
       walk.set(symbol, price);
-      next.set(symbol, { symbol, price, time: new Date(at).toISOString(), receivedAt: at });
+      // random walk 是 mock-only number 資料;產出 tick 時才轉成 Decimal(與 API mode 的 LiveTick 同型)。
+      next.set(symbol, { symbol, price: parseDecimal(numberToWire(price)), time: new Date(at).toISOString(), receivedAt: at });
       changed = true;
     });
     if (!changed) return;
