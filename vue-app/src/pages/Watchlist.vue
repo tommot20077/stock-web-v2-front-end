@@ -376,7 +376,7 @@ function watchlistApi() {
 function toApiError(error: unknown): ApiClientError {
   return error instanceof ApiClientError
     ? error
-    : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+    : new ApiClientError({ status: 0, code: 'UNKNOWN_ERROR', message: 'Unexpected error' });
 }
 
 /** 作用中清單不存在(首次載入、被刪除)→ 改為第一個清單。 */
@@ -456,15 +456,17 @@ const ERROR_COPY: Record<string, string> = {
   ASSET_NOT_FOUND: 'watchlistErrAsset',
   AUTH_FORBIDDEN: 'watchlistErrForbidden',
   AUTH_CSRF_TOKEN_INVALID: 'watchlistErrCsrf',
-  // 前端合成(`apiClient` 拿不到 CSRF cookie / 網路失敗),後端不會送。
+  // 前端合成(`apiClient` 拿不到 CSRF cookie),後端不會送。
   AUTH_CSRF_TOKEN_MISSING: 'watchlistErrCsrf',
+  // 網路錯誤碼由 apiClient.transportFetch 合成(D-26),後端不會送。
   NETWORK_ERROR: 'watchlistErrNetwork',
 };
 
 function describeError(error: unknown): OpError {
+  // 非 ApiClientError 只可能是 mapper / 程式錯誤,不是網路問題(D-26 / FE-WR-01)。
   return error instanceof ApiClientError
     ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
-    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+    : { code: 'UNKNOWN_ERROR', traceId: null, fields: null, status: 0 };
 }
 
 function errorCopyKey(error: OpError): string {
