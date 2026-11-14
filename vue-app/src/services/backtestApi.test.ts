@@ -7,6 +7,7 @@ import {
   toBacktestRunRecord,
 } from './backtestApi';
 import type { BacktestResultDto, BacktestRunDto, BacktestRunInput, BacktestRunRequest } from './apiTypes';
+import { ApiClientError } from './apiClient';
 import { isDecimal, parseDecimal, toWire } from './decimal';
 
 // domain 輸入(Decimal 初始資金)與其 wire 投影(字串,Phase 5 D-05 / D-08)。
@@ -320,12 +321,37 @@ describe('backtest wire → domain mapper(05-24 / D-05 / D-08)', () => {
     }
   });
 
+  // 05-28 / FE-WR-03:mock 與後端 CreateBacktestRunRequest(@DecimalMax 1e12、@Digits fraction 6)同一上限,
+  // 回同形的 Bean Validation 400(VALIDATION_FAILED + error.fields.initialCapital)。
+  it.each(['1000000000000.5', '0.0000001'])(
+    'mock createRun:initialCapital %s 超過上限 / 6 位小數 → VALIDATION_FAILED 400,不建立 run',
+    async (capital) => {
+      const api = createMockBacktestApi();
+      const before = (await api.listRuns()).items.length;
+      const rejection = api.createRun({ ...request, initialCapital: parseDecimal(capital) });
+      await expect(rejection).rejects.toBeInstanceOf(ApiClientError);
+      await expect(rejection).rejects.toMatchObject({
+        status: 400,
+        code: 'VALIDATION_FAILED',
+        fields: { initialCapital: expect.any(String) },
+      });
+      expect((await api.listRuns()).items.length).toBe(before);
+    },
+  );
+
+  it.each(['1000000000000', '0.000001'])('mock createRun:initialCapital %s(上限 / 最小刻度)可建立', async (capital) => {
+    const api = createMockBacktestApi();
+    const run = await api.createRun({ ...request, initialCapital: parseDecimal(capital) });
+    expect(toWire(run.initialCapital)).toBe(capital);
+    expect((await api.listRuns()).items.length).toBe(1);
+  });
+
   it('mock 結果為 domain Decimal;權益曲線以 Decimal 初始資金計算,不經 number 失真', async () => {
     const api = createMockBacktestApi();
-    const run = await api.createRun({ ...request, initialCapital: parseDecimal('123456789012.12345678') });
+    const run = await api.createRun({ ...request, initialCapital: parseDecimal('123456789012.123456') });
     const result = await api.getResult(run.id);
 
-    expect(toWire(run.initialCapital)).toBe('123456789012.12345678');
+    expect(toWire(run.initialCapital)).toBe('123456789012.123456');
     expect(run.progress && toWire(run.progress)).toBe('1');
     expect(isDecimal(result.kpis.totalReturnPct)).toBe(true);
     expect(typeof result.kpis.tradeCount).toBe('number');
@@ -333,9 +359,10 @@ describe('backtest wire → domain mapper(05-24 / D-05 / D-08)', () => {
     const totalReturnPct = result.kpis.totalReturnPct;
     // 第一點係數 = 1 + totalReturnPct / 1200(totalReturnPct 為整數,mock 公式);以 Decimal 重算對照。
     const factor = parseDecimal('1').plus(totalReturnPct.div(parseDecimal('1200')));
-    const expected = parseDecimal('123456789012.12345678').times(factor.round(15)).round(8);
+    const expected = parseDecimal('123456789012.123456').times(factor.round(15)).round(8);
     expect(result.equityCurve[0].strategy.minus(expected).abs().lt(parseDecimal('0.001'))).toBe(true);
-    // 精度:結果仍保有 8 位小數,沒被 number(約 15–17 位有效數字)截斷成整數尾巴
+    // 初始資金最多 6 位小數(05-28,與後端同上限)。
+    // 精度:結果仍保有小數位,沒被 number(約 15–17 位有效數字)截斷成整數尾巴
     expect(toWire(result.equityCurve[0].strategy).split('.')[1]?.length ?? 0).toBeGreaterThan(2);
   });
 });

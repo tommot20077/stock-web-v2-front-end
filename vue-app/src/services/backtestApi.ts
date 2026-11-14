@@ -241,12 +241,23 @@ export function createMockBacktestApi(): BacktestApi {
     async createRun(input) {
       // mock 先產出與 http 相同的 wire request,之後的驗證與儲存都只看 wire 形狀。
       const request = toBacktestRunRequest(input);
-      if (parseDecimal(request.initialCapital).lte(ZERO)) {
+      const capital = parseDecimal(request.initialCapital);
+      if (capital.lte(ZERO)) {
         throw new ApiClientError({
           status: 400,
           code: 'BACKTEST_INVALID_INITIAL_CAPITAL',
           message: 'Initial capital must be greater than 0',
           field: 'initialCapital',
+        });
+      }
+      // 05-28 / FE-WR-03:與後端 Bean Validation(@DecimalMax / @Digits)同一上限與位數,回同形 400
+      // (VALIDATION_FAILED + error.fields.initialCapital);fields value 是靜態字串,不回射輸入。
+      if (capital.gt(BACKTEST_CAPITAL_MAX) || !capital.round(BACKTEST_CAPITAL_MAX_DECIMALS).eq(capital)) {
+        throw new ApiClientError({
+          status: 400,
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed',
+          fields: { initialCapital: 'out of range' },
         });
       }
       if (request.strategyId === 'custom') {
