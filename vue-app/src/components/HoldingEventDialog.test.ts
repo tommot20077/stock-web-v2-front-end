@@ -859,6 +859,72 @@ describe('HoldingEventDialog — Idempotency-Key 生命週期(D-13)', () => {
   });
 });
 
+// 05-30 G-05-7 / FE-WR-01:D-26 後網路錯誤碼只由 apiClient.transportFetch 產生。
+// 「伺服器已回應但內容不合契約」(05-29 apiRequestMapped → INVALID_API_RESPONSE)與程式例外都是「結果不確定」,
+// 必須落到 holdingEventErrUnknown(請先確認),不得顯示「直接再送出一次不會重複」的網路文案。
+describe('HoldingEventDialog — 回應不合契約與非 ApiClientError(05-30 FE-WR-01)', () => {
+  /** 201 成功信封,但 amount 為 JSON number(違反 D-08 十進位字串契約)。 */
+  function malformedDividend201(): Response {
+    return jsonResponse(
+      { success: true, data: { ...RECORDED_DIVIDEND, amount: 120 }, error: null, meta: { traceId: 'trace-dividend-201' } },
+      201,
+    );
+  }
+
+  it('股利 201 但 amount 為 JSON number → holdingEventErrUnknown + INVALID_API_RESPONSE + traceId;重送沿用同一把 key', async () => {
+    stubUuids();
+    const { fetchImpl, onRecorded } = await mountDialog({
+      fetchImpl: holdingEventFetch({ dividends: () => malformedDividend201() }),
+    });
+    await fillValidDividend();
+
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrUnknown'));
+    expect(errorText()).not.toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
+    expect(requireTestid('holding-event-error-trace-id').textContent).toContain('trace-dividend-201');
+    expect(onRecorded).not.toHaveBeenCalled();
+
+    await submit();
+    expect(keysOf(dividendCalls(fetchImpl))).toEqual(['key-1', 'key-1']);
+  });
+
+  it('股數調整 201 但缺 quantityDelta → holdingEventErrUnknown + INVALID_API_RESPONSE + traceId', async () => {
+    const { quantityDelta: _omitted, ...missingDelta } = adjustmentDto();
+    await mountDialog({
+      fetchImpl: holdingEventFetch({
+        adjustments: () => jsonResponse(
+          { success: true, data: missingDelta, error: null, meta: { traceId: 'trace-adjust-201' } },
+          201,
+        ),
+      }),
+    });
+    await click(requireTestid('holding-event-mode-stock-dividend'));
+    await typeInto('holding-event-shares', '5');
+
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrUnknown'));
+    expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
+    expect(requireTestid('holding-event-error-trace-id').textContent).toContain('trace-adjust-201');
+  });
+
+  it('holdingEvents.createDividend 以非 ApiClientError reject → UNKNOWN_ERROR + holdingEventErrUnknown,無 traceId', async () => {
+    await mountDialog();
+    vi.spyOn(getRuntimeApiClients().holdingEvents, 'createDividend').mockRejectedValue(new TypeError('mapper exploded'));
+    await fillValidDividend();
+
+    await submit();
+
+    expect(errorText()).toContain(t('zh', 'holdingEventErrUnknown'));
+    expect(errorText()).not.toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('holding-event-error-code').textContent?.trim()).toBe('UNKNOWN_ERROR');
+    expect(testid('holding-event-error-trace-id')).toBeNull();
+    expect(bodyText()).not.toContain('mapper exploded');
+  });
+});
+
 describe('HoldingEventDialog — 錯誤分派(UI-SPEC §錯誤狀態)', () => {
   it('mapsEachBottomErrorCodeToItsCopy', async () => {
     const cases: Array<[string, number, string]> = [

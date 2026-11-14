@@ -648,7 +648,7 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   // 前端合成(`apiClient` 的 `ensureCsrfToken`:bootstrap 後仍拿不到 cookie),後端不會送。
   AUTH_CSRF_TOKEN_MISSING: 'cashErrCsrf',
   AUTH_FORBIDDEN: 'cashErrForbidden',
-  // 前端合成的診斷碼:後端不會回這個值,所以與「後端回了未知 code」可明確區分。
+  // apiClient.transportFetch 合成(D-26),後端不會送;只有真的連線失敗才會是這個 code。
   NETWORK_ERROR: 'cashErrNetwork',
   CASH_ENTRY_ALREADY_REVERSED: 'cashErrAlreadyReversed',
   CASH_ENTRY_NOT_REVERSIBLE: 'cashErrNotReversible',
@@ -658,6 +658,11 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
 /** 沖銷三衝突:此原紀錄不會再能被沖銷,丟棄 key、鎖定送出、通知開啟者重讀列表。 */
 const REVERSAL_CONFLICT_CODES = ['CASH_ENTRY_ALREADY_REVERSED', 'CASH_ENTRY_NOT_REVERSIBLE', 'CASH_ENTRY_NOT_FOUND'];
 
+/**
+ * 未列在 `SUBMIT_ERROR_COPY` 的 code 一律落到 `cashErrUnknown`(「可能寫入也可能沒有,請先確認」)。
+ * `INVALID_API_RESPONSE`(05-29:伺服器已回應但內容不合契約)與 `UNKNOWN_ERROR` 刻意不另立對照:
+ * 結果確實不確定,既有 Unknown 文案已正確描述該情境(G-05-7 / FE-WR-01)。
+ */
 const submitErrorMessage = computed(() => {
   const error = shownError.value;
   if (!error) return '';
@@ -678,7 +683,9 @@ const submitErrorMessage = computed(() => {
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
     ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
-    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+    // D-26 後只有 apiClient.transportFetch 會產生網路錯誤碼;非 ApiClientError 只可能是
+    // mapper / 程式錯誤(G-05-7 / FE-WR-01),標成 UNKNOWN_ERROR → cashErrUnknown,不得說成網路問題。
+    : { code: 'UNKNOWN_ERROR', traceId: null, fields: null, status: 0 };
 
   // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
   // key 保留:登入回來後重送的是同一個意圖。

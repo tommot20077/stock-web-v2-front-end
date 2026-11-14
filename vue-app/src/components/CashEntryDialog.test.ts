@@ -6,7 +6,7 @@ import cashEntryDialogSource from './CashEntryDialog.vue?raw';
 import { t, tf } from '../i18n';
 import { fmtMoney, fmtMoneyAmount } from '../moneyFormat';
 import { toLocalInputValue } from '../services/localTime';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   lastCreatedCashEntryId,
@@ -652,6 +652,53 @@ describe('CashEntryDialog — 錯誤分派(UI-SPEC §Copywriting 錯誤狀態)',
 
     expect(onRefreshFailed, '401 由 apiClient 升級成全域 session 狀態').toHaveBeenCalled();
     expect(testid('cash-error'), '401 不得在對話框內顯示').toBeNull();
+  });
+});
+
+// 05-30 G-05-7 / FE-WR-01:D-26 後網路錯誤碼只由 apiClient.transportFetch 產生。
+// 「伺服器已回應但內容不合契約」(05-29 apiRequestMapped → INVALID_API_RESPONSE)與程式例外都是「結果不確定」,
+// 必須落到 cashErrUnknown(請先確認),不得顯示「直接再送出一次不會重複」的網路文案。
+describe('CashEntryDialog — 回應不合契約與非 ApiClientError(05-30 FE-WR-01)', () => {
+  /** 201 成功信封,但 amount 為 JSON number(違反 D-05 十進位字串契約)。 */
+  function malformed201(): Response {
+    return jsonResponse(
+      { success: true, data: { ...RECORDED_ENTRY, amount: 50000 }, error: null, meta: { traceId: 'trace-cash-201' } },
+      201,
+    );
+  }
+
+  it('201 但 amount 為 JSON number → cashErrUnknown + INVALID_API_RESPONSE + traceId,不顯示網路文案;重送沿用同一把 key', async () => {
+    stubUuids();
+    const { fetchImpl, onRecorded } = await mountDialog({ fetchImpl: cashFetch({ entries: () => malformed201() }) });
+    await fillValid();
+
+    await submit();
+
+    const error = requireTestid('cash-error');
+    expect(error.textContent).toContain(t('zh', 'cashErrUnknown'));
+    expect(error.textContent).not.toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('cash-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
+    expect(requireTestid('cash-error-trace-id').textContent).toContain('trace-cash-201');
+    expect(onRecorded).not.toHaveBeenCalled();
+
+    // 可能已寫入:同一把 key 重送命中後端冪等,不會重複記錄。
+    await submit();
+    expect(idempotencyKeys(fetchImpl)).toEqual(['key-1', 'key-1']);
+  });
+
+  it('cash.createEntry 以非 ApiClientError reject → UNKNOWN_ERROR + cashErrUnknown,無 traceId', async () => {
+    await mountDialog();
+    vi.spyOn(getRuntimeApiClients().cash, 'createEntry').mockRejectedValue(new TypeError('mapper exploded'));
+    await fillValid();
+
+    await submit();
+
+    const error = requireTestid('cash-error');
+    expect(error.textContent).toContain(t('zh', 'cashErrUnknown'));
+    expect(error.textContent).not.toContain(t('zh', 'cashErrNetwork'));
+    expect(requireTestid('cash-error-code').textContent?.trim()).toBe('UNKNOWN_ERROR');
+    expect(testid('cash-error-trace-id')).toBeNull();
+    expect(bodyText()).not.toContain('mapper exploded');
   });
 });
 
