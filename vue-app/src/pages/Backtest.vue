@@ -138,7 +138,7 @@
         <div class="ttl">{{ lang === 'zh' ? '回撤曲線' : 'Drawdown' }}</div>
         <svg viewBox="0 0 540 200" class="dd-svg">
           <line v-for="i in 4" :key="i" x1="30" x2="530" :y1="20 + i * 38" :y2="20 + i * 38" stroke="var(--border)" stroke-dasharray="2 3" />
-          <path :d="ddPath" fill="rgba(220,38,38,0.18)" stroke="var(--dn)" stroke-width="1.3" />
+          <path :d="ddPath" fill="var(--dn)" fill-opacity="0.18" stroke="var(--dn)" stroke-width="1.3" />
         </svg>
         <div class="dd-stats">
           <div><span class="ml">{{ lang === 'zh' ? '最大' : 'Max' }}</span><span class="num dn">-{{ result.maxDD.toFixed(1) }}%</span></div>
@@ -374,12 +374,14 @@ const heatmap = computed(() => {
   });
 });
 
+// 05-28 / FE-WR-04:漲跌底色走 var(--up) / var(--dn),紅漲綠跌偏好下會跟著對調;比例沿用原 alpha 曲線。
 function heatColor(c: number | null) {
   if (c == null) return 'transparent';
   const a = Math.min(Math.abs(c) / 8, 1);
+  const pct = Math.round((0.15 + a * 0.5) * 100);
   return c >= 0
-    ? `rgba(22, 163, 74, ${0.15 + a * 0.5})`
-    : `rgba(220, 38, 38, ${0.15 + a * 0.5})`;
+    ? `color-mix(in oklch, var(--up) ${pct}%, transparent)`
+    : `color-mix(in oklch, var(--dn) ${pct}%, transparent)`;
 }
 
 const stratPoints = computed(() => {

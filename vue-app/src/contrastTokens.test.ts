@@ -678,3 +678,98 @@ describe('漲跌底色隨紅漲綠跌對調(D-02c)', () => {
     expect(vueRules.filter(r => /\.(pill|kind-pill)\.div/.test(r.selector)).every(r => !UPDOWN_SELECTOR.test(r.selector))).toBe(true);
   });
 });
+
+/*
+ * 05-28 / FE-WR-04 / D-28 / D-02c:漲跌色寫死成 rgba 字面時,紅漲綠跌偏好下不會對調(回撤填色、熱力圖、
+ * harvest 鈕都曾漏網)。上方 D-02c 守門只看白名單選擇器的 <style> 規則,看不到 template 屬性、script 字串
+ * 與未列選擇器,所以這裡逐檔逐行掃描完整 .vue 原始碼(template + script + style,不剝註解)。
+ * 漲跌 rgba 三組 RGB:(22,163,74) 綠、(220,38,38) 紅、(239,68,68) 深色紅。
+ */
+describe('漲跌色寫死字面全源碼守門(FE-WR-04 / D-28)', () => {
+  const UPDOWN_RGBA = /rgba\(\s*(22\s*,\s*163\s*,\s*74|220\s*,\s*38\s*,\s*38|239\s*,\s*68\s*,\s*68)\b/;
+
+  /** 具名白名單:以去除前導空白後的行首比對;每筆都必須至少命中一行(不得過期)。 */
+  const UPDOWN_RGBA_ALLOW: readonly { file: string; linePrefix: string; reason: string }[] = [
+    { file: './pages/Notifications.vue', linePrefix: '.dot-c.alert', reason: '通知類別色,非漲跌 / 錯誤語意' },
+    { file: './pages/Notifications.vue', linePrefix: '.ic.alert', reason: '同上' },
+  ];
+
+  function isAllowed(file: string, line: string): boolean {
+    const trimmed = line.trimStart();
+    return UPDOWN_RGBA_ALLOW.some(a => a.file === file && trimmed.startsWith(a.linePrefix));
+  }
+
+  function updownRgbaOffenders(file: string, source: string): string[] {
+    return source
+      .split('\n')
+      .map((line, i) => ({ line, no: i + 1 }))
+      .filter(({ line }) => UPDOWN_RGBA.test(line) && !isAllowed(file, line))
+      .map(({ line, no }) => `${file}:${no}: ${line.trim()}`);
+  }
+
+  it('守門自我驗證:template 屬性 / script 模板字串 / style 字面都會回報,token 寫法不誤報', () => {
+    const fake = [
+      '<template><path :d="p" fill="rgba(220,38,38,0.18)" /></template>',
+      '<script setup lang="ts">const c = `rgba(22, 163, 74, ${a})`;</script>',
+      '<style>.x { background: rgba(239,68,68,0.1) }</style>',
+      '<style>.y { background: rgba( 239 , 68 , 68 , 0.1) }</style>',
+    ].join('\n');
+    expect(updownRgbaOffenders('fake.vue', fake)).toHaveLength(4);
+
+    const clean = [
+      '<template><path :d="p" fill="var(--dn)" fill-opacity="0.18" /></template>',
+      '<style>.x { background: color-mix(in oklch, var(--dn) 18%, transparent); box-shadow: 0 0 0 rgba(0,0,0,0.42) }</style>',
+    ].join('\n');
+    expect(updownRgbaOffenders('fake.vue', clean)).toEqual([]);
+  });
+
+  it('掃描範圍非空:涵蓋 Backtest / Analytics / Notifications', () => {
+    for (const file of ['./pages/Backtest.vue', './pages/Analytics.vue', './pages/Notifications.vue']) {
+      expect(vueSources[file], file).toBeTypeOf('string');
+    }
+  });
+
+  it('所有 .vue 完整原始碼不寫死漲跌 rgba 字面(白名單除外)', () => {
+    const offenders = Object.entries(vueSources).flatMap(([file, source]) => updownRgbaOffenders(file, source));
+    expect(offenders).toEqual([]);
+  });
+
+  it('UPDOWN_RGBA_ALLOW 每一筆都仍命中至少一行(白名單不過期)', () => {
+    const stale = UPDOWN_RGBA_ALLOW.filter(a => {
+      const source = vueSources[a.file] ?? '';
+      return !source.split('\n').some(line => UPDOWN_RGBA.test(line) && line.trimStart().startsWith(a.linePrefix));
+    }).map(a => `${a.file} ${a.linePrefix}`);
+    expect(stale).toEqual([]);
+  });
+
+  it('Backtest 回撤 <path> 以 fill="var(--dn)" + fill-opacity 填色', () => {
+    const template = templateAndScriptOf(vueSources['./pages/Backtest.vue']);
+    const ddLine = template.split('\n').find(line => line.includes(':d="ddPath"'));
+    expect(ddLine, '回撤 <path :d="ddPath">').toBeTruthy();
+    expect(ddLine).toContain('fill="var(--dn)"');
+    expect(ddLine).toContain('fill-opacity');
+  });
+
+  it('Backtest heatColor 以 color-mix 引用 var(--up) / var(--dn)', () => {
+    const script = templateAndScriptOf(vueSources['./pages/Backtest.vue']);
+    const start = script.indexOf('function heatColor');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = script.indexOf('\n}', start);
+    const body = script.slice(start, end);
+    expect(body).toContain('color-mix');
+    expect(body).toContain('var(--up)');
+    expect(body).toContain('var(--dn)');
+  });
+
+  it('Analytics .harvest-btn / :hover 的 background 與 border 引用 var(--dn) 且不含 rgba', () => {
+    const rule = (selector: string) => vueRules.find(r => r.file === './pages/Analytics.vue' && r.selector === selector);
+    const btn = rule('.harvest-btn');
+    const hover = rule('.harvest-btn:hover');
+    expect(btn).toBeTruthy();
+    expect(hover).toBeTruthy();
+    for (const value of [backgroundOf(btn!), btn!.decls.border, backgroundOf(hover!)]) {
+      expect(value).toMatch(/var\(--dn\)/);
+      expect(value).not.toMatch(/rgba\(/);
+    }
+  });
+});
