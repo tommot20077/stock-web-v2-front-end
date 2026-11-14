@@ -1412,9 +1412,14 @@ async function submitTrade() {
   }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
+  // try **只包 createTrade**(G-05-7 / FE-WR-01):handleSubmitFailure 的 tradeErrUnknown 說「交易未記錄」,
+  // 只能用在 createTrade 本身失敗(API mode 下非 ApiClientError 只會來自送出前的程式錯誤)。
+  // 成功之後的 recorded / notifyTradeCreated / toast / focus 若丟錯,交易其實已記錄,
+  // 不得落進這裡被說成未記錄 —— 讓它走 Vue 的錯誤處理,而不是 ticket 的錯誤區。
+  let trade: TradeRecord;
   try {
     // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
-    const trade = await apiClients().trading.createTrade({
+    trade = await apiClients().trading.createTrade({
       symbol: selected.value.symbol,
       type: side.value,
       quantity: parsedQty.value!,
@@ -1424,24 +1429,25 @@ async function submitTrade() {
       // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
       executedAt: toLocalIso(new Date(executedAt.value)),
     }, idempotencyKey);
-    recorded.value = trade;
-    // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
-    // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
-    // 而 notifyTradeCreated 在 replay 時**也要呼叫** —— 重讀同一份資料無害,
-    // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新(§6 連帶契約)。
-    notifyTradeCreated(trade);
-    // 下一筆是新意圖,key 不得沿用。
-    currentKey.value = null;
-    dirtySinceSubmit.value = false;
-    step.value = 'result';
-    emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
-    await nextTick();
-    resultTitle.value?.focus();
   } catch (error) {
     handleSubmitFailure(error);
+    return;
   } finally {
     submitting.value = false;
   }
+  recorded.value = trade;
+  // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
+  // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
+  // 而 notifyTradeCreated 在 replay 時**也要呼叫** —— 重讀同一份資料無害,
+  // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新(§6 連帶契約)。
+  notifyTradeCreated(trade);
+  // 下一筆是新意圖,key 不得沿用。
+  currentKey.value = null;
+  dirtySinceSubmit.value = false;
+  step.value = 'result';
+  emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
+  await nextTick();
+  resultTitle.value?.focus();
 }
 
 /**
@@ -1461,8 +1467,9 @@ async function submitTrade() {
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
     ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
-    // 前端合成的診斷碼:後端不會回這個值,所以它與「後端回了未知 code」可明確區分。
-    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+    // D-26 後只有 apiClient.transportFetch 會產生網路錯誤碼;非 ApiClientError 只可能是
+    // 送出前的程式錯誤(G-05-7 / FE-WR-01),標成 UNKNOWN_ERROR → tradeErrUnknown,不得說成網路問題。
+    : { code: 'UNKNOWN_ERROR', traceId: null, fields: null, status: 0 };
 
   // 401 / refresh 失敗**不在 ticket 顯示**,走全域 SessionBanner
   // (Phase 3 D-13 / Phase 2 D-14;`apiClient.ts:315,323` 已負責升級)。

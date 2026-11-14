@@ -414,6 +414,32 @@ describe('tradingApi — 金額字串契約(05-19 / D-05 / D-08)', () => {
     });
   });
 
+  it('201 但 quantity 為 JSON number → INVALID_API_RESPONSE(status 201、帶 traceId),而非 TypeError(G-05-7)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...TRADE_DTO, quantity: 3 }, 'trace-201'), 201)));
+
+    const error = await createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1').catch((caught: unknown) => caught);
+
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-201',
+    });
+  });
+
+  it('201 但缺 price → INVALID_API_RESPONSE(status 201、帶 traceId)(G-05-7)', async () => {
+    const { price: _price, ...withoutPrice } = TRADE_DTO;
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(withoutPrice, 'trace-201-missing'), 201)));
+
+    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-201-missing',
+    });
+  });
+
   it('mock createTrade 回傳的 TradeRecord 保留輸入的完整精度', async () => {
     const trade = await createMockTradingApi().createTrade(
       { ...PRECISE, quantity: parseDecimal('0.5'), price: parseDecimal('218.12345678') },

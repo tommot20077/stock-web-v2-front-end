@@ -190,6 +190,7 @@ const PHASE4_TRADE_KEYS = [
   'tradeErrForbidden',
   'tradeErrCsrf',
   'tradeErrNetwork',
+  'tradeErrInvalidResponse',
   'tradeErrUnknown',
   // Post-trade refetch(5)
   'portfolioRefreshing',
@@ -401,7 +402,8 @@ const PHASE42_SEQUENCE_ORDER_KEYS = ['watchlistReorderSaving', 'watchlistErrOrde
 const PHASE42_LIVE_ALLOWED = (key: string): boolean => key.startsWith('liveQuote') || key === 'watchlistQuoteNote';
 
 // UI-SPEC 文案硬規則 1 的適用範圍:ticket 底部「送出之後」依 error.code 分派的錯誤。
-// `tradeErrNetwork` 是唯一「結果未知」的情境,故排除(改由硬規則 2 鎖住)。
+// `tradeErrNetwork` 是「結果未知」的情境,故排除(改由硬規則 2 鎖住)。
+// `tradeErrInvalidResponse`(G-05-7)同屬結果未知 —— 伺服器已回應、交易可能已記錄 —— 另以專屬測試鎖住。
 // 欄位級錯誤(tradeErrSymbol 等 7 個)是送出前綁在輸入框旁的提示,不是「我這筆交易怎麼了」
 // 的回答,加上「交易未記錄」既冗餘又與 UI-SPEC 逐字文案衝突,故不在此清單。
 const TRADE_SUBMIT_ERROR_KEYS = [
@@ -485,6 +487,18 @@ describe('i18n phase 4 trade copy', () => {
     // D-07 的事實與「重複」相反:什麼都沒建立。說成 duplicate 會讓使用者去刪除或回報不存在的第二筆。
     expect(I18N.zh.tradeErrKeyReused).not.toContain('重複');
     expect(I18N.en.tradeErrKeyReused.toLowerCase()).not.toContain('duplicate');
+  });
+
+  it('tells the user the trade may already be recorded when the response cannot be read (G-05-7)', () => {
+    // Yuan 2026-11-14 逐字文案。
+    expect(I18N.zh.tradeErrInvalidResponse).toBe('伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。');
+    expect(I18N.zh.tradeErrInvalidResponse).not.toContain('交易未記錄');
+    const en = I18N.en.tradeErrInvalidResponse.toLowerCase();
+    expect(en).toContain('may have been recorded');
+    expect(en).toContain('trades page');
+    expect(en).not.toContain('nothing was recorded');
+    expect(TRADE_SUBMIT_ERROR_KEYS, '結果未知,不在「必須說交易未記錄」的清單').not.toContain('tradeErrInvalidResponse');
+    expect(PHASE4_TRADE_KEYS, '必須受 forbidden term 測試涵蓋').toContain('tradeErrInvalidResponse');
   });
 
   it('promises no duplicate trade when the network outcome is unknown', () => {
