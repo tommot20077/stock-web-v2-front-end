@@ -349,7 +349,8 @@ const ccyStatusText = computed(() => {
 
 function diagnosticsOf(error: unknown): { code: string; traceId: string | null } {
   if (error instanceof ApiClientError) return { code: error.code, traceId: error.requestId };
-  return { code: 'NETWORK_ERROR', traceId: null };
+  // 網路錯誤碼只由 apiClient.transportFetch 產生(D-26);非 ApiClientError 是 mapper / 程式錯誤(G-05-7 / FE-WR-01)。
+  return { code: 'UNKNOWN_ERROR', traceId: null };
 }
 
 async function loadBaseCurrency() {

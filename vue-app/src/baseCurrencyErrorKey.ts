@@ -8,9 +8,10 @@ import { ApiClientError } from './services/apiClient';
  * 後端 message 與 fields 的 value 一律不入 DOM。
  */
 export function baseCurrencyErrorKey(error: unknown): string | null {
-  // D-26:fetch reject 已在 apiClient 的 transportFetch 正規化為 ApiClientError(NETWORK_ERROR);
-  // 非 ApiClientError 的分支保留為防禦(非 apiClient 路徑丟出的例外)。
-  if (!(error instanceof ApiClientError) || error.code === 'NETWORK_ERROR') return 'baseCurrencyErrNetwork';
+  // 網路錯誤碼只由 apiClient.transportFetch 產生(D-26);非 ApiClientError 只可能是 mapper / 程式錯誤,
+  // 文案走 Unknown(基準幣未變更),不誘導使用者當成連線問題(G-05-7 / FE-WR-01)。
+  if (!(error instanceof ApiClientError)) return 'baseCurrencyErrUnknown';
+  if (error.code === 'NETWORK_ERROR') return 'baseCurrencyErrNetwork';
   if (error.status === 401) return null;
   if (error.code === 'VALIDATION_FAILED' && error.fields && 'baseCurrency' in error.fields) {
     return 'baseCurrencyErrUnsupported';

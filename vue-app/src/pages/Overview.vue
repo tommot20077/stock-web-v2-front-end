@@ -675,9 +675,10 @@ async function selectBaseCurrency(code: string) {
     currencyPhase.value = 'idle';
     // 文案分派與 Settings 共用(baseCurrencyErrorKey);401 回 null,交給全域 SessionBanner。
     const messageKey = baseCurrencyErrorKey(error);
+    // 網路錯誤碼只由 apiClient.transportFetch 產生(D-26);非 ApiClientError 是 mapper / 程式錯誤(G-05-7 / FE-WR-01)。
     const diagnostics = error instanceof ApiClientError
       ? { code: error.code, traceId: error.requestId }
-      : { code: 'NETWORK_ERROR', traceId: null };
+      : { code: 'UNKNOWN_ERROR', traceId: null };
     currencyError.value = messageKey ? { messageKey, ...diagnostics } : null;
   }
 }

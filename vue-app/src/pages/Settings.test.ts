@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Settings from './Settings.vue';
 import { t } from '../i18n';
 import { resetMockProfileForTests } from '../services/profileApi';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import { cleanupMounted, clickButton, flushAsync, mountWithPinia } from '../testUtils';
 
 // Phase 04.1 Plan 13(PORT-09 Settings 半)。Settings「顯示」分頁的基準幣 <select> 原本是靜默 no-op
@@ -311,6 +311,20 @@ describe('Settings 基準幣的讀取狀態(API mode)', () => {
     expect(byTestId('settings-base-currency-trace-id')).toBeNull();
     expect(document.body.textContent).not.toContain(t('zh', 'authRequestId'));
   });
+
+  it('getPreferences 以非 ApiClientError reject → 診斷碼 UNKNOWN_ERROR、無 traceId(G-05-7 / FE-WR-01)', async () => {
+    vi.stubGlobal('fetch', routedFetch({ me: () => success({ baseCurrency: 'TWD' }) }));
+    vi.spyOn(getRuntimeApiClients().profile, 'getPreferences')
+      .mockRejectedValue(new TypeError('mapper exploded'));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+
+    expect(byTestId('settings-base-currency-error')?.textContent).toContain(t('zh', 'loadFailed'));
+    expect(byTestId('settings-base-currency-error-code')?.textContent).toBe('UNKNOWN_ERROR');
+    expect(byTestId('settings-base-currency-trace-id')).toBeNull();
+  });
 });
 
 describe('Settings 基準幣的儲存狀態(API mode)', () => {
@@ -419,6 +433,28 @@ describe('Settings 基準幣的儲存狀態(API mode)', () => {
       expect(byTestId('settings-base-currency-retry')).toBeNull();
     });
   }
+
+  it('updateBaseCurrency 以非 ApiClientError reject → baseCurrencyErrUnknown + UNKNOWN_ERROR,不顯示網路文案(G-05-7 / FE-WR-01)', async () => {
+    vi.stubGlobal('fetch', routedFetch({
+      me: () => success({ baseCurrency: 'TWD' }),
+      patch: () => success({ baseCurrency: 'USD' }),
+    }));
+    // D-26 後網路錯誤碼只由 apiClient.transportFetch 產生;直接在 service 層丟出的 TypeError 代表 mapper / 程式錯誤。
+    vi.spyOn(getRuntimeApiClients().profile, 'updateBaseCurrency')
+      .mockRejectedValue(new TypeError('mapper exploded'));
+
+    mountWithPinia(Settings, { lang: 'zh', theme: 'dark' });
+    await flushAsync();
+    await openDisplayTab();
+    await choose('USD');
+
+    const error = byTestId('settings-base-currency-error');
+    expect(error?.textContent).toContain(t('zh', 'baseCurrencyErrUnknown'));
+    expect(error?.textContent).not.toContain(t('zh', 'baseCurrencyErrNetwork'));
+    expect(byTestId('settings-base-currency-error-code')?.textContent).toBe('UNKNOWN_ERROR');
+    expect(ccySelect().value).toBe('TWD');
+    expect(document.body.innerHTML).not.toContain('mapper exploded');
+  });
 
   it('401:回到已儲存值,但不在這裡顯示錯誤(交給全域 SessionBanner)', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
