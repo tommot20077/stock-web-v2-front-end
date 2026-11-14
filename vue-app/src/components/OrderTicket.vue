@@ -1412,42 +1412,46 @@ async function submitTrade() {
   }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
-  // try **只包 createTrade**(G-05-7 / FE-WR-01):handleSubmitFailure 的 tradeErrUnknown 說「交易未記錄」,
+  // catch **只包 createTrade**(G-05-7 / FE-WR-01):handleSubmitFailure 的 tradeErrUnknown 說「交易未記錄」,
   // 只能用在 createTrade 本身失敗(API mode 下非 ApiClientError 只會來自送出前的程式錯誤)。
   // 成功之後的 recorded / notifyTradeCreated / toast / focus 若丟錯,交易其實已記錄,
   // 不得落進這裡被說成未記錄 —— 讓它走 Vue 的錯誤處理,而不是 ticket 的錯誤區。
-  let trade: TradeRecord;
+  // 外層 finally 仍涵蓋成功後的步驟:submitting 必須撐到 step 切到 result 且 DOM 更新完,
+  // 否則 DOM 更新前落在舊送出鈕上的連點會用新 key 再記一筆(task4 連點測試)。
   try {
-    // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
-    trade = await apiClients().trading.createTrade({
-      symbol: selected.value.symbol,
-      type: side.value,
-      quantity: parsedQty.value!,
-      price: parsedPx.value!,
-      fee: parsedFee.value!,
-      note: note.value ? note.value : null,
-      // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
-      executedAt: toLocalIso(new Date(executedAt.value)),
-    }, idempotencyKey);
-  } catch (error) {
-    handleSubmitFailure(error);
-    return;
+    let trade: TradeRecord;
+    try {
+      // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
+      trade = await apiClients().trading.createTrade({
+        symbol: selected.value.symbol,
+        type: side.value,
+        quantity: parsedQty.value!,
+        price: parsedPx.value!,
+        fee: parsedFee.value!,
+        note: note.value ? note.value : null,
+        // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
+        executedAt: toLocalIso(new Date(executedAt.value)),
+      }, idempotencyKey);
+    } catch (error) {
+      handleSubmitFailure(error);
+      return;
+    }
+    recorded.value = trade;
+    // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
+    // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
+    // 而 notifyTradeCreated 在 replay 時**也要呼叫** —— 重讀同一份資料無害,
+    // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新(§6 連帶契約)。
+    notifyTradeCreated(trade);
+    // 下一筆是新意圖,key 不得沿用。
+    currentKey.value = null;
+    dirtySinceSubmit.value = false;
+    step.value = 'result';
+    emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
+    await nextTick();
+    resultTitle.value?.focus();
   } finally {
     submitting.value = false;
   }
-  recorded.value = trade;
-  // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
-  // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
-  // 而 notifyTradeCreated 在 replay 時**也要呼叫** —— 重讀同一份資料無害,
-  // 少做會讓「網路失敗後重試成功」的使用者看不到 portfolio 更新(§6 連帶契約)。
-  notifyTradeCreated(trade);
-  // 下一筆是新意圖,key 不得沿用。
-  currentKey.value = null;
-  dirtySinceSubmit.value = false;
-  step.value = 'result';
-  emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
-  await nextTick();
-  resultTitle.value?.focus();
 }
 
 /**
