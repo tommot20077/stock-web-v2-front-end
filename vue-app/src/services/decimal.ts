@@ -83,6 +83,42 @@ export function parseDecimalInput(text: string): Decimal | null {
 }
 
 /**
+ * 一般十進位記號:純數字,可帶一個小數點(`5.` / `.5` 皆可)。不含正負號、指數記號、千分位、內部空白。
+ * 與 `CashEntryDialog.vue` 的 `AMOUNT_PATTERN` 同一文法。
+ */
+const PLAIN_DECIMAL_PATTERN = /^(\d+\.?\d*|\.\d+)$/;
+
+/** `parsePlainDecimalInput` 的業務上限:最多幾位小數、最大值(含)。 */
+export interface PlainDecimalLimits {
+  /** 最多幾位小數;以數值判斷,尾零不算(`100.0000000` 視為 `100`)。 */
+  maxDecimals: number;
+  /** 最大值(含);以字串建構的 Decimal,例如 `parseDecimal('1000000000000')`。 */
+  max: Decimal;
+}
+
+/**
+ * 表單輸入文字 → Decimal,**只接受一般十進位記號**且在上限與位數內(05-28 / FE-WR-03,T-05-41)。
+ *
+ * - 先 trim,再以 `PLAIN_DECIMAL_PATTERN` 檢查文法;不符直接回 `null`,**不會**先建構 Decimal。
+ * - 為什麼拒絕指數記號:big.js 接受 `1e999999999` 且建構很便宜,但一交給 `toFixed()`(`toWire` /
+ *   `toChartNumber`)就要產生十億位字串,分頁凍結 / OOM;`1e400` 則會變成 `Infinity` 圖表座標與 401 位 wire
+ *   字串。正負號、千分位也不是金額輸入該有的寫法。
+ * - 大於 `limits.max`、或超過 `limits.maxDecimals` 位小數 → `null`。位數以數值判斷(`round(n).eq(value)`),
+ *   尾零不算。整個判斷只用比較,不呼叫 `toFixed`。
+ * - 正值與否由呼叫端判斷(`'0'` 回 Decimal 0),錯誤文案也由呼叫端決定。
+ *
+ * **必須在 `toFixed` / `toChartNumber` / `toWire` 之前呼叫**;只有通過本函式的值才可以轉成 number 給圖表用。
+ */
+export function parsePlainDecimalInput(text: string, limits: PlainDecimalLimits): Decimal | null {
+  const trimmed = text.trim();
+  if (!PLAIN_DECIMAL_PATTERN.test(trimmed)) return null;
+  const value = D(trimmed);
+  if (value.gt(limits.max)) return null;
+  if (!value.round(limits.maxDecimals).eq(value)) return null;
+  return value;
+}
+
+/**
  * JS number → wire 字串。**只供 mock 靜態資料與測試使用**(05-24 會以源碼守門禁止 pages / components /
  * composables 引用;型別閉包交接點的單一函式例外見 05-16 規約)。
  *

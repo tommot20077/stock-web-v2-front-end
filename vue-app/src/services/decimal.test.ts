@@ -5,6 +5,7 @@ import {
   parseDecimal,
   parseDecimalInput,
   parseNullableDecimal,
+  parsePlainDecimalInput,
   ROUND_HALF_UP,
   toChartNumber,
   toWire,
@@ -82,6 +83,53 @@ describe('decimal', () => {
       expect(parseDecimalInput('   ')).toBeNull();
       expect(parseDecimalInput('abc')).toBeNull();
       expect(parseDecimalInput('1.2.3')).toBeNull();
+    });
+  });
+
+  describe('parsePlainDecimalInput(05-28 / FE-WR-03)', () => {
+    const limits = { maxDecimals: 6, max: parseDecimal('1000000000000') };
+
+    it.each([
+      [' 200000 ', '200000'],
+      ['0.000001', '0.000001'],
+      ['.5', '0.5'],
+      ['5.', '5'],
+      ['1000000000000', '1000000000000'],
+      ['123456789012.123456', '123456789012.123456'],
+      // 位數以數值判斷:尾零不算(big.js 正規化為 100)
+      ['100.0000000', '100'],
+      // 正值與否由呼叫端判斷
+      ['0', '0'],
+    ])('%j → Decimal %s', (text, wire) => {
+      const value = parsePlainDecimalInput(text, limits);
+      expect(value).not.toBeNull();
+      expect(isDecimal(value)).toBe(true);
+      expect(toWire(value!)).toBe(wire);
+    });
+
+    it.each([
+      '',
+      '   ',
+      'abc',
+      '1e5',
+      '1E5',
+      '1e400',
+      '1e999999999',
+      '+5',
+      '-5',
+      '1,000',
+      '1 000',
+      '1.2.3',
+      '0.0000001',
+      '1000000000000.000001',
+    ])('%j → null', text => {
+      expect(parsePlainDecimalInput(text, limits)).toBeNull();
+    });
+
+    it('指數記號在建構 Decimal 之前就被擋下,不會卡在 toFixed', () => {
+      const started = Date.now();
+      expect(parsePlainDecimalInput('1e999999999', limits)).toBeNull();
+      expect(Date.now() - started).toBeLessThan(100);
     });
   });
 

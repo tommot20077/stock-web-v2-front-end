@@ -199,7 +199,8 @@ import StrategyEditor from '../components/StrategyEditor.vue';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { ApiClientError } from '../services/apiClient';
 import type { BacktestPeriod, BacktestRunRecord, BacktestStrategyId } from '../services/apiTypes';
-import { parseDecimal, parseDecimalInput, toChartNumber, ZERO } from '../services/decimal';
+import { BACKTEST_CAPITAL_MAX, BACKTEST_CAPITAL_MAX_DECIMALS } from '../services/backtestApi';
+import { parseDecimal, parsePlainDecimalInput, toChartNumber, ZERO } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
@@ -216,7 +217,7 @@ const strategy = ref('ma_cross');
 const sym = ref('AAPL');
 const period = ref('3Y');
 const DEFAULT_INITIAL = '100000';
-// 初始資金以文字輸入、parseDecimalInput 解析成 Decimal 後送出(Phase 5 D-08);不經 JS number。
+// 初始資金以文字輸入、parsePlainDecimalInput 驗證並解析成 Decimal 後送出(Phase 5 D-08 / 05-28);不經 JS number。
 const initialText = ref(DEFAULT_INITIAL);
 const latestRun = ref<BacktestRunRecord | null>(null);
 const running = ref(false);
@@ -317,14 +318,22 @@ onMounted(() => { void loadHistory(); });
 
 async function run() {
   if (running.value) return;
-  const capital = parseDecimalInput(initialText.value);
+  // 05-28 / FE-WR-03:一般十進位文法 + 上限 1e12 + 6 位小數(與後端同值),必須在 toChartNumber / createRun(toWire)
+  // 之前判斷 —— 指數記號如 '1e999999999' 一進 toFixed 就會讓分頁凍結。
+  const capital = parsePlainDecimalInput(initialText.value, {
+    maxDecimals: BACKTEST_CAPITAL_MAX_DECIMALS,
+    max: BACKTEST_CAPITAL_MAX,
+  });
   if (capital === null || capital.lte(ZERO)) {
-    runError.value = props.lang === 'zh' ? '初始資金必須大於 0' : 'Initial capital must be greater than 0';
+    runError.value = props.lang === 'zh'
+      ? '初始資金須為大於 0、不超過 1,000,000,000,000、最多 6 位小數的一般數字(不接受科學記號)'
+      : 'Initial capital must be a plain number greater than 0 and at most 1,000,000,000,000, with up to 6 decimal places (no scientific notation)';
     return;
   }
 
   const nextRunNonce = runNonce.value + 1;
   // makeRunConfig 的 initial 只供圖表軸標籤(mock-only 顯示),故經 toChartNumber;請求帶的是 capital(Decimal)。
+  // 已通過上限驗證才可轉 number(capital ≤ 1e12、≤ 6 位小數,toFixed 成本有界)。
   const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, toChartNumber(capital), nextRunNonce, customSeed.value);
   runError.value = '';
   strategyError.value = '';
