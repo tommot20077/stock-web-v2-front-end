@@ -420,13 +420,14 @@ function assetsFetch(handler: (query: string) => Response | Promise<Response>) {
 async function mountApiTicket(
   fetchImpl: ReturnType<typeof vi.fn>,
   preset: MountOptions['preset'] = null,
+  lang: Lang = 'en',
 ) {
   vi.stubEnv('VITE_DATA_MODE', 'api');
   vi.stubGlobal('fetch', fetchImpl);
   resetRuntimeApiClientsForTests();
   mountWithPinia(OrderTicket, {
     open: true,
-    lang: 'en',
+    lang,
     preset,
     onClose: () => {},
     onNavigate: () => {},
@@ -1053,11 +1054,11 @@ async function clickDeep(el: HTMLElement) {
   await flushAsync(16);
 }
 
-async function mountSubmitTicket(fetchImpl: ReturnType<typeof vi.fn>) {
+async function mountSubmitTicket(fetchImpl: ReturnType<typeof vi.fn>, lang: Lang = 'en') {
   // apiClient 對 unsafe method 會注入 X-XSRF-TOKEN;cookie 不存在時會先打 bootstrap,
   // 那會讓本段的 fetch 呼叫序失去可讀性(tradingApi.test.ts:100-102 的同一手法)。
   document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
-  await mountApiTicket(fetchImpl, { sym: 'AAPL' });
+  await mountApiTicket(fetchImpl, { sym: 'AAPL' }, lang);
 }
 
 async function gotoReview() {
@@ -1591,6 +1592,35 @@ describe('OrderTicket 送出路徑 — D-16 錯誤分派(04-11)', () => {
     // 不得顯示 `null`(Phase 3 D-12 的診斷列規則)。
     expect(testid('ticket-error-trace-id'), '非 ApiClientError 沒有 traceId,整格不渲染').toBeNull();
     expect(bodyText()).not.toContain('null');
+  });
+
+  it('05-29 FE-WR-01:201 但 data 不合契約(quantity 為 JSON number)→ tradeErrInvalidResponse + traceId,重送沿用同一把 key', async () => {
+    stubUuids();
+    // 版本落差:後端回 201(交易已寫入),但金額欄位變成 JSON number —— 嚴格 mapper 會丟 TypeError。
+    const malformed = { ...RECORDED_TRADE, quantity: 3 } as unknown as TradeDto;
+    const fetchImpl = ticketFetch({
+      trades: () => jsonResponse(
+        { success: true, data: malformed, error: null, meta: { traceId: 'trace-201' } },
+        201,
+      ),
+    });
+    await mountSubmitTicket(fetchImpl, 'zh');
+    await gotoReview();
+    await submitTrade();
+
+    const box = requireTestid('ticket-error');
+    expect(box.textContent).toContain('伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。');
+    expect(box.textContent, '伺服器已回應,不得說成連不上伺服器').not.toContain(t('zh', 'tradeErrNetwork'));
+    expect(box.textContent, '交易可能已記錄,不得說成未記錄').not.toContain('交易未記錄');
+    expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
+    expect(requireTestid('ticket-error-trace-id').textContent).toContain('trace-201');
+    expect(testid('ticket-result'), '無法解讀的回應不得渲染成功畫面').toBeNull();
+
+    // key 保留:重送命中同一筆(後端冪等),不會建立重複交易。
+    await submitTrade();
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys).toHaveLength(2);
+    expect(keys[1], 'INVALID_API_RESPONSE 之後重送必須沿用同一把 key').toBe(keys[0]);
   });
 
   it('Test 41(Phase 3 D-12):成功態不得出現任何 traceId', async () => {

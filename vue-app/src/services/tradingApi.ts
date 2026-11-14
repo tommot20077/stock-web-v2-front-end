@@ -1,4 +1,4 @@
-import { ApiClientError, apiRequest } from './apiClient';
+import { ApiClientError, apiRequestMapped } from './apiClient';
 import { CRYPTO, FX, SYMBOLS } from '../data';
 import { fmtMoneyAmount } from '../moneyFormat';
 import { useMockNotificationsStore } from '../stores/mockNotifications';
@@ -151,13 +151,17 @@ export function createHttpTradingApi(basePath = '/api/v1'): TradingApi {
     // (本檔刻意不出現任何 transport 層字面,好讓「未另造轉接層」可被字面檢查機械驗證。)
     // 而 replay 用的是**同一份 options**(apiClient.ts:319),所以同一把 key 自動沿用
     // —— 這是 D-14 的免費紅利,也是安全上必要的行為(T-04-01)。
-    createTrade: async (input, idempotencyKey) => toTradeRecord(await apiRequest<TradeDto>(`${basePath}/trades`, {
+    //
+    // mapper 經 apiRequestMapped 在邊界內執行(G-05-7 / FE-WR-01):201 之後 toTradeRecord 失敗
+    // (例如金額變 JSON number)會成為帶真實 status 與 traceId 的 INVALID_API_RESPONSE,
+    // 而不是冒出 TypeError 被元件誤當成網路失敗、誘導重送迴圈。
+    createTrade: async (input, idempotencyKey) => apiRequestMapped<TradeDto, TradeRecord>(`${basePath}/trades`, toTradeRecord, {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
       // 逐欄投影而不是 `json: input`(見 toCreateTradeRequest):多餘欄位不得送到後端,
       // Decimal 也不得直接進 JSON body(big.js 的 toJSON 會走 toString,極小值會變成 `1e-8`)。
       json: toCreateTradeRequest(input),
-    })),
+    }),
   };
 }
 

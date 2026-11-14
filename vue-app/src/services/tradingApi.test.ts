@@ -402,10 +402,16 @@ describe('tradingApi — 金額字串契約(05-19 / D-05 / D-08)', () => {
     expect(toTradeRecord(TRADE_DTO).quantity.eq(parseDecimal('10'))).toBe(true);
   });
 
-  it('回應金額仍為 JS number 時在邊界丟錯(T-05-27)', async () => {
+  it('回應金額仍為 JS number 時在邊界大聲失敗(T-05-27),且以 INVALID_API_RESPONSE 呈現(G-05-7)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...TRADE_DTO, price: 218.4 }))));
 
-    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toThrow(TypeError);
+    // mapper 的 TypeError 在 apiRequestMapped 內轉成 ApiClientError,不得以 TypeError 冒到元件。
+    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 200,
+      requestId: 'trace-trade',
+    });
   });
 
   it('mock createTrade 回傳的 TradeRecord 保留輸入的完整精度', async () => {

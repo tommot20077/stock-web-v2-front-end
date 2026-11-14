@@ -363,7 +363,14 @@ async function fetchWithSessionRecovery(
   return { response: replayResponse, payload: replayPayload };
 }
 
-export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+/**
+ * `apiRequest` / `apiRequestMapped` 共用的本體:送出請求、處理 HTTP 失敗與信封不合,
+ * 成功時連同回應 status 與 `meta.traceId` 一起回傳,讓呼叫端在信封之後的失敗也能帶上真實診斷資訊。
+ */
+async function requestEnvelope<T>(
+  path: string,
+  options: ApiRequestOptions,
+): Promise<{ data: T; status: number; requestId: string | null }> {
   const { response, payload } = await fetchWithSessionRecovery(path, options);
 
   if (!response.ok) {
@@ -379,7 +386,51 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     });
   }
 
-  return payload.data;
+  return { data: payload.data, status: response.status, requestId: requestIdFrom(payload) };
+}
+
+export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  return (await requestEnvelope<T>(path, options)).data;
+}
+
+/**
+ * 帶 wire → domain mapper 的請求(G-05-7 / FE-WR-01,Yuan 2026-11-14)。
+ *
+ * <p><strong>為什麼需要</strong>:D-26 之後 `NETWORK_ERROR` 只由 `transportFetch` 產生,
+ * 非 `ApiClientError` 的例外不可能是網路失敗。但寫入 adapter 的嚴格 mapper(`parseDecimal` 等)
+ * 若在 `apiRequest` 之外執行,201 之後的契約不符(版本落差下金額變 JSON number、缺欄位)
+ * 會以 `TypeError` 冒到元件,被當成「連不上伺服器、可直接重送」—— 保留 key 重送又拿回同一個 201、
+ * 同樣失敗,使用者卡在重送迴圈,而資料其實已寫入。這裡在 transport 邊界(鐵律 1)把它轉成
+ * `INVALID_API_RESPONSE`,帶真實回應 status 與 `meta.traceId`,讓 UI 能如實說「伺服器已回應、結果待確認」。</p>
+ *
+ * <p><strong>只包 mapper,不包請求本身</strong>:HTTP 失敗、信封不合、transport 失敗、401 refresh
+ * 全部沿用 `apiRequest` 的既有錯誤碼,mapper 只在拿到合法成功信封後才執行。
+ * mapper 自己丟的 `ApiClientError` 原樣上拋;其他例外一律換成靜態訊息,
+ * 不夾帶 mapper 的 message 或回應內容(T-05-44)。</p>
+ *
+ * @param path 同源相對路徑
+ * @param map wire DTO → domain 的嚴格轉換;契約不符時應丟例外
+ * @param options 與 `apiRequest` 相同(401 replay 沿用同一份 options,`Idempotency-Key` 隨之保留)
+ * @returns mapper 的回傳值
+ * @throws ApiClientError 請求失敗時為既有錯誤碼;mapper 失敗時為 `INVALID_API_RESPONSE`
+ */
+export async function apiRequestMapped<W, D>(
+  path: string,
+  map: (wire: W) => D,
+  options: ApiRequestOptions = {},
+): Promise<D> {
+  const { data, status, requestId } = await requestEnvelope<W>(path, options);
+  try {
+    return map(data);
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new ApiClientError({
+      status,
+      code: 'INVALID_API_RESPONSE',
+      message: 'Response data did not match the contract',
+      requestId,
+    });
+  }
 }
 
 /**

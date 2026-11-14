@@ -142,8 +142,9 @@ export const I18N: Record<Lang, Record<string, string>> = {
     costBasis: '總成本',
     // ── Phase 4:手動記錄交易(權威來源 04-UI-SPEC.md §Copywriting Contract)──
     // 文案四條硬規則:
-    // 1. 除 tradeErrNetwork 外,每一條「送出之後」的錯誤都必須明說「交易未記錄」。
-    // 2. tradeErrNetwork 是唯一「結果未知」的情境,必須明講「重試不會建立重複交易」。
+    // 1. 除 tradeErrNetwork 與 tradeErrInvalidResponse 外,每一條「送出之後」的錯誤都必須明說「交易未記錄」。
+    // 2. 結果未知的只有這兩條:tradeErrNetwork(沒拿到回應)必須明講「重試不會建立重複交易」;
+    //    tradeErrInvalidResponse(伺服器已回應但內容不合契約,G-05-7)必須引導先到交易頁確認。
     // 3. tradeErrKeyReused 不得說「重複的請求」—— 事實相反,什麼都沒建立。
     // 4. 任何文案不得回射 idempotency key、後端 error.message、或 error.fields 的英文 value。
     // 複用既有 key,不新增同義字:loading / loadFailed / authRetry / authRequestId /
@@ -192,6 +193,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrForbidden: '這個帳號沒有記錄交易的權限，交易未記錄。',
     tradeErrCsrf: '安全驗證失敗，交易未記錄。請重新整理頁面後再試。',
     tradeErrNetwork: '無法連線到伺服器，這筆交易可能尚未記錄。直接再送出一次不會建立重複交易。',
+    tradeErrInvalidResponse: '伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。',
     tradeErrUnknown: '發生未預期的錯誤，交易未記錄。',
     portfolioRefreshing: '更新中…',
     portfolioStaleAfterTrade: '交易已記錄，但這個區塊未更新成功，以下數字可能不是最新。',
@@ -585,8 +587,9 @@ export const I18N: Record<Lang, Record<string, string>> = {
     costBasis: 'Cost basis',
     // ── Phase 4: manual trade recording (source of truth: 04-UI-SPEC.md §Copywriting Contract) ──
     // Four hard rules, mirrored from the zh block above:
-    // 1. Every post-submit error except tradeErrNetwork must say "nothing was recorded".
-    // 2. tradeErrNetwork is the only unknown-outcome case, so it must promise "will not create a duplicate".
+    // 1. Every post-submit error except tradeErrNetwork and tradeErrInvalidResponse must say "nothing was recorded".
+    // 2. Only those two are unknown-outcome cases: tradeErrNetwork (no response) must promise "will not create a duplicate";
+    //    tradeErrInvalidResponse (server responded but the body broke the contract, G-05-7) must send the user to the Trades page first.
     // 3. tradeErrKeyReused must never say "duplicate request" — the opposite is true, nothing was written.
     // 4. No string may echo the idempotency key, the backend error.message, or error.fields values.
     // Reused, never duplicated: loading / loadFailed / authRetry / authRequestId /
@@ -631,6 +634,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrForbidden: 'This account cannot record trades; nothing was recorded.',
     tradeErrCsrf: 'Security check failed; nothing was recorded. Refresh the page and try again.',
     tradeErrNetwork: 'Cannot reach the server; this trade may not have been recorded. Submitting again will not create a duplicate.',
+    tradeErrInvalidResponse: 'The server responded, but the response could not be read. This trade may have been recorded; check the Trades page first.',
     tradeErrUnknown: 'Something unexpected happened; nothing was recorded.',
     portfolioRefreshing: 'Refreshing…',
     portfolioStaleAfterTrade: 'Trade recorded, but this section failed to refresh — the values below may be out of date.',
