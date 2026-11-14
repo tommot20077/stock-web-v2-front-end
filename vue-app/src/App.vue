@@ -81,7 +81,7 @@ import TweaksPanel from './components/TweaksPanel.vue';
 import { createAuthSession, type AuthSession, type SessionMessage, type SessionState } from './services/authSession';
 import { getRuntimeApiClients } from './services/pageApiClients';
 import { RuntimeDataModeError, getRuntimeDataMode } from './services/runtimeDataMode';
-import { ApiClientError } from './services/apiClient';
+import { messageFromStartupError } from './startupErrorMessage';
 import type { LoginRequest, RegisterRequest } from './services/authApi';
 import type { RuntimeDataMode } from './services/apiTypes';
 import Overview from './pages/Overview.vue';
@@ -221,24 +221,6 @@ const showAuthPanel = computed(() => apiMode
   && (sessionState.value.status === 'anonymous' || sessionState.value.status === 'error'));
 const showMainContent = computed(() => !runtimeModeError.value
   && !(apiMode && sessionState.value.status === 'error'));
-
-function messageFromStartupError(error: unknown): SessionMessage {
-  if (error instanceof ApiClientError) {
-    return {
-      code: error.code,
-      message: error.message,
-      status: error.status,
-      requestId: error.requestId,
-    };
-  }
-
-  return {
-    code: 'NETWORK_ERROR',
-    message: error instanceof Error ? error.message : 'Backend unavailable',
-    status: 0,
-    requestId: null,
-  };
-}
 
 async function restoreSession() {
   if (!apiMode || !authSession) return;
