@@ -2,6 +2,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import { describe, expect, it } from 'vitest';
 import { MOCK_SENTINELS } from '../e2e/support/mockSentinels';
 import { CRYPTO, POSITIONS, SYMBOLS, TRADES } from './data';
+import overviewSource from './pages/Overview.vue?raw';
+import { createMockCashApi, resetMockCashLedgerForTests } from './services/cashApi';
 import { useMockPortfolioStore } from './stores/mockPortfolio';
 
 /**
@@ -25,6 +27,28 @@ function collectNumbers(value: unknown): number[] {
   return [];
 }
 
+/**
+ * 切出 `source` 中從 `startMarker` 起、到其後第一個 `endMarker` 為止的區段(含 endMarker)。
+ * 切不到時直接丟錯:空字串會讓「不出現在區段」的斷言誤綠、讓「出現在區段」的訊息難以定位。
+ */
+function sliceSection(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  if (start < 0) throw new Error(`切不到區段起點「${startMarker}」:Overview.vue 結構已變,請同步更新本測試`);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) throw new Error(`切不到區段終點「${endMarker}」(起點「${startMarker}」之後)`);
+  return source.slice(start, end + endMarker.length);
+}
+
+/** Overview.vue 的 mock KPI 區段(`const mockKpis` 到其後第一個 `]);`)。 */
+function overviewMockKpisSection(): string {
+  return sliceSection(overviewSource, 'const mockKpis', ']);');
+}
+
+/** Overview.vue 的 API KPI 區段(`const apiKpis` 到 `const kpiCards`)。 */
+function overviewApiKpisSection(): string {
+  return sliceSection(overviewSource, 'const apiKpis', 'const kpiCards');
+}
+
 function mockHaystack(): string {
   setActivePinia(createPinia());
   const store = useMockPortfolioStore();
@@ -35,11 +59,13 @@ function mockHaystack(): string {
 }
 
 describe('mock 哨兵守門(SC5 / D-20)', () => {
-  it('哨兵陣列非空(四類都有值)', () => {
+  it('哨兵陣列非空(六類都有值)', () => {
     expect(MOCK_SENTINELS.symbols.length).toBeGreaterThan(0);
     expect(MOCK_SENTINELS.prices.length).toBeGreaterThan(0);
     expect(MOCK_SENTINELS.notes.length).toBeGreaterThan(0);
     expect(MOCK_SENTINELS.watchlistNames.length).toBeGreaterThan(0);
+    expect(MOCK_SENTINELS.kpis.length).toBeGreaterThan(0);
+    expect(MOCK_SENTINELS.cashNotes.length).toBeGreaterThan(0);
   });
 
   it('每個 symbol / price / note / watchlistName 都仍存在於 mock 資料輸出', () => {
@@ -56,9 +82,28 @@ describe('mock 哨兵守門(SC5 / D-20)', () => {
     expect(missingSentinels(MOCK_SENTINELS.watchlistNames, JSON.stringify(names))).toEqual([]);
   });
 
+  it('每個 kpi 哨兵都仍在 Overview.vue 的 mockKpis 區段,且不在 apiKpis 區段', () => {
+    const mockSection = overviewMockKpisSection();
+    const apiSection = overviewApiKpisSection();
+    expect(missingSentinels(MOCK_SENTINELS.kpis, mockSection), 'kpis 不在 mockKpis').toEqual([]);
+    // 出現在 apiKpis 代表那是 API mode 也會渲染的字面值,當哨兵會誤判(SC5 斷言永遠紅)
+    const leakedIntoApi = MOCK_SENTINELS.kpis.filter((value) => apiSection.includes(value));
+    expect(leakedIntoApi, 'kpis 出現在 apiKpis').toEqual([]);
+  });
+
+  it('每個 cashNote 哨兵都仍出現在 mock 現金帳本的種子分錄', async () => {
+    resetMockCashLedgerForTests();
+    const page = await createMockCashApi().listEntries();
+    const notes = page.items.map((entry) => entry.note ?? '').join('\n');
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(missingSentinels(MOCK_SENTINELS.cashNotes, notes), 'cashNotes').toEqual([]);
+  });
+
   it('偵測規則本身有效(避免守門永遠綠)', () => {
     expect(missingSentinels(['__never__'], mockHaystack())).toEqual(['__never__']);
     expect(missingSentinels(['NVDA', '__never__'], 'NVDA')).toEqual(['__never__']);
     expect(missingSentinels([], 'anything')).toEqual([]);
+    expect(() => sliceSection('abc', '__missing__', ']);')).toThrow(/切不到區段起點/);
+    expect(() => sliceSection('const x = [', 'const x', ']);')).toThrow(/切不到區段終點/);
   });
 });
