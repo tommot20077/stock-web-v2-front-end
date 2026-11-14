@@ -1,4 +1,4 @@
-import { ApiClientError, apiPaginatedRequest, apiRequest, buildQueryString } from './apiClient';
+import { ApiClientError, apiPaginatedRequest, apiRequestMapped, buildQueryString } from './apiClient';
 import type { PaginatedResponse, RuntimeDataMode } from './apiTypes';
 import { parseDecimal, toWire, ZERO, type Decimal } from './decimal';
 import { BASE_CURRENCY_OPTIONS } from './profileApi';
@@ -122,11 +122,17 @@ export function createHttpCashApi(basePath = '/api/v1'): CashApi {
     mode: 'api',
     // 寫入形狀照 tradingApi.createTrade:CSRF header、cookie 憑證、401 單飛 refresh + 一次 replay
     // 全由 apiClient 處理;replay 使用同一份 options,所以同一把 key 自動沿用。
-    createEntry: async (input, idempotencyKey) => toCashEntry(await apiRequest<CashEntryDto>(`${basePath}/portfolio/cash-entries`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
-      json: toCreateCashEntryRequest(input),
-    })),
+    // mapper 經 apiRequestMapped 在邊界內執行(G-05-7 / FE-WR-01):201 之後 toCashEntry 失敗
+    // 成為帶真實 status 與 traceId 的 INVALID_API_RESPONSE,而不是被誤當成網路失敗的 TypeError。
+    createEntry: async (input, idempotencyKey) => apiRequestMapped<CashEntryDto, CashEntry>(
+      `${basePath}/portfolio/cash-entries`,
+      toCashEntry,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        json: toCreateCashEntryRequest(input),
+      },
+    ),
     listEntries: async (params = {}) => {
       const page = await apiPaginatedRequest<CashEntryDto>(
         `${basePath}/portfolio/cash-entries${buildQueryString({ page: params.page, size: params.size })}`,

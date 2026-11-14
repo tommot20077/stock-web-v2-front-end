@@ -1,4 +1,4 @@
-import { ApiClientError, apiRequest } from './apiClient';
+import { ApiClientError, apiRequestMapped } from './apiClient';
 import { toRaw } from 'vue';
 import { useMockPortfolioStore } from '../stores/mockPortfolio';
 import { numberToWire, parseDecimal, toWire, ZERO, type Decimal } from './decimal';
@@ -180,19 +180,26 @@ export interface HoldingEventApi {
 export function createHttpHoldingEventApi(basePath = '/api/v1'): HoldingEventApi {
   return {
     mode: 'api',
-    createDividend: async (input, idempotencyKey) => toDividend(await apiRequest<DividendDto>(`${basePath}/portfolio/dividends`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
-      json: toCreateDividendRequest(input),
-    })),
-    createShareAdjustment: async (input, idempotencyKey) => toShareAdjustment(await apiRequest<ShareAdjustmentDto>(
+    // mapper 經 apiRequestMapped 在邊界內執行(G-05-7 / FE-WR-01):201 之後 toDividend / toShareAdjustment
+    // 失敗成為帶真實 status 與 traceId 的 INVALID_API_RESPONSE,而不是被誤當成網路失敗的 TypeError。
+    createDividend: async (input, idempotencyKey) => apiRequestMapped<DividendDto, Dividend>(
+      `${basePath}/portfolio/dividends`,
+      toDividend,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        json: toCreateDividendRequest(input),
+      },
+    ),
+    createShareAdjustment: async (input, idempotencyKey) => apiRequestMapped<ShareAdjustmentDto, ShareAdjustment>(
       `${basePath}/portfolio/share-adjustments`,
+      toShareAdjustment,
       {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
         json: toCreateShareAdjustmentRequest(input),
       },
-    )),
+    ),
   };
 }
 
