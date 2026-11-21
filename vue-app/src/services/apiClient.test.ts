@@ -3,6 +3,7 @@ import {
   ApiClientError,
   apiPaginatedRequest,
   apiRequest,
+  apiRequestMapped,
   bootstrapCsrf,
   buildQueryString,
   configureApiClientSessionHandlers,
@@ -688,5 +689,104 @@ describe('apiClient 5xx 空 body(SC2 F2)', () => {
       message: 'Request failed with status 503',
       requestId: null,
     });
+  });
+});
+
+// G-05-7 / FE-WR-01:mapper 在 transport 邊界內執行;mapper 失敗 → INVALID_API_RESPONSE(真實 status + traceId),
+// 請求本身的錯誤碼(HTTP 失敗 / 信封不合 / 網路)完全不變,且這些情況下 mapper 不得被呼叫。
+describe('apiRequestMapped(G-05-7 / FE-WR-01)', () => {
+  function envelopeResponse(body: unknown, status: number): Response {
+    return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  it('converts a mapper TypeError after 201 into INVALID_API_RESPONSE with the real status and traceId', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf-mapped; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => envelopeResponse(
+      { success: true, data: { quantity: 3 }, error: null, meta: { traceId: 'trace-201' } },
+      201,
+    )));
+    const map = vi.fn((_wire: { quantity: unknown }) => {
+      throw new TypeError('MapperRawDetail quantity=3');
+    });
+
+    const error = await apiRequestMapped('/api/v1/trades', map, { method: 'POST', json: {} })
+      .catch((caught: unknown) => caught);
+
+    expect(map).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect(error).toMatchObject({ status: 201, code: 'INVALID_API_RESPONSE', requestId: 'trace-201', fields: null });
+    // 靜態訊息:不夾帶 mapper 的例外訊息或回應值(T-05-44)
+    expect((error as ApiClientError).message).toBe('Response data did not match the contract');
+    expect((error as ApiClientError).message).not.toContain('MapperRawDetail');
+  });
+
+  it('returns the mapped value when the mapper succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => envelopeResponse(
+      { success: true, data: { amount: '12.50' }, error: null, meta: { traceId: 'trace-ok' } },
+      200,
+    )));
+
+    const result = await apiRequestMapped('/api/v1/cash/entries/1', (wire: { amount: string }) => ({ cents: wire.amount.replace('.', '') }));
+
+    expect(result).toEqual({ cents: '1250' });
+  });
+
+  it('keeps the backend error code for a non-ok envelope and never calls the mapper', async () => {
+    document.cookie = 'XSRF-TOKEN=csrf-mapped; path=/';
+    vi.stubGlobal('fetch', vi.fn(async () => envelopeResponse(
+      { success: false, data: null, error: { code: 'TRADE_CONFLICT', message: 'Conflict' }, meta: { traceId: 'trace-409' } },
+      409,
+    )));
+    const map = vi.fn();
+
+    await expect(apiRequestMapped('/api/v1/trades', map, { method: 'POST', json: {} })).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 409,
+      code: 'TRADE_CONFLICT',
+      requestId: 'trace-409',
+    });
+    expect(map).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing INVALID_API_RESPONSE for a 200 without a data envelope and never calls the mapper', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => envelopeResponse({ id: 'x', meta: { traceId: 'trace-bare' } }, 200)));
+    const map = vi.fn();
+
+    await expect(apiRequestMapped('/api/v1/portfolio/summary', map)).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 200,
+      code: 'INVALID_API_RESPONSE',
+      message: 'Response did not include a data envelope',
+      requestId: 'trace-bare',
+    });
+    expect(map).not.toHaveBeenCalled();
+  });
+
+  it('keeps NETWORK_ERROR for a fetch reject and never calls the mapper', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    }));
+    const map = vi.fn();
+
+    await expect(apiRequestMapped('/api/v1/portfolio/summary', map)).rejects.toMatchObject({
+      name: 'ApiClientError',
+      status: 0,
+      code: 'NETWORK_ERROR',
+    });
+    expect(map).not.toHaveBeenCalled();
+  });
+
+  it('rethrows an ApiClientError raised by the mapper untouched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => envelopeResponse(
+      { success: true, data: {}, error: null, meta: { traceId: 'trace-ok' } },
+      200,
+    )));
+    const own = new ApiClientError({ status: 200, code: 'MAPPER_OWN_CODE', message: 'own', requestId: 'trace-own' });
+
+    const error = await apiRequestMapped('/api/v1/portfolio/summary', () => {
+      throw own;
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBe(own);
   });
 });

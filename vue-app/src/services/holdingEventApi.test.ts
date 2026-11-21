@@ -198,6 +198,25 @@ describe('holdingEventApi http adapter — createDividend(tracer)', () => {
       requestId: 'trace-409',
     });
   });
+
+  it('httpCreateDividend201WithNumberAmountSurfacesAsInvalidApiResponse(G-05-7)', async () => {
+    // 股利已寫入(201),只是回應金額變成 JSON number:mapper 失敗在邊界轉成 INVALID_API_RESPONSE。
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(
+      successEnvelope({ ...DIVIDEND_DTO, amount: 120 }, 'trace-dividend-201'),
+      201,
+    )));
+
+    const error = await createHttpHoldingEventApi('/api/v1').createDividend(DIVIDEND_REQUEST, 'k-1')
+      .catch((caught: unknown) => caught);
+
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-dividend-201',
+    });
+  });
 });
 
 describe('holdingEventApi http adapter — createShareAdjustment', () => {
@@ -237,6 +256,22 @@ describe('holdingEventApi http adapter — createShareAdjustment', () => {
       status: 400,
       requestId: 'trace-400',
       fields: { effectiveDate: 'must not be in the future' },
+    });
+  });
+
+  it('httpCreateShareAdjustment201MissingQuantityDeltaSurfacesAsInvalidApiResponse(G-05-7)', async () => {
+    const { quantityDelta: _quantityDelta, ...withoutDelta } = SPLIT_DTO;
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(withoutDelta, 'trace-adjust-201'), 201)));
+
+    const error = await createHttpHoldingEventApi('/api/v1').createShareAdjustment(SPLIT_REQUEST, 'k-2')
+      .catch((caught: unknown) => caught);
+
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-adjust-201',
     });
   });
 });
@@ -662,14 +697,14 @@ describe('holdingEventApi — 現金股利字串契約(05-20 / D-05 / D-08)', ()
     expect(bodyAt(0)).toMatchObject({ amount: '0.00000001', withholdingTax: '30.5' });
   });
 
-  it('http:回應金額仍是 JS number → 在邊界丟 TypeError(T-05-27)', async () => {
+  it('http:回應金額仍是 JS number → 在邊界大聲失敗(T-05-27),以 INVALID_API_RESPONSE 呈現(G-05-7)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({
       ...DIVIDEND_DTO,
       amount: 120,
     }))));
 
     await expect(createHttpHoldingEventApi('/api/v1').createDividend(DIVIDEND_REQUEST, 'k-1'))
-      .rejects.toBeInstanceOf(TypeError);
+      .rejects.toMatchObject({ name: 'ApiClientError', code: 'INVALID_API_RESPONSE', status: 200, requestId: 'trace-holding' });
   });
 
   it('toDividend:預扣稅為 number 也丟 TypeError', () => {
@@ -761,11 +796,11 @@ describe('holdingEventApi — 股數調整字串契約(05-20 / D-05 / D-08)', ()
     expect(adjustment.ratioNew).toBe(1);
   });
 
-  it('http:回應 quantityDelta 仍是 number → 丟 TypeError', async () => {
+  it('http:回應 quantityDelta 仍是 number → INVALID_API_RESPONSE(G-05-7)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...SPLIT_DTO, quantityDelta: 300 }))));
 
     await expect(createHttpHoldingEventApi('/api/v1').createShareAdjustment(SPLIT_REQUEST, 'k-1'))
-      .rejects.toBeInstanceOf(TypeError);
+      .rejects.toMatchObject({ name: 'ApiClientError', code: 'INVALID_API_RESPONSE', status: 200, requestId: 'trace-holding' });
   });
 
   it('mock 配股:同 key 的 "10" 與 "10.00000000" 視為同一筆、只調整一次;不同股數為 KEY_REUSED', async () => {

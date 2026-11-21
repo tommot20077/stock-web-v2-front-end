@@ -15,6 +15,19 @@ import type {
 import { numberToWire, parseDecimal, parseNullableDecimal, toWire, ZERO } from './decimal';
 
 /**
+ * 回測初始資金上限(含):1,000,000,000,000。與後端 `CreateBacktestRunRequest` 的
+ * `@DecimalMax("1000000000000")` 同值(05-26 / Yuan 2026-11-14);前端表單以 `parsePlainDecimalInput` 先擋,
+ * mock adapter 也以同一上限回 400,讓 mock / API 兩種 mode 行為一致(鐵律 3)。
+ */
+export const BACKTEST_CAPITAL_MAX = parseDecimal('1000000000000');
+
+/**
+ * 回測初始資金最多小數位數:6。與後端 `@Digits(integer = 13, fraction = 6)` 及 V3 `NUMERIC(24,6)` 同值;
+ * 比其他金額表單的 8 位少,因為回測 run 表的欄位 scale 是 6。
+ */
+export const BACKTEST_CAPITAL_MAX_DECIMALS = 6;
+
+/**
  * 回測 domain 的唯一消費介面。金額 / 比率在 wire 上是十進位字串(Phase 5 D-05),介面只收發 domain 型別
  * (Decimal,D-08):`createRun` 收 Decimal 初始資金、由 adapter `toWire`;回應經 `toBacktestRunRecord` /
  * `toBacktestResult` 轉換。頁面與元件不碰 wire 字串。
@@ -228,12 +241,23 @@ export function createMockBacktestApi(): BacktestApi {
     async createRun(input) {
       // mock 先產出與 http 相同的 wire request,之後的驗證與儲存都只看 wire 形狀。
       const request = toBacktestRunRequest(input);
-      if (parseDecimal(request.initialCapital).lte(ZERO)) {
+      const capital = parseDecimal(request.initialCapital);
+      if (capital.lte(ZERO)) {
         throw new ApiClientError({
           status: 400,
           code: 'BACKTEST_INVALID_INITIAL_CAPITAL',
           message: 'Initial capital must be greater than 0',
           field: 'initialCapital',
+        });
+      }
+      // 05-28 / FE-WR-03:與後端 Bean Validation(@DecimalMax / @Digits)同一上限與位數,回同形 400
+      // (VALIDATION_FAILED + error.fields.initialCapital);fields value 是靜態字串,不回射輸入。
+      if (capital.gt(BACKTEST_CAPITAL_MAX) || !capital.round(BACKTEST_CAPITAL_MAX_DECIMALS).eq(capital)) {
+        throw new ApiClientError({
+          status: 400,
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed',
+          fields: { initialCapital: 'out of range' },
         });
       }
       if (request.strategyId === 'custom') {

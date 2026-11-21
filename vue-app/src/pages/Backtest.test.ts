@@ -106,14 +106,31 @@ describe('Backtest 初始資金文字輸入 → Decimal(05-24 / D-08)', () => {
     expect(input.value).toBe('100000');
   });
 
-  it.each(['0', '-1', 'abc', '', '   '])('輸入 %j → 既有欄位錯誤,不送出', async text => {
+  // 05-28 / FE-WR-03:上限 1e12、最多 6 位小數(與後端 CreateBacktestRunRequest 同值);指數記號 / 正負號 /
+  // 千分位一律擋在 toChartNumber 與 createRun 之前 —— '1e999999999' 若進 toFixed 會讓分頁凍結 / OOM。
+  it.each([
+    '0',
+    '-1',
+    'abc',
+    '',
+    '   ',
+    '1e5',
+    '1e400',
+    '1e999999999',
+    '1000000000000.000001',
+    '0.0000001',
+    '123456789012.12345678',
+    '+5',
+    '1,000',
+  ])('輸入 %j → 欄位錯誤,不送出', async text => {
     await mountBacktest();
     await setInitial(text);
     await clickRun();
 
     expect(createRun).not.toHaveBeenCalled();
-    expect(document.querySelector('[data-testid="backtest-run-error"]')?.textContent)
-      .toContain('Initial capital must be greater than 0');
+    expect(document.querySelector('[data-testid="backtest-run-error"]')?.textContent).toContain(
+      'Initial capital must be a plain number greater than 0 and at most 1,000,000,000,000, with up to 6 decimal places (no scientific notation)',
+    );
   });
 
   it('輸入 100000 → 以 Decimal 送出,成功後軸標籤以 toChartNumber 計算', async () => {
@@ -132,13 +149,30 @@ describe('Backtest 初始資金文字輸入 → Decimal(05-24 / D-08)', () => {
     expect(document.querySelector('.eq-svg text')?.textContent).toBe('$400K');
   });
 
-  it('超過 number 精度的初始資金原樣以 Decimal 送出', async () => {
+  // Yuan 2026-11-14:回測初始資金最多 6 位小數(V3 NUMERIC(24,6)),原 8 位小數案例改為 6 位。
+  it('超過 number 精度的 6 位小數初始資金原樣以 Decimal 送出', async () => {
     createRun.mockImplementation(async (input: { initialCapital: Decimal }) => runRecord(input.initialCapital));
     await mountBacktest();
-    await setInitial('123456789012.12345678');
+    await setInitial('123456789012.123456');
     await clickRun();
 
+    expect(createRun).toHaveBeenCalledTimes(1);
     const sent = createRun.mock.calls[0][0] as { initialCapital: Decimal };
-    expect(toWire(sent.initialCapital)).toBe('123456789012.12345678');
+    expect(toWire(sent.initialCapital)).toBe('123456789012.123456');
+  });
+
+  it.each([
+    ['1000000000000', '1000000000000'],
+    ['0.000001', '0.000001'],
+  ])('上限 / 最小刻度 %j 可送出', async (text, wire) => {
+    createRun.mockImplementation(async (input: { initialCapital: Decimal }) => runRecord(input.initialCapital));
+    await mountBacktest();
+    await setInitial(text);
+    await clickRun();
+
+    expect(createRun).toHaveBeenCalledTimes(1);
+    const sent = createRun.mock.calls[0][0] as { initialCapital: Decimal };
+    expect(toWire(sent.initialCapital)).toBe(wire);
+    expect(document.querySelector('[data-testid="backtest-run-error"]')).toBeNull();
   });
 });

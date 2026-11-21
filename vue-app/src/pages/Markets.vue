@@ -203,7 +203,7 @@ async function loadLists() {
     if (seq !== listsSeq) return;
     listsError.value = error instanceof ApiClientError
       ? error
-      : new ApiClientError({ status: 0, code: 'NETWORK_ERROR', message: 'Network error' });
+      : new ApiClientError({ status: 0, code: 'UNKNOWN_ERROR', message: 'Unexpected error' });
   } finally {
     if (seq === latestLoadSeq) listsLoading.value = false;
   }

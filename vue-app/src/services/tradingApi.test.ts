@@ -402,10 +402,42 @@ describe('tradingApi — 金額字串契約(05-19 / D-05 / D-08)', () => {
     expect(toTradeRecord(TRADE_DTO).quantity.eq(parseDecimal('10'))).toBe(true);
   });
 
-  it('回應金額仍為 JS number 時在邊界丟錯(T-05-27)', async () => {
+  it('回應金額仍為 JS number 時在邊界大聲失敗(T-05-27),且以 INVALID_API_RESPONSE 呈現(G-05-7)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...TRADE_DTO, price: 218.4 }))));
 
-    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toThrow(TypeError);
+    // mapper 的 TypeError 在 apiRequestMapped 內轉成 ApiClientError,不得以 TypeError 冒到元件。
+    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 200,
+      requestId: 'trace-trade',
+    });
+  });
+
+  it('201 但 quantity 為 JSON number → INVALID_API_RESPONSE(status 201、帶 traceId),而非 TypeError(G-05-7)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...TRADE_DTO, quantity: 3 }, 'trace-201'), 201)));
+
+    const error = await createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1').catch((caught: unknown) => caught);
+
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-201',
+    });
+  });
+
+  it('201 但缺 price → INVALID_API_RESPONSE(status 201、帶 traceId)(G-05-7)', async () => {
+    const { price: _price, ...withoutPrice } = TRADE_DTO;
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope(withoutPrice, 'trace-201-missing'), 201)));
+
+    await expect(createHttpTradingApi('/api/v1').createTrade(PRECISE, 'key-1')).rejects.toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-201-missing',
+    });
   });
 
   it('mock createTrade 回傳的 TradeRecord 保留輸入的完整精度', async () => {

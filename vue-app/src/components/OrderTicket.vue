@@ -1119,9 +1119,13 @@ const validationError = computed(() =>
  * symbol 不存在」的優先序從 `ASSET_NOT_FOUND` 改回 `TRADE_UNSUPPORTED_TYPE`;
  * 任何「第一個錯誤一定是 X」的假設都會在那天靜默壞掉。
  *
- * `NETWORK_ERROR` 是前端合成的診斷碼(後端不會回這個值),讓「連不上伺服器」
- * 與「後端回了一個我不認識的 code」可以明確區分 —— 前者的文案是唯一
- * 敢說「結果未知但重試不會建立重複交易」的那一條。
+ * `NETWORK_ERROR` 是前端合成的診斷碼(後端不會回這個值,D-26 後只由 `apiClient.transportFetch`
+ * 在沒拿到 Response 時產生),讓「連不上伺服器」與「後端回了一個我不認識的 code」可以明確區分 ——
+ * 它的文案敢說「結果未知但重試不會建立重複交易」。
+ *
+ * `INVALID_API_RESPONSE` 是唯一另一條「結果未知」的文案(G-05-7 / FE-WR-01):伺服器已回應,
+ * 但信封或 `data` 不合契約(例如 201 之後金額變 JSON number,由 `apiRequestMapped` 在邊界轉換),
+ * 交易**可能已記錄**,所以文案引導使用者先到交易頁確認,絕不說「交易未記錄」。
  */
 const SUBMIT_ERROR_COPY: Record<string, string> = {
   TRADE_INSUFFICIENT_HOLDING: 'tradeErrOversell',
@@ -1140,6 +1144,7 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   // 後端 403 的實際 code(`ErrorCode.AUTH_FORBIDDEN`);其他 403 仍由下方 status 兜底。
   AUTH_FORBIDDEN: 'tradeErrForbidden',
   NETWORK_ERROR: 'tradeErrNetwork',
+  INVALID_API_RESPONSE: 'tradeErrInvalidResponse',
 };
 
 const submitErrorMessage = computed(() => {
@@ -1407,18 +1412,30 @@ async function submitTrade() {
   }
   submitting.value = true;
   const idempotencyKey = ensureIdempotencyKey();
+  // catch **只包 createTrade**(G-05-7 / FE-WR-01):handleSubmitFailure 的 tradeErrUnknown 說「交易未記錄」,
+  // 只能用在 createTrade 本身失敗(API mode 下非 ApiClientError 只會來自送出前的程式錯誤)。
+  // 成功之後的 recorded / notifyTradeCreated / toast / focus 若丟錯,交易其實已記錄,
+  // 不得落進這裡被說成未記錄 —— 讓它走 Vue 的錯誤處理,而不是 ticket 的錯誤區。
+  // 外層 finally 仍涵蓋成功後的步驟:submitting 必須撐到 step 切到 result 且 DOM 更新完,
+  // 否則 DOM 更新前落在舊送出鈕上的連點會用新 key 再記一筆(task4 連點測試)。
   try {
-    // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
-    const trade = await apiClients().trading.createTrade({
-      symbol: selected.value.symbol,
-      type: side.value,
-      quantity: parsedQty.value!,
-      price: parsedPx.value!,
-      fee: parsedFee.value!,
-      note: note.value ? note.value : null,
-      // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
-      executedAt: toLocalIso(new Date(executedAt.value)),
-    }, idempotencyKey);
+    let trade: TradeRecord;
+    try {
+      // canSubmit 已保證三個 Decimal 皆合法;adapter 以 toWire 逐欄投影成字串送出。
+      trade = await apiClients().trading.createTrade({
+        symbol: selected.value.symbol,
+        type: side.value,
+        quantity: parsedQty.value!,
+        price: parsedPx.value!,
+        fee: parsedFee.value!,
+        note: note.value ? note.value : null,
+        // D-03:後端是 OffsetDateTime,必須帶 offset(datetime-local 是本地時區的裸字串)。
+        executedAt: toLocalIso(new Date(executedAt.value)),
+      }, idempotencyKey);
+    } catch (error) {
+      handleSubmitFailure(error);
+      return;
+    }
     recorded.value = trade;
     // U-03:冪等命中(同一把 key 拿回既有交易)與首次建立**完全同一條路徑**。
     // 目前的 API 契約沒有任何 replay 訊號,所以不做「這筆已存在」的變體;
@@ -1432,8 +1449,6 @@ async function submitTrade() {
     emit('toast', `${t(props.lang, 'tradeRecordedToast')} ${trade.type} ${toWire(trade.quantity)} ${trade.symbol} @ ${fmtMoneyAmount(trade.price, null, 2)}`);
     await nextTick();
     resultTitle.value?.focus();
-  } catch (error) {
-    handleSubmitFailure(error);
   } finally {
     submitting.value = false;
   }
@@ -1446,6 +1461,9 @@ async function submitTrade() {
  * 沿用同一把重送是安全且正確的(這正是文案敢寫「不會建立重複交易」的前提)。
  * `TRADE_CONFLICT`、5xx、網路失敗、`fields` 類、oversell、CSRF/403 全部走這條。
  *
+ * `INVALID_API_RESPONSE`(伺服器已回應但內容無法解讀)同樣保留:交易可能已寫入,
+ * 沿用同一把 key 重送會命中後端冪等、拿回同一筆,不會重複建立。
+ *
  * **唯一例外是 `TRADE_IDEMPOTENCY_KEY_REUSED`:必須丟棄 key。**
  * 否則使用者照文案「確認欄位後重新送出」會用同一把 key 再吃一次 409,
  * 形成無出路的迴圈 —— 他甚至不會知道要關掉整張 ticket 才能繼續。
@@ -1453,8 +1471,9 @@ async function submitTrade() {
 function handleSubmitFailure(error: unknown) {
   const described: SubmitError = error instanceof ApiClientError
     ? { code: error.code, traceId: error.requestId, fields: error.fields, status: error.status }
-    // 前端合成的診斷碼:後端不會回這個值,所以它與「後端回了未知 code」可明確區分。
-    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+    // D-26 後只有 apiClient.transportFetch 會產生網路錯誤碼;非 ApiClientError 只可能是
+    // 送出前的程式錯誤(G-05-7 / FE-WR-01),標成 UNKNOWN_ERROR → tradeErrUnknown,不得說成網路問題。
+    : { code: 'UNKNOWN_ERROR', traceId: null, fields: null, status: 0 };
 
   // 401 / refresh 失敗**不在 ticket 顯示**,走全域 SessionBanner
   // (Phase 3 D-13 / Phase 2 D-14;`apiClient.ts:315,323` 已負責升級)。

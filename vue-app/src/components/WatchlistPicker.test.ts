@@ -4,7 +4,7 @@ import WatchlistPicker from './WatchlistPicker.vue';
 import pickerSource from './WatchlistPicker.vue?raw';
 import { t, tf } from '../i18n';
 import { ApiClientError } from '../services/apiClient';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import { toWatchlistRecord, type WatchlistDto, type WatchlistRecord } from '../services/watchlistApi';
 import { cleanupMounted, flushAsync, mountWithPinia } from '../testUtils';
 import {
@@ -372,6 +372,26 @@ describe('WatchlistPicker:勾選失敗回原狀態 + 該列文案', () => {
       expect(mounted.events.includes('retry')).toBe(testCase.reload);
     });
   }
+
+  // 05-31 FE-WR-01 / D-26:網路錯誤碼只由 apiClient.transportFetch 產生;非 ApiClientError
+  // (mapper / 程式錯誤)不是網路問題,要落到「結果不確定」文案並請頁面重讀。
+  it('addItem 以非 ApiClientError reject → watchlistErrUnknown + UNKNOWN_ERROR、不顯示網路文案、要求頁面重讀', async () => {
+    const mounted = await mountPicker({ lists: [MY_LIST] });
+    vi.spyOn(getRuntimeApiClients().watchlist, 'addItem').mockRejectedValue(new TypeError('mapper exploded'));
+
+    checkbox('wl-1').click();
+    await flushAsync();
+
+    expect(checkbox('wl-1').checked).toBe(false);
+    const error = option('wl-1').querySelector('[data-testid="watchlist-picker-option-error"]');
+    expect(error, 'option error').not.toBeNull();
+    expect(error!.textContent).toContain(t('zh', 'watchlistErrUnknown'));
+    expect(error!.textContent).toContain('UNKNOWN_ERROR');
+    expect(error!.textContent).not.toContain(t('zh', 'watchlistErrNetwork'));
+    expect(error!.textContent).not.toContain('NETWORK_ERROR');
+    expect(mounted.changed).toHaveLength(0);
+    expect(mounted.events).toContain('retry');
+  });
 
   it('失敗列的診斷列顯示 code 與 traceId;再次勾選成功後錯誤消失', async () => {
     let fail = true;

@@ -184,6 +184,21 @@ describe('cashApi http adapter — createEntry', () => {
       requestId: 'trace-409',
     });
   });
+
+  it('201 但 amount 為 JSON number → INVALID_API_RESPONSE(status 201、帶 traceId),不以 TypeError 冒出(G-05-7)', async () => {
+    // 分錄已寫入(201),只是回應不合契約:不得被元件誤當成網路失敗而誘導重送迴圈。
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(successEnvelope({ ...CASH_DTO, amount: 50000 }, 'trace-cash-201'), 201)));
+
+    const error = await createHttpCashApi('/api/v1').createEntry(CASH_REQUEST, 'key-1').catch((caught: unknown) => caught);
+
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({
+      name: 'ApiClientError',
+      code: 'INVALID_API_RESPONSE',
+      status: 201,
+      requestId: 'trace-cash-201',
+    });
+  });
 });
 
 describe('cashApi mock adapter — createEntry', () => {

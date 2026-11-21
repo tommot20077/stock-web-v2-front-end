@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { defineComponent, h, nextTick, onErrorCaptured } from 'vue';
 
 // 走勢圖只斷言「傳進 LineChart 的 data prop」,**不斷言 SVG path** —— 後者是脆弱測試,
 // 且 `LineChart.vue:32,37-38` 的 min/max 線性映射本來就有自己的責任範圍。
@@ -22,13 +22,27 @@ vi.mock('./LineChart.vue', async () => {
   };
 });
 
+// 05-29 FE-WR-01:讓「createTrade 成功之後」的 UI 步驟可被注入失敗(預設完全透傳)。
+// 用來證明 submitTrade 的 try 只包 createTrade —— 成功後的例外不得被說成「交易未記錄」。
+const revisionProbe = vi.hoisted(() => ({ throwOnNotifyTradeCreated: false }));
+vi.mock('../services/portfolioRevision', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/portfolioRevision')>();
+  return {
+    ...actual,
+    notifyTradeCreated: (...args: Parameters<typeof actual.notifyTradeCreated>) => {
+      if (revisionProbe.throwOnNotifyTradeCreated) throw new Error('PostSuccessUiStepBoom');
+      actual.notifyTradeCreated(...args);
+    },
+  };
+});
+
 import OrderTicket from './OrderTicket.vue';
 // 原始碼字面(Vite `?raw`):用來斷言「這段程式碼不存在」——行為測試抓不到的東西。
 // mock mode 下畫面看起來一樣正常,所以「元件直接讀 mock store」「用 Math.random 生成成交價」
 // 這類問題只有原始碼斷言擋得住(沿用 Positions.test.ts:6 在 Phase 3 鎖 PORT-04 的手法)。
 import orderTicketSource from './OrderTicket.vue?raw';
 import { t } from '../i18n';
-import { resetRuntimeApiClientsForTests } from '../services/pageApiClients';
+import { getRuntimeApiClients, resetRuntimeApiClientsForTests } from '../services/pageApiClients';
 import {
   apiLastFill,
   lastCreatedTradeId,
@@ -168,6 +182,7 @@ async function click(el: HTMLElement) {
 }
 
 afterEach(() => {
+  revisionProbe.throwOnNotifyTradeCreated = false;
   cleanupMounted();
   resetPortfolioRevisionForTests();
   // session handler 是模組級單例;不清會讓上一條測試的 spy 活到下一條(04-11 Test 43)。
@@ -420,13 +435,14 @@ function assetsFetch(handler: (query: string) => Response | Promise<Response>) {
 async function mountApiTicket(
   fetchImpl: ReturnType<typeof vi.fn>,
   preset: MountOptions['preset'] = null,
+  lang: Lang = 'en',
 ) {
   vi.stubEnv('VITE_DATA_MODE', 'api');
   vi.stubGlobal('fetch', fetchImpl);
   resetRuntimeApiClientsForTests();
   mountWithPinia(OrderTicket, {
     open: true,
-    lang: 'en',
+    lang,
     preset,
     onClose: () => {},
     onNavigate: () => {},
@@ -1053,11 +1069,11 @@ async function clickDeep(el: HTMLElement) {
   await flushAsync(16);
 }
 
-async function mountSubmitTicket(fetchImpl: ReturnType<typeof vi.fn>) {
+async function mountSubmitTicket(fetchImpl: ReturnType<typeof vi.fn>, lang: Lang = 'en') {
   // apiClient 對 unsafe method 會注入 X-XSRF-TOKEN;cookie 不存在時會先打 bootstrap,
   // 那會讓本段的 fetch 呼叫序失去可讀性(tradingApi.test.ts:100-102 的同一手法)。
   document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
-  await mountApiTicket(fetchImpl, { sym: 'AAPL' });
+  await mountApiTicket(fetchImpl, { sym: 'AAPL' }, lang);
 }
 
 async function gotoReview() {
@@ -1591,6 +1607,95 @@ describe('OrderTicket 送出路徑 — D-16 錯誤分派(04-11)', () => {
     // 不得顯示 `null`(Phase 3 D-12 的診斷列規則)。
     expect(testid('ticket-error-trace-id'), '非 ApiClientError 沒有 traceId,整格不渲染').toBeNull();
     expect(bodyText()).not.toContain('null');
+  });
+
+  it('05-29 FE-WR-01:201 但 data 不合契約(quantity 為 JSON number)→ tradeErrInvalidResponse + traceId,重送沿用同一把 key', async () => {
+    stubUuids();
+    // 版本落差:後端回 201(交易已寫入),但金額欄位變成 JSON number —— 嚴格 mapper 會丟 TypeError。
+    const malformed = { ...RECORDED_TRADE, quantity: 3 } as unknown as TradeDto;
+    const fetchImpl = ticketFetch({
+      trades: () => jsonResponse(
+        { success: true, data: malformed, error: null, meta: { traceId: 'trace-201' } },
+        201,
+      ),
+    });
+    await mountSubmitTicket(fetchImpl, 'zh');
+    await gotoReview();
+    await submitTrade();
+
+    const box = requireTestid('ticket-error');
+    expect(box.textContent).toContain('伺服器已回應但內容無法解讀，這筆交易可能已記錄，請先到交易頁確認。');
+    expect(box.textContent, '伺服器已回應,不得說成連不上伺服器').not.toContain(t('zh', 'tradeErrNetwork'));
+    expect(box.textContent, '交易可能已記錄,不得說成未記錄').not.toContain('交易未記錄');
+    expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
+    expect(requireTestid('ticket-error-trace-id').textContent).toContain('trace-201');
+    expect(testid('ticket-result'), '無法解讀的回應不得渲染成功畫面').toBeNull();
+
+    // key 保留:重送命中同一筆(後端冪等),不會建立重複交易。
+    await submitTrade();
+    const keys = idempotencyKeys(fetchImpl);
+    expect(keys).toHaveLength(2);
+    expect(keys[1], 'INVALID_API_RESPONSE 之後重送必須沿用同一把 key').toBe(keys[0]);
+  });
+
+  it('05-29 FE-WR-01:createTrade 以非 ApiClientError reject → UNKNOWN_ERROR + tradeErrUnknown,不顯示網路文案', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch();
+    await mountSubmitTicket(fetchImpl);
+    // D-26 後網路失敗一律由 apiClient.transportFetch 正規化;能冒到元件的非 ApiClientError
+    // 只可能是送出前的程式錯誤,不得被說成「連不上伺服器、可直接重送」。
+    vi.spyOn(getRuntimeApiClients().trading, 'createTrade')
+      .mockRejectedValue(new TypeError('ProgrammingErrorRawDetail'));
+    await gotoReview();
+    await submitTrade();
+
+    const box = requireTestid('ticket-error');
+    expect(box.textContent).toContain(t('en', 'tradeErrUnknown'));
+    expect(box.textContent).not.toContain(t('en', 'tradeErrNetwork'));
+    expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('UNKNOWN_ERROR');
+    expect(testid('ticket-error-trace-id'), '非 ApiClientError 沒有 traceId,整格不渲染').toBeNull();
+    expect(bodyText()).not.toContain('ProgrammingErrorRawDetail');
+    expect(tradeCalls(fetchImpl), 'spy 取代了 adapter,不得真的送出').toHaveLength(0);
+  });
+
+  it('05-29 FE-WR-01:createTrade 成功後的 UI 步驟丟錯,不得被說成「交易未記錄」', async () => {
+    stubUuids();
+    const fetchImpl = ticketFetch();
+    // 以 errorCaptured 的宿主元件接住逃出 submitTrade 的例外:try 只包 createTrade,
+    // 成功後的例外應走 Vue 的錯誤處理鏈,而不是 handleSubmitFailure。
+    const captured: unknown[] = [];
+    const Host = defineComponent({
+      setup() {
+        onErrorCaptured((error) => {
+          captured.push(error);
+          return false;
+        });
+        return () => h(OrderTicket, {
+          open: true,
+          lang: 'en',
+          preset: { sym: 'AAPL' },
+          onClose: () => {},
+          onNavigate: () => {},
+          onToast: () => {},
+        });
+      },
+    });
+    document.cookie = 'XSRF-TOKEN=csrf-ticket; path=/';
+    vi.stubEnv('VITE_DATA_MODE', 'api');
+    vi.stubGlobal('fetch', fetchImpl);
+    resetRuntimeApiClientsForTests();
+    mountWithPinia(Host);
+    await flushAsync(16);
+
+    await gotoReview();
+    revisionProbe.throwOnNotifyTradeCreated = true;
+    await submitTrade();
+
+    expect(tradeCalls(fetchImpl), '交易確實送出且 201').toHaveLength(1);
+    expect(captured.map(String), '成功後的例外交給 Vue 錯誤處理鏈').toEqual(['Error: PostSuccessUiStepBoom']);
+    expect(testid('ticket-error'), '已記錄的交易不得出現「交易未記錄」的錯誤區').toBeNull();
+    expect(bodyText()).not.toContain(t('en', 'tradeErrUnknown'));
+    expect(bodyText()).not.toContain(t('en', 'tradeErrNetwork'));
   });
 
   it('Test 41(Phase 3 D-12):成功態不得出現任何 traceId', async () => {

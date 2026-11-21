@@ -164,10 +164,15 @@ const PAGES: PageCase[] = [
     },
     // 錯誤態只有錯誤卡片,放行後是 KPI 卡片;兩者合起來就是 summary 區塊
     sentinelScope: (page) => page.getByTestId('overview-summary-error').or(page.getByTestId('overview-kpi')),
-    sentinels: [...MOCK_SENTINELS.symbols, ...PRICE_SENTINELS],
+    // kpis:Overview mock KPI 字面值(mockKpis);API mode 回填 mock KPI 時這裡會紅(FE-WR-02 / D-20)
+    sentinels: [...MOCK_SENTINELS.symbols, ...PRICE_SENTINELS, ...MOCK_SENTINELS.kpis],
     assertReal: async (page) => {
       await expect(page.getByTestId('overview-kpi').first()).toBeVisible();
       await expect(page.getByTestId('overview-summary-error')).toHaveCount(0);
+      // 驗後端值而非只驗存在:API mode 第一張 KPI 是總資產卡,副標以後端 holdingCount 開頭
+      // (`Overview.vue` apiKpis 的 `${s.holdingCount} ${t(lang, 'positions')}`);seedBuy 只買 AAPL → 1。
+      // mock 的總資產卡副標是 `+1.04% …`,回填 mock 時這條會紅
+      await expect(page.getByTestId('overview-kpi').first().locator('.kpi-s')).toHaveText(/^\s*1\s/);
     },
   },
   {
@@ -234,9 +239,12 @@ const PAGES: PageCase[] = [
     beforeRoute: landOnOverview,
     enter: viaNav('nav-cash'),
     sentinelScope: (page) => page.getByTestId('cash-entries'),
-    sentinels: [...MOCK_SENTINELS.symbols, ...PRICE_SENTINELS, ...MOCK_SENTINELS.notes],
+    // cashNotes:mock 現金帳本種子備註;API mode 回填 mock 現金列時這裡會紅(FE-WR-02 / D-20)
+    sentinels: [...MOCK_SENTINELS.symbols, ...PRICE_SENTINELS, ...MOCK_SENTINELS.notes, ...MOCK_SENTINELS.cashNotes],
     assertReal: async (page) => {
       await expect(page.getByTestId('cash-entries-row').filter({ hasText: CASH_SEED_NOTE })).toHaveCount(1);
+      // 每個測試是全新帳號、只 seed 一筆入金:總列數必須恰為 1,混入任何 mock 列都會 > 1
+      await expect(page.getByTestId('cash-entries-row')).toHaveCount(1);
     },
   },
   {

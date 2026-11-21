@@ -85,7 +85,8 @@ describe('Task 7 simulated backtest and ops runs', () => {
     await clickButton('Run');
 
     expect(store.backtestRuns).toHaveLength(0);
-    expect(document.body.textContent).toContain('Initial capital must be greater than 0');
+    // 05-28 / FE-WR-03:文案改為同時說明上限、位數與不接受科學記號。
+    expect(document.body.textContent).toContain('Initial capital must be a plain number greater than 0');
   });
 
   it('Backtest shows invalid custom strategy errors inline', async () => {

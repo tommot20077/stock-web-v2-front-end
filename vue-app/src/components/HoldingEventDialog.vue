@@ -1524,7 +1524,7 @@ const SUBMIT_ERROR_COPY: Record<string, string> = {
   AUTH_CSRF_TOKEN_INVALID: 'cashErrCsrf',
   // 前端合成(`apiClient` 的 `ensureCsrfToken`:bootstrap 後仍拿不到 cookie),後端不會送。
   AUTH_CSRF_TOKEN_MISSING: 'cashErrCsrf',
-  // 前端合成的診斷碼:非 ApiClientError(連線失敗);唯一能保證「再送一次不會重複」的情境。
+  // apiClient.transportFetch 合成(D-26),後端不會送;真的連線失敗,唯一能保證「再送一次不會重複」的情境。
   NETWORK_ERROR: 'cashErrNetwork',
   // 沖銷衝突(04.2-04 / 04.2-08 的錯誤碼表):皆「沒有寫入新紀錄」。
   DIVIDEND_ALREADY_REVERSED: 'cashErrAlreadyReversed',
@@ -1552,7 +1552,11 @@ const REVERSAL_CONFLICT_CODES = [
 /** 換新 key 才能脫困的 code:同一把 key 照文案重送只會再吃一次 409,形成無出路的迴圈。 */
 const KEY_REUSED_CODES = ['DIVIDEND_IDEMPOTENCY_KEY_REUSED', 'SHARE_ADJUSTMENT_IDEMPOTENCY_KEY_REUSED'];
 
-/** 其他(含 5xx)= 結果不確定:`holdingEventErrUnknown` 說「可能已經寫入」並指向 Trades 頁籤,不斷言未寫入。 */
+/**
+ * 其他(含 5xx)= 結果不確定:`holdingEventErrUnknown` 說「可能已經寫入」並指向 Trades 頁籤,不斷言未寫入。
+ * `INVALID_API_RESPONSE`(05-29:伺服器已回應但內容不合契約)與 `UNKNOWN_ERROR` 刻意不另立對照:
+ * 結果確實不確定,既有 Unknown 文案已正確描述該情境(G-05-7 / FE-WR-01)。
+ */
 const submitErrorMessage = computed(() => {
   const error = shownError.value;
   if (!error) return '';
@@ -1581,7 +1585,9 @@ function handleSubmitFailure(error: unknown) {
         fields: error.code === 'VALIDATION_FAILED' ? error.fields : null,
         status: error.status,
       }
-    : { code: 'NETWORK_ERROR', traceId: null, fields: null, status: 0 };
+    // D-26 後只有 apiClient.transportFetch 會產生網路錯誤碼;非 ApiClientError 只可能是
+    // mapper / 程式錯誤(G-05-7 / FE-WR-01),標成 UNKNOWN_ERROR → holdingEventErrUnknown,不得說成網路問題。
+    : { code: 'UNKNOWN_ERROR', traceId: null, fields: null, status: 0 };
 
   // 401 / refresh 失敗**不在對話框顯示**,走全域 SessionBanner(`apiClient` 已負責升級)。
   // key 保留:登入回來後重送的是同一個意圖。

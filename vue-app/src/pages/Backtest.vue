@@ -138,7 +138,7 @@
         <div class="ttl">{{ lang === 'zh' ? '回撤曲線' : 'Drawdown' }}</div>
         <svg viewBox="0 0 540 200" class="dd-svg">
           <line v-for="i in 4" :key="i" x1="30" x2="530" :y1="20 + i * 38" :y2="20 + i * 38" stroke="var(--border)" stroke-dasharray="2 3" />
-          <path :d="ddPath" fill="rgba(220,38,38,0.18)" stroke="var(--dn)" stroke-width="1.3" />
+          <path :d="ddPath" fill="var(--dn)" fill-opacity="0.18" stroke="var(--dn)" stroke-width="1.3" />
         </svg>
         <div class="dd-stats">
           <div><span class="ml">{{ lang === 'zh' ? '最大' : 'Max' }}</span><span class="num dn">-{{ result.maxDD.toFixed(1) }}%</span></div>
@@ -199,7 +199,8 @@ import StrategyEditor from '../components/StrategyEditor.vue';
 import { getRuntimeApiClients } from '../services/pageApiClients';
 import { ApiClientError } from '../services/apiClient';
 import type { BacktestPeriod, BacktestRunRecord, BacktestStrategyId } from '../services/apiTypes';
-import { parseDecimal, parseDecimalInput, toChartNumber, ZERO } from '../services/decimal';
+import { BACKTEST_CAPITAL_MAX, BACKTEST_CAPITAL_MAX_DECIMALS } from '../services/backtestApi';
+import { parseDecimal, parsePlainDecimalInput, toChartNumber, ZERO } from '../services/decimal';
 import type { Lang } from '../types';
 
 const props = defineProps<{ lang: Lang }>();
@@ -216,7 +217,7 @@ const strategy = ref('ma_cross');
 const sym = ref('AAPL');
 const period = ref('3Y');
 const DEFAULT_INITIAL = '100000';
-// 初始資金以文字輸入、parseDecimalInput 解析成 Decimal 後送出(Phase 5 D-08);不經 JS number。
+// 初始資金以文字輸入、parsePlainDecimalInput 驗證並解析成 Decimal 後送出(Phase 5 D-08 / 05-28);不經 JS number。
 const initialText = ref(DEFAULT_INITIAL);
 const latestRun = ref<BacktestRunRecord | null>(null);
 const running = ref(false);
@@ -317,14 +318,22 @@ onMounted(() => { void loadHistory(); });
 
 async function run() {
   if (running.value) return;
-  const capital = parseDecimalInput(initialText.value);
+  // 05-28 / FE-WR-03:一般十進位文法 + 上限 1e12 + 6 位小數(與後端同值),必須在 toChartNumber / createRun(toWire)
+  // 之前判斷 —— 指數記號如 '1e999999999' 一進 toFixed 就會讓分頁凍結。
+  const capital = parsePlainDecimalInput(initialText.value, {
+    maxDecimals: BACKTEST_CAPITAL_MAX_DECIMALS,
+    max: BACKTEST_CAPITAL_MAX,
+  });
   if (capital === null || capital.lte(ZERO)) {
-    runError.value = props.lang === 'zh' ? '初始資金必須大於 0' : 'Initial capital must be greater than 0';
+    runError.value = props.lang === 'zh'
+      ? '初始資金須為大於 0、不超過 1,000,000,000,000、最多 6 位小數的一般數字(不接受科學記號)'
+      : 'Initial capital must be a plain number greater than 0 and at most 1,000,000,000,000, with up to 6 decimal places (no scientific notation)';
     return;
   }
 
   const nextRunNonce = runNonce.value + 1;
   // makeRunConfig 的 initial 只供圖表軸標籤(mock-only 顯示),故經 toChartNumber;請求帶的是 capital(Decimal)。
+  // 已通過上限驗證才可轉 number(capital ≤ 1e12、≤ 6 位小數,toFixed 成本有界)。
   const nextConfig = makeRunConfig(strategy.value, sym.value, period.value, toChartNumber(capital), nextRunNonce, customSeed.value);
   runError.value = '';
   strategyError.value = '';
@@ -365,12 +374,14 @@ const heatmap = computed(() => {
   });
 });
 
+// 05-28 / FE-WR-04:漲跌底色走 var(--up) / var(--dn),紅漲綠跌偏好下會跟著對調;比例沿用原 alpha 曲線。
 function heatColor(c: number | null) {
   if (c == null) return 'transparent';
   const a = Math.min(Math.abs(c) / 8, 1);
+  const pct = Math.round((0.15 + a * 0.5) * 100);
   return c >= 0
-    ? `rgba(22, 163, 74, ${0.15 + a * 0.5})`
-    : `rgba(220, 38, 38, ${0.15 + a * 0.5})`;
+    ? `color-mix(in oklch, var(--up) ${pct}%, transparent)`
+    : `color-mix(in oklch, var(--dn) ${pct}%, transparent)`;
 }
 
 const stratPoints = computed(() => {
