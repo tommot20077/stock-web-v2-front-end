@@ -72,18 +72,22 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-          cache: maven
-          cache-dependency-path: backend/**/pom.xml
 
-      - name: Cache Maven wrapper distribution
-        id: mvnw-cache
+      # 改用 actions/cache:有 restore-keys,後端 pom 改動時只補抓差額，而且只在 job 成功時才存
+      # (setup-java 內建快取沒有 restore-keys,失敗也會把解析到一半的 ~/.m2 存成精確 key)。
+      # resolver 對 429/503 的重試次數來自後端 checkout 的 .mvn/maven.config,這裡不必另設。
+      - name: Cache Maven repository and wrapper
+        id: m2-cache
         uses: actions/cache@v4
         with:
-          path: ~/.m2/wrapper
-          key: maven-wrapper-${{ hashFiles('backend/.mvn/wrapper/maven-wrapper.properties') }}
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: m2-${{ runner.os }}-${{ hashFiles('backend/**/pom.xml', 'backend/.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: m2-${{ runner.os }}-
 
       - name: Download Maven distribution (retry on rate limit)
-        if: steps.mvnw-cache.outputs.cache-hit != 'true'
+        if: steps.m2-cache.outputs.cache-hit != 'true'
         working-directory: backend
         run: |
           for i in 1 2 3 4; do
