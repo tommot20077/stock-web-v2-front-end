@@ -746,7 +746,7 @@ for (const width of [320, 375, 768, 1280, 1440]) {
         await expectTableScrollsInsideCard(page, 'watchlist-page');
       }
 
-      // degraded:「即時報價中斷,稍後自動重試 · 更新於 HH:mm」在視窗內、不撐頁
+      // degraded:「即時報價中斷，稍後自動重試 · 更新於 HH:mm」在視窗內、不撐頁
       const degraded = await boxOf(page, 'live-quote-status');
       expectInsideViewport(degraded, clientWidth, 'degraded 狀態列');
       await expect(page.getByTestId('watchlist-row-live')).toHaveCount(0);

@@ -657,7 +657,7 @@ describe('i18n phase 04.2 copy', () => {
   });
 
   it('says the day P&L excludes both FX and dividends (U-22, DIV-02)', () => {
-    expect(t('zh', 'dayPnlNote')).toBe('只含價格損益,不含匯差與股利;以各市場最近一個交易日計算。');
+    expect(t('zh', 'dayPnlNote')).toBe('只含價格損益，不含匯差與股利;以各市場最近一個交易日計算。');
     expect(t('zh', 'dayPnlNote')).toContain('不含匯差與股利');
     expect(t('en', 'dayPnlNote')).toContain('excluding FX and dividends');
   });
@@ -866,7 +866,7 @@ describe('i18n quick-261106-fbs copy', () => {
 
   it('fills the top movers FX exclusion hint in both languages', () => {
     expect(tf('zh', 'topMoversFxExcluded', { n: 2, base: 'TWD' }))
-      .toBe('2 檔缺少換算成 TWD 的匯率,未列入排行。');
+      .toBe('2 檔缺少換算成 TWD 的匯率，未列入排行。');
     expect(tf('en', 'topMoversFxExcluded', { n: 2, base: 'TWD' }))
       .toBe('2 holdings have no exchange rate to TWD and are not ranked.');
   });

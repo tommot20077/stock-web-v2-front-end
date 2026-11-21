@@ -50,7 +50,7 @@ test('W1 Markets ★ 建立「科技股」並加入 → Watchlist 頁顯示 → 
   await expect(pickerOption(page, LIST_NAME).getByTestId('watchlist-picker-checkbox')).toBeChecked();
   await page.getByTestId('watchlist-picker-close').click();
   await expect(page.getByTestId('watchlist-picker')).toHaveCount(0);
-  await expect(star(page, 'AAPL')).toHaveAttribute('aria-label', 'AAPL 已在觀察清單中,管理清單');
+  await expect(star(page, 'AAPL')).toHaveAttribute('aria-label', 'AAPL 已在觀察清單中，管理清單');
 
   // NVDA ★ → 勾選「科技股」(立即寫入;以回應 DTO 更新,不做樂觀更新)
   await star(page, 'NVDA').click();
