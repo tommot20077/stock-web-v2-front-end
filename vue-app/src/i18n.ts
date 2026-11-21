@@ -180,7 +180,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrFee: '手續費不可為負。',
     tradeErrNote: '備註最多 500 字。',
     // Phase 04.2(04.2-02 option-recommended):POST /trades 拒絕早於最近一筆未沖銷股數調整的 executedAt。
-    tradeErrExecutedAt: '成交時間不可晚於現在,也不可早於這檔標的最近一筆股數調整的除權日。',
+    tradeErrExecutedAt: '成交時間不可晚於現在，也不可早於這檔標的最近一筆股數調整的除權日。',
     // quick-261107-1j4(裁決 3B):成交時間空白 / 早於 1900-01-01 各有專屬文案(後端 fields.executedAt 下限)。
     tradeErrExecutedAtRequired: '請填寫成交時間。',
     tradeErrExecutedAtTooEarly: '成交時間不可早於 1900-01-01。',
@@ -193,7 +193,7 @@ export const I18N: Record<Lang, Record<string, string>> = {
     tradeErrForbidden: '這個帳號沒有記錄交易的權限，交易未記錄。',
     tradeErrCsrf: '安全驗證失敗，交易未記錄。請重新整理頁面後再試。',
     tradeErrNetwork: '無法連線到伺服器，這筆交易可能尚未記錄。直接再送出一次不會建立重複交易。',
-    tradeErrInvalidResponse: '伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。',
+    tradeErrInvalidResponse: '伺服器已回應但內容無法解讀，這筆交易可能已記錄，請先到交易頁確認。',
     tradeErrUnknown: '發生未預期的錯誤，交易未記錄。',
     portfolioRefreshing: '更新中…',
     portfolioStaleAfterTrade: '交易已記錄，但這個區塊未更新成功，以下數字可能不是最新。',

@@ -491,7 +491,7 @@ describe('i18n phase 4 trade copy', () => {
 
   it('tells the user the trade may already be recorded when the response cannot be read (G-05-7)', () => {
     // Yuan 2026-11-14 逐字文案。
-    expect(I18N.zh.tradeErrInvalidResponse).toBe('伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。');
+    expect(I18N.zh.tradeErrInvalidResponse).toBe('伺服器已回應但內容無法解讀，這筆交易可能已記錄，請先到交易頁確認。');
     expect(I18N.zh.tradeErrInvalidResponse).not.toContain('交易未記錄');
     const en = I18N.en.tradeErrInvalidResponse.toLowerCase();
     expect(en).toContain('may have been recorded');

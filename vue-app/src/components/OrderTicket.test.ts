@@ -1624,7 +1624,7 @@ describe('OrderTicket 送出路徑 — D-16 錯誤分派(04-11)', () => {
     await submitTrade();
 
     const box = requireTestid('ticket-error');
-    expect(box.textContent).toContain('伺服器已回應但內容無法解讀,這筆交易可能已記錄,請先到交易頁確認。');
+    expect(box.textContent).toContain('伺服器已回應但內容無法解讀，這筆交易可能已記錄，請先到交易頁確認。');
     expect(box.textContent, '伺服器已回應,不得說成連不上伺服器').not.toContain(t('zh', 'tradeErrNetwork'));
     expect(box.textContent, '交易可能已記錄,不得說成未記錄').not.toContain('交易未記錄');
     expect(requireTestid('ticket-error-code').textContent?.trim()).toBe('INVALID_API_RESPONSE');
